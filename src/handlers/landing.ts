@@ -263,11 +263,24 @@ export const landingHandler: Handler<{ Bindings: AppEnv }> = (c) => {
     <header>
       <h1>Link Shortener</h1>
       <p class="tagline">Short links with analytics — simple, fast, multi-tenant.</p>
+
+      <!-- Logged-out state -->
+      <div id="guest-view">
         <p class="auth-note">Sign up for free — 30 links, click analytics, your own subdomain.</p>
         <div class="actions">
           <a href="/signup" class="btn btn-primary">Sign Up</a>
           <a href="/login" class="btn btn-outline">Log In</a>
         </div>
+      </div>
+
+      <!-- Logged-in state (hidden by default, shown by JS) -->
+      <div id="user-view" style="display:none;">
+        <p class="auth-note" id="user-greeting"></p>
+        <div class="actions">
+          <a href="/api/links" class="btn btn-primary">My Links</a>
+          <button id="logout-btn" class="btn btn-outline">Log Out</button>
+        </div>
+      </div>
     </header>
 
     <h2>How It Works</h2>
@@ -296,6 +309,39 @@ export const landingHandler: Handler<{ Bindings: AppEnv }> = (c) => {
   <footer>
     Built with Cloudflare Workers + Supabase
   </footer>
+
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script>
+    (async () => {
+      if (!window.supabase) return;
+      var sb = window.supabase.createClient("${c.env.SUPABASE_URL}", "${c.env.SUPABASE_ANON_KEY}");
+
+      const { data: { session } } = await sb.auth.getSession();
+      const guestView = document.getElementById("guest-view");
+      const userView = document.getElementById("user-view");
+      const greeting = document.getElementById("user-greeting");
+
+      if (session?.user) {
+        guestView.style.display = "none";
+        userView.style.display = "";
+        greeting.textContent = "Welcome, " + (session.user.email || "back") + "!";
+
+        document.getElementById("logout-btn").addEventListener("click", async () => {
+          await sb.auth.signOut();
+          window.location.reload();
+        });
+      }
+
+      // Listen for auth changes (login from other tab, etc.)
+      sb.auth.onAuthStateChange((event, session) => {
+        if (event === "SIGNED_IN" && session) {
+          window.location.reload();
+        } else if (event === "SIGNED_OUT") {
+          window.location.reload();
+        }
+      });
+    })();
+  </script>
 </body>
 </html>`;
 

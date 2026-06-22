@@ -1,0 +1,44 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "link-shortener",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-22",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.05
+    }
+  },
+
+  "kv_namespaces": [
+    {
+      "binding": "SHORT_URL_CACHE",
+      "id": "PLACEHOLDER_SHORT_URL_CACHE_ID",
+      "preview_id": "PLACEHOLDER_SHORT_URL_CACHE_PREVIEW_ID"
+    },
+    {
+      "binding": "TENANT_CACHE",
+      "id": "PLACEHOLDER_TENANT_CACHE_ID",
+      "preview_id": "PLACEHOLDER_TENANT_CACHE_PREVIEW_ID"
+    }
+  ],
+
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "PLACEHOLDER_HYPERDRIVE_ID",
+      "localConnectionString": "postgresql://postgres:postgres@localhost:54322/postgres"
+    }
+  ],
+
+  "vars": {
+    "SHORT_URL_DOMAIN": "acortador.juancode.dev",
+    "ENVIRONMENT": "development"
+  }
+}

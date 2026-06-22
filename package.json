@@ -1,0 +1,31 @@
+{
+  "name": "link-shortener",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Multi-tenant URL shortener with click analytics, deployed on Cloudflare Workers + Supabase",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "types": "wrangler types"
+  },
+  "dependencies": {
+    "hono": "^4.8.5",
+    "jose": "^5.10.0",
+    "nanoid": "^5.1.5",
+    "pg": "^8.14.1"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.8.22",
+    "@cloudflare/workers-types": "^4.20250622.0",
+    "@types/node": "^26.0.0",
+    "@types/pg": "^8.20.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.9",
+    "wrangler": "^4.15.2"
+  }
+}

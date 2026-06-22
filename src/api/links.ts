@@ -68,7 +68,8 @@ export const createLink: Handler<{
     throw new ValidationError("original_url is required", "invalid_request");
   }
 
-  const { original_url, title, expires_at } = body;
+  const { title, expires_at } = body;
+  let original_url = body.original_url!;
 
   // --- 2. Validate URL (open-redirect protection) ---
   const urlResult = validateUrl(original_url);
@@ -78,6 +79,8 @@ export const createLink: Handler<{
       urlResult.error ?? "invalid_url",
     );
   }
+  // Use normalized URL (with https:// prepended if missing)
+  original_url = urlResult.normalized ?? original_url;
 
   // --- 3. Count active links (free-tier enforcement) ---
   const countRow = await withClient(env, async (client) => {

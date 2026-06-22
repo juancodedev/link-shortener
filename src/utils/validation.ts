@@ -9,6 +9,8 @@ export interface UrlValidationResult {
     | "blocked_host"
     | "blocked_ip_range"
     | "url_too_long";
+  /** Normalized URL with protocol prepended if missing. */
+  normalized?: string;
 }
 
 /**
@@ -99,13 +101,19 @@ function isPrivateIPv4(hostname: string): boolean {
  * 5. URL must not exceed 2048 characters
  */
 export function validateUrl(raw: string): UrlValidationResult {
-  if (raw.length > MAX_URL_LENGTH) {
+  let input = raw.trim();
+  if (input.length > MAX_URL_LENGTH) {
     return { valid: false, error: "url_too_long" };
+  }
+
+  // Auto-prepend https:// if no protocol is present
+  if (!/^[a-zA-Z][a-zA-Z0-9+\-.]*:\/\//.test(input)) {
+    input = "https://" + input;
   }
 
   let parsed: URL;
   try {
-    parsed = new URL(raw);
+    parsed = new URL(input);
   } catch {
     return { valid: false, error: "invalid_url" };
   }
@@ -127,7 +135,7 @@ export function validateUrl(raw: string): UrlValidationResult {
     return { valid: false, error: "blocked_ip_range" };
   }
 
-  return { valid: true };
+  return { valid: true, normalized: parsed.href };
 }
 
 /**

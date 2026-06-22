@@ -1,0 +1,14 @@
+# =============================================================================
+# Local development secrets for wrangler dev
+# =============================================================================
+# 1. Copy this file: cp .dev.vars.example .dev.vars
+# 2. Fill in your values from Supabase → Settings → API
+# 3. NEVER commit .dev.vars (it's in .gitignore)
+#
+# For production: use wrangler secret put <NAME> or GitHub Actions deploy
+# =============================================================================
+
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=eyJhbGciOi...
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOi...
+SUPABASE_JWT_SECRET=your-jwt-secret-here

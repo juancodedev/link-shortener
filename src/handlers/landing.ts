@@ -136,6 +136,16 @@ export const landingHandler: Handler<{ Bindings: AppEnv }> = (c) => {
       border-color: #2563eb;
     }
 
+    .btn-static {
+      cursor: default;
+      font-family: "SF Mono", "Fira Code", "Fira Mono", "Roboto Mono", monospace;
+      font-size: 0.875rem;
+    }
+
+    .btn-static:hover {
+      background: #2563eb;
+    }
+
     /* ---- How It Works ---- */
     .steps {
       display: grid;
@@ -265,9 +275,9 @@ export const landingHandler: Handler<{ Bindings: AppEnv }> = (c) => {
     <header>
       <h1>Link Shortener</h1>
       <p class="tagline">Short links with analytics — simple, fast, multi-tenant.</p>
-        <p class="auth-note">Authentication is handled via our API. Use the endpoints below to get started.</p>
+        <p class="auth-note">Sign up via Supabase Auth, then use the API to create your tenant and start shortening links.</p>
         <div class="actions">
-          <a href="/api/tenants" class="btn btn-primary">Create Tenant</a>
+          <span class="btn btn-primary btn-static">POST /api/tenants</span>
           <a href="${supabaseUrl}" class="btn btn-outline" target="_blank" rel="noopener">Supabase Project</a>
         </div>
     </header>

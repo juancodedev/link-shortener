@@ -3,7 +3,7 @@ import type { AppEnv, HonoVars } from "../types/env";
 import { withClient } from "../db/client";
 import { validateSchemaName, qualifyTable } from "../db/schema";
 import { getCachedUrl } from "../cache/shortcode";
-import { getCachedSchema, setCachedSchema } from "../cache/tenant";
+import { getCachedTenant, setCachedTenant } from "../cache/tenant";
 import { trackClick } from "../analytics/tracker";
 
 // ---------------------------------------------------------------------------
@@ -39,21 +39,18 @@ async function resolveTenant(
   env: AppEnv,
   slug: string,
 ): Promise<ResolvedTenant | null> {
-  // 1. Try KV cache
-  const cachedSchema = await getCachedSchema(env, slug);
-  if (cachedSchema !== null) {
+  // 1. Try KV cache (now stores JSON with tenantId + schemaName + tenantSalt)
+  const cached = await getCachedTenant(env, slug);
+  if (cached !== null && cached.tenantId) {
     try {
-      validateSchemaName(cachedSchema);
-      // tenantId not available from KV-only path; we set "" and handlers
-      // that need it can query DB. For redirect, tenantId comes from the
-      // link row query or a separate tenant query.
-      return { tenantId: "", schemaName: cachedSchema, tenantSalt: "" };
+      validateSchemaName(cached.schemaName);
+      return { tenantId: cached.tenantId, schemaName: cached.schemaName, tenantSalt: cached.tenantSalt };
     } catch {
       // Invalid cached value — fall through to DB
     }
   }
 
-  // 2. Cache miss — query public.tenants via Hyperdrive
+  // 2. Cache miss or incomplete — query public.tenants via Hyperdrive
   const rows = await withClient(env, async (client) => {
     const res = await client.query<{ id: string; schema_name: string; salt: string }>(
       `SELECT id, schema_name, salt FROM public.tenants WHERE subdomain = $1 AND is_active = true LIMIT 1`,
@@ -62,19 +59,13 @@ async function resolveTenant(
     return res.rows;
   });
 
-  if (rows.length === 0) {
-    return null;
-  }
+  if (rows.length === 0) return null;
 
   const { id: tenantId, schema_name: schemaName, salt: tenantSalt } = rows[0]!;
-  validateSchemaName(schemaName); // Defense-in-depth — throws on invalid
+  validateSchemaName(schemaName);
 
-  // 3. Populate KV cache asynchronously (not awaited — non-critical path)
-  // We don't have executionCtx here (this runs before response), so await directly.
-  // The cache write is fast and takes <1ms.
-  await setCachedSchema(env, slug, schemaName).catch(() => {
-    // KV write failure is non-fatal — we already have the schema
-  });
+  // 3. Populate KV cache with full tenant info
+  await setCachedTenant(env, slug, { schemaName, tenantId, tenantSalt }).catch(() => {});
 
   return { tenantId, schemaName, tenantSalt };
 }

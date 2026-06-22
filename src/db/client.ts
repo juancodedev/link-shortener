@@ -10,14 +10,15 @@ import type { AppEnv } from "../types/env";
  * connection to the pool.
  */
 export function createClient(env: AppEnv): Client {
-  // Local dev: use DATABASE_URL from .dev.vars for direct Supabase connection
+  // Production / --remote: Hyperdrive handles connection pooling
+  if (env.HYPERDRIVE?.connectionString) {
+    return new Client({ connectionString: env.HYPERDRIVE.connectionString });
+  }
+  // Local dev without --remote: use DATABASE_URL from .dev.vars
   if (env.DATABASE_URL) {
     return new Client({ connectionString: env.DATABASE_URL });
   }
-  // Production: Hyperdrive connection pooling
-  return new Client({
-    connectionString: env.HYPERDRIVE.connectionString,
-  });
+  throw new Error("No database connection configured (set DATABASE_URL in .dev.vars or use --remote)");
 }
 
 /**

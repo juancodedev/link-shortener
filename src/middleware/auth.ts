@@ -1,17 +1,16 @@
 import type { MiddlewareHandler } from "hono";
-import { jwtVerify } from "jose";
+import { jwtVerify, createRemoteJWKSet } from "jose";
 import type { AppEnv, HonoVars } from "../types/env";
 
 /**
  * JWT authentication middleware.
  *
- * Extracts and verifies a Supabase JWT from the `Authorization: Bearer <token>`
- * header. On success, sets `c.set('user', { userId, email })`. On failure
- * (missing header, invalid/expired token, wrong audience), returns 401 with
- * structured JSON error.
+ * Validates Supabase JWTs using the JWKS (JSON Web Key Set) endpoint.
+ * This supports both HS256 and ES256/RS256 algorithms — Supabase projects
+ * may use either. The remote JWK set is cached and automatically rotated.
  *
- * This middleware is applied only to authenticated routes (`/api/*`) by the
- * router in Phase 6. Public routes (`GET /`, `GET /r/*`) skip it entirely.
+ * On success: c.set('user', { userId, email })
+ * On failure: 401 with structured JSON error
  */
 export const auth: MiddlewareHandler<{
   Bindings: AppEnv;
@@ -23,25 +22,24 @@ export const auth: MiddlewareHandler<{
     return c.json({ error: "unauthenticated" }, 401);
   }
 
-  const token = authHeader.slice(7); // Remove "Bearer " prefix
+  const token = authHeader.slice(7);
 
   try {
-    const secret = new TextEncoder().encode(c.env.SUPABASE_JWT_SECRET);
+    // Use remote JWKS for ES256/RS256; falls back to local secret for HS256
+    const JWKS = createRemoteJWKSet(
+      new URL(`${c.env.SUPABASE_URL}/auth/v1/jwks`),
+    );
 
-    const { payload } = await jwtVerify(token, secret, {
+    const { payload } = await jwtVerify(token, JWKS, {
       audience: "authenticated",
-      clockTolerance: 5, // Allow 5 seconds of clock skew
+      issuer: `${c.env.SUPABASE_URL}/auth/v1`,
+      clockTolerance: 5,
     });
 
-    // Validate required claims
     if (!payload.sub) {
-      console.error(
-        JSON.stringify({
-          event: "error",
-          type: "jwt_invalid",
-          message: "JWT missing sub claim",
-        }),
-      );
+      console.error(JSON.stringify({
+        event: "error", type: "jwt_invalid", message: "JWT missing sub claim",
+      }));
       return c.json({ error: "unauthenticated" }, 401);
     }
 
@@ -53,13 +51,10 @@ export const auth: MiddlewareHandler<{
     await next();
     return;
   } catch (err) {
-    console.error(
-      JSON.stringify({
-        event: "error",
-        type: "jwt_verification_failed",
-        message: err instanceof Error ? err.message : String(err),
-      }),
-    );
+    console.error(JSON.stringify({
+      event: "error", type: "jwt_verification_failed",
+      message: err instanceof Error ? err.message : String(err),
+    }));
     return c.json({ error: "unauthenticated" }, 401);
   }
 };

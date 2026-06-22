@@ -2,12 +2,17 @@ import type { Handler } from "hono";
 import type { AppEnv } from "../types/env";
 
 /**
- * Serves a minimal landing page at `GET /`.
+ * Serves the landing page at `GET /`.
  *
- * Returns inline HTML with service name, tagline, and links to Supabase Auth
- * sign-up and login. Uses `<meta name="viewport">` for mobile responsiveness.
+ * Fully self-contained HTML with inline responsive CSS:
+ * - Service name and tagline
+ * - Sign-up and login links to Supabase Auth
+ * - How-it-works section (3 steps)
+ * - Footer with attribution
+ * - Mobile breakpoint at 768px
+ * - No external scripts, stylesheets, or frameworks
  *
- * This is the SKELETON — detailed HTML and CSS deferred to Phase 8 (Task 8.1).
+ * Dark/light neutral color scheme using Tailwind-inspired slate palette.
  */
 export const landingHandler: Handler<{ Bindings: AppEnv }> = (c) => {
   const supabaseUrl = c.env.SUPABASE_URL;
@@ -17,50 +22,281 @@ export const landingHandler: Handler<{ Bindings: AppEnv }> = (c) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Link Shortener</title>
+  <title>Link Shortener — Short links with analytics</title>
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, sans-serif;
       min-height: 100dvh;
       display: flex;
       flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      background: #f8fafc;
+      background: #ffffff;
       color: #1e293b;
-      padding: 1rem;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
     }
-    main {
-      max-width: 480px;
+
+    /* ---- Layout ---- */
+    .container {
+      max-width: 720px;
       width: 100%;
+      margin: 0 auto;
+      padding: 2rem 1.5rem;
+    }
+
+    header {
+      padding: 4rem 0 2rem;
       text-align: center;
     }
-    h1 { font-size: 2rem; font-weight: 700; margin-bottom: 0.5rem; }
-    p { color: #64748b; margin-bottom: 2rem; line-height: 1.6; }
-    .actions { display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap; }
+
+    main {
+      flex: 1;
+    }
+
+    footer {
+      text-align: center;
+      padding: 2rem 1.5rem 3rem;
+      color: #94a3b8;
+      font-size: 0.875rem;
+    }
+
+    /* ---- Typography ---- */
+    h1 {
+      font-size: 2.5rem;
+      font-weight: 800;
+      letter-spacing: -0.025em;
+      color: #0f172a;
+      margin-bottom: 0.75rem;
+    }
+
+    .tagline {
+      font-size: 1.125rem;
+      color: #64748b;
+      max-width: 480px;
+      margin: 0 auto 2rem;
+    }
+
+    h2 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: #0f172a;
+      margin-bottom: 1rem;
+      text-align: center;
+    }
+
+    /* ---- Buttons ---- */
+    .actions {
+      display: flex;
+      gap: 0.75rem;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 3rem;
+    }
+
     .btn {
-      display: inline-block;
-      padding: 0.75rem 1.5rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0.75rem 1.75rem;
       border-radius: 0.5rem;
+      font-size: 0.938rem;
       font-weight: 600;
       text-decoration: none;
-      transition: opacity 0.15s;
+      transition: background-color 0.15s, box-shadow 0.15s, transform 0.1s;
+      cursor: pointer;
     }
-    .btn:hover { opacity: 0.85; }
-    .btn-primary { background: #2563eb; color: #fff; }
-    .btn-outline { background: #fff; color: #2563eb; border: 1.5px solid #2563eb; }
+
+    .btn:active {
+      transform: scale(0.98);
+    }
+
+    .btn-primary {
+      background: #2563eb;
+      color: #ffffff;
+    }
+
+    .btn-primary:hover {
+      background: #1d4ed8;
+    }
+
+    .btn-outline {
+      background: transparent;
+      color: #2563eb;
+      border: 1.5px solid #d1d5db;
+    }
+
+    .btn-outline:hover {
+      background: #f1f5f9;
+      border-color: #2563eb;
+    }
+
+    /* ---- How It Works ---- */
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.5rem;
+      margin-bottom: 2rem;
+    }
+
+    .step {
+      text-align: center;
+      padding: 1.5rem 1rem;
+      border-radius: 0.75rem;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+    }
+
+    .step-number {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 2.5rem;
+      height: 2.5rem;
+      border-radius: 9999px;
+      background: #2563eb;
+      color: #ffffff;
+      font-size: 1.125rem;
+      font-weight: 700;
+      margin-bottom: 0.75rem;
+    }
+
+    .step h3 {
+      font-size: 1rem;
+      font-weight: 700;
+      color: #0f172a;
+      margin-bottom: 0.375rem;
+    }
+
+    .step p {
+      font-size: 0.875rem;
+      color: #64748b;
+      line-height: 1.5;
+    }
+
+    /* ---- Divider ---- */
+    .divider {
+      border: none;
+      border-top: 1px solid #e2e8f0;
+      margin: 2rem 0;
+    }
+
+    /* ---- Responsive (mobile ≤ 768px) ---- */
+    @media (max-width: 768px) {
+      header {
+        padding: 2.5rem 0 1.5rem;
+      }
+
+      h1 {
+        font-size: 2rem;
+      }
+
+      .tagline {
+        font-size: 1rem;
+      }
+
+      .steps {
+        grid-template-columns: 1fr;
+        gap: 1rem;
+      }
+
+      .step {
+        padding: 1.25rem 1rem;
+      }
+
+      .btn {
+        width: 100%;
+        max-width: 320px;
+      }
+
+      .actions {
+        flex-direction: column;
+        align-items: center;
+      }
+    }
+
+    /* ---- Dark mode (prefers-color-scheme) ---- */
+    @media (prefers-color-scheme: dark) {
+      body {
+        background: #0f172a;
+        color: #e2e8f0;
+      }
+
+      h1, h2, .step h3 {
+        color: #f1f5f9;
+      }
+
+      .tagline, .step p {
+        color: #94a3b8;
+      }
+
+      .step {
+        background: #1e293b;
+        border-color: #334155;
+      }
+
+      .btn-outline {
+        color: #93c5fd;
+        border-color: #475569;
+      }
+
+      .btn-outline:hover {
+        background: #1e293b;
+        border-color: #93c5fd;
+      }
+
+      .divider {
+        border-color: #334155;
+      }
+
+      footer {
+        color: #64748b;
+      }
+    }
   </style>
 </head>
 <body>
-  <main>
-    <h1>Link Shortener</h1>
-    <p>Short links with analytics — simple, fast, multi-tenant.</p>
-    <div class="actions">
-      <a href="${supabaseUrl}/signup" class="btn btn-primary">Sign Up</a>
-      <a href="${supabaseUrl}/login" class="btn btn-outline">Log In</a>
+  <main class="container">
+    <header>
+      <h1>Link Shortener</h1>
+      <p class="tagline">Short links with analytics — simple, fast, multi-tenant.</p>
+      <div class="actions">
+        <a href="${supabaseUrl}/auth/v1/authorize?provider=signup" class="btn btn-primary">Sign Up</a>
+        <a href="${supabaseUrl}/auth/v1/authorize?provider=login" class="btn btn-outline">Log In</a>
+      </div>
+    </header>
+
+    <h2>How It Works</h2>
+
+    <div class="steps">
+      <div class="step">
+        <div class="step-number">1</div>
+        <h3>Create Account</h3>
+        <p>Sign up with your email and pick a unique subdomain for your links.</p>
+      </div>
+      <div class="step">
+        <div class="step-number">2</div>
+        <h3>Shorten Links</h3>
+        <p>Paste any URL and get a clean short link instantly. Up to 30 active links on the free tier.</p>
+      </div>
+      <div class="step">
+        <div class="step-number">3</div>
+        <h3>Track Clicks</h3>
+        <p>See where your clicks come from, what devices people use, and which links perform best.</p>
+      </div>
     </div>
+
+    <hr class="divider">
   </main>
+
+  <footer>
+    Built with Cloudflare Workers + Supabase
+  </footer>
 </body>
 </html>`;
 

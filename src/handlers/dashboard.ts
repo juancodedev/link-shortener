@@ -275,7 +275,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       <h3>Create Short Link</h3>
       <form id="create-form">
         <label for="url">Destination URL</label>
-        <input type="url" id="url" placeholder="https://example.com/your-long-url" required>
+        <input type="text" id="url" placeholder="example.com or https://..." required>
         <label for="title">Title (optional)</label>
         <input type="text" id="title" placeholder="My awesome link" maxlength="200">
         <button type="submit">Shorten</button>

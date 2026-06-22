@@ -143,9 +143,13 @@ function htmlShell(title: string, body: string, supabaseUrl: string, supabaseAno
     <h1>Link Shortener</h1>
     ${body}
   </div>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script>
-    const supabase = supabase.createClient("${supabaseUrl}", "${supabaseAnonKey}");
+    if (!window.supabase) {
+      document.body.innerHTML = '<div style="text-align:center;padding:2rem;font-family:sans-serif;"><h2>Loading...</h2><p>If this persists, check your network connection.</p></div>';
+      throw new Error("Supabase client failed to load");
+    }
+    var sb = window.supabase.createClient("${supabaseUrl}", "${supabaseAnonKey}");
 
     function togglePassword(inputId, btn) {
       const input = document.getElementById(inputId);
@@ -185,7 +189,7 @@ export const signupHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }> =
       <label for="display">Display Name</label>
       <input type="text" id="display" name="display" placeholder="Your team or company name" required>
       <label for="subdomain">Subdomain</label>
-      <input type="text" id="subdomain" name="subdomain" placeholder="e.g. acme" required minlength="3" maxlength="30" pattern="[a-z0-9][a-z0-9-]*[a-z0-9]">
+      <input type="text" id="subdomain" name="subdomain" placeholder="e.g. acme" required minlength="3" maxlength="30" pattern="[a-z0-9][a-z0-9\-]*[a-z0-9]">
       <button type="submit" id="submit-btn">Sign Up</button>
     </form>
     <div id="message" class="message"></div>
@@ -216,7 +220,7 @@ export const signupHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }> =
       const subdomain = document.getElementById("subdomain").value.toLowerCase();
 
       try {
-        const { data, error } = await supabase.auth.signUp({ email, password });
+        const { data, error } = await sb.auth.signUp({ email, password });
         if (error) throw error;
 
         if (data.user) {
@@ -304,7 +308,7 @@ export const loginHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }> = 
       const password = document.getElementById("login-password").value;
 
       try {
-        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        const { data, error } = await sb.auth.signInWithPassword({ email, password });
         if (error) throw error;
 
         msg.className = "message success";
@@ -381,7 +385,7 @@ export const resetPasswordHandler: Handler<{ Bindings: AppEnv; Variables: HonoVa
       const password = document.getElementById("reset-password").value;
 
       try {
-        const { error } = await supabase.auth.updateUser({ password });
+        const { error } = await sb.auth.updateUser({ password });
         if (error) throw error;
 
         msg.className = "message success";
@@ -411,7 +415,7 @@ export const resetPasswordHandler: Handler<{ Bindings: AppEnv; Variables: HonoVa
       const email = document.getElementById("email").value;
 
       try {
-        const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        const { error } = await sb.auth.resetPasswordForEmail(email, {
           redirectTo: window.location.origin + "/reset-password",
         });
         if (error) throw error;
@@ -466,14 +470,13 @@ export const authCallbackHandler: Handler<{ Bindings: AppEnv; Variables: HonoVar
     <a href="/login">Go to Login</a>
     <p id="error" class="error" style="display:none;margin-top:1rem;"></p>
   </div>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script>
-    const supabase = supabase.createClient(
+    var sb = window.supabase.createClient(
       "${c.env.SUPABASE_URL}",
       "${c.env.SUPABASE_ANON_KEY}",
     );
-    // Refresh session from the URL hash (Supabase puts tokens there)
-    supabase.auth.onAuthStateChange((event, session) => {
+    sb.auth.onAuthStateChange((event, session) => {
       if (event === "SIGNED_IN" && session) {
         console.log("Email confirmed, user signed in");
       }

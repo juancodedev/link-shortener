@@ -230,12 +230,12 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       <button id="logout-nav">Log Out</button>
     </div>
   </nav>
-  <div class="container">
-    ${body}
-  </div>
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script>
-    if (!window.supabase) throw new Error("Supabase failed to load");
+    if (!window.supabase) {
+      document.body.innerHTML = '<p style="text-align:center;padding:2rem;">Failed to load. Check connection.</p>';
+      throw new Error("Supabase load failed");
+    }
     var sb = window.supabase.createClient("${supabaseUrl}", "${supabaseAnonKey}");
     var token = null;
 
@@ -250,7 +250,7 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
         window.location.href = "/";
       });
 
-      loadLinks();
+      if (typeof loadLinks === "function") loadLinks();
     }
 
     async function api(method, path, body) {
@@ -260,6 +260,9 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       return res;
     }
   </script>
+  <div class="container">
+    ${body}
+  </div>
 </body>
 </html>`;
 }
@@ -319,7 +322,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
     </div>
 
     <script>
-      document.addEventListener("DOMContentLoaded", init);
+      init();
 
       document.getElementById("create-form").addEventListener("submit", async (e) => {
         e.preventDefault();

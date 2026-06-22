@@ -9,6 +9,7 @@ import { createUserProfileTenantMiddleware } from "./middleware/tenant";
 // Handlers
 import { landingHandler } from "./handlers/landing";
 import { redirectHandler } from "./handlers/redirect";
+import { signupHandler, loginHandler, resetPasswordHandler, authCallbackHandler } from "./handlers/auth";
 import { createLink } from "./api/links";
 import { createTenant, deleteTenant } from "./api/tenants";
 
@@ -42,6 +43,12 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
 
   // Landing page
   app.get("/", landingHandler);
+
+  // Auth pages (public)
+  app.get("/signup", signupHandler);
+  app.get("/login", loginHandler);
+  app.get("/reset-password", resetPasswordHandler);
+  app.get("/auth/callback", authCallbackHandler);
 
   // Redirect — tenant resolved inline inside handler
   app.get("/r/:tenant/:code", redirectHandler);

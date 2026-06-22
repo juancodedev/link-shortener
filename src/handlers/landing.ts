@@ -15,8 +15,6 @@ import type { AppEnv } from "../types/env";
  * Dark/light neutral color scheme using Tailwind-inspired slate palette.
  */
 export const landingHandler: Handler<{ Bindings: AppEnv }> = (c) => {
-  const supabaseUrl = c.env.SUPABASE_URL;
-
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -134,16 +132,6 @@ export const landingHandler: Handler<{ Bindings: AppEnv }> = (c) => {
     .btn-outline:hover {
       background: #f1f5f9;
       border-color: #2563eb;
-    }
-
-    .btn-static {
-      cursor: default;
-      font-family: "SF Mono", "Fira Code", "Fira Mono", "Roboto Mono", monospace;
-      font-size: 0.875rem;
-    }
-
-    .btn-static:hover {
-      background: #2563eb;
     }
 
     /* ---- How It Works ---- */
@@ -275,10 +263,10 @@ export const landingHandler: Handler<{ Bindings: AppEnv }> = (c) => {
     <header>
       <h1>Link Shortener</h1>
       <p class="tagline">Short links with analytics — simple, fast, multi-tenant.</p>
-        <p class="auth-note">Sign up via Supabase Auth, then use the API to create your tenant and start shortening links.</p>
+        <p class="auth-note">Sign up for free — 30 links, click analytics, your own subdomain.</p>
         <div class="actions">
-          <span class="btn btn-primary btn-static">POST /api/tenants</span>
-          <a href="${supabaseUrl}" class="btn btn-outline" target="_blank" rel="noopener">Supabase Project</a>
+          <a href="/signup" class="btn btn-primary">Sign Up</a>
+          <a href="/login" class="btn btn-outline">Log In</a>
         </div>
     </header>
 

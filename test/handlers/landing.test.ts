@@ -35,23 +35,24 @@ describe("landingHandler", () => {
     expect(text).toContain("Link Shortener");
   });
 
-  it("response body contains tenant API endpoint and SUPABASE_URL", async () => {
+  it("response body contains sign-up and login links", async () => {
     const c = mockContext("https://myapp.supabase.co");
     const response = await landingHandler(c);
     const text = await response.text();
 
-    expect(text).toContain("https://myapp.supabase.co");
-    expect(text).toContain("POST /api/tenants");
-    expect(text).toContain("/api/tenants");
+    expect(text).toContain('href="/signup"');
+    expect(text).toContain("Sign Up");
+    expect(text).toContain('href="/login"');
+    expect(text).toContain("Log In");
   });
 
-  it("response body contains Supabase Project link and auth note", async () => {
+  it("response body contains tagline and how-it-works", async () => {
     const c = mockContext("https://myapp.supabase.co");
     const response = await landingHandler(c);
     const text = await response.text();
 
-    expect(text).toContain("Supabase Project");
-    expect(text).toContain("Sign up via Supabase Auth");
+    expect(text).toContain("30 links");
+    expect(text).toContain("click analytics");
   });
 
   it("response body contains tagline", async () => {

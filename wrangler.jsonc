@@ -19,20 +19,18 @@
   "kv_namespaces": [
     {
       "binding": "SHORT_URL_CACHE",
-      "id": "PLACEHOLDER_SHORT_URL_CACHE_ID",
-      "preview_id": "PLACEHOLDER_SHORT_URL_CACHE_PREVIEW_ID"
+      "id": "5085f292ee1f4e6d9cb1747d0c8edcd5"
     },
     {
       "binding": "TENANT_CACHE",
-      "id": "PLACEHOLDER_TENANT_CACHE_ID",
-      "preview_id": "PLACEHOLDER_TENANT_CACHE_PREVIEW_ID"
+      "id": "0498b61fb8d74c5ba9289d291825d068"
     }
   ],
 
   "hyperdrive": [
     {
       "binding": "HYPERDRIVE",
-      "id": "PLACEHOLDER_HYPERDRIVE_ID",
+      "id": "b0a3e0bd8a7d4f85b3eb790baf3939c3",
       "localConnectionString": "postgresql://postgres:postgres@localhost:54322/postgres"
     }
   ],

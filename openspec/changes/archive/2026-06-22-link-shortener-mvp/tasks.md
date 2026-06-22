@@ -179,7 +179,7 @@ Chain strategy: pending
 
 ## Phase 4: API Endpoints
 
-### Task 4.1: Link creation endpoint
+### [x] Task 4.1: Link creation endpoint
 **Priority**: P0
 **Depends on**: 2.1, 2.2, 2.3, 2.4, 2.6, 3.1, 3.2
 **Estimated lines**: ±110
@@ -188,7 +188,7 @@ Chain strategy: pending
 **Verification**: Happy path → 201. Invalid URL → 400. At limit → 429. Collision retry succeeds. All 3 retries fail → 500. No auth → 401. No tenant → 404.
 **Spec coverage**: REQ-L001 (all 5 scenarios), REQ-L002 (all 3 scenarios), REQ-S001 (URL validation on creation), REQ-S002 (collision retry, limit enforcement).
 
-### Task 4.2: Tenant management endpoint
+### [x] Task 4.2: Tenant management endpoint
 **Priority**: P0
 **Depends on**: 2.1, 2.4, 3.1, 3.2
 **Estimated lines**: ±95
@@ -197,7 +197,7 @@ Chain strategy: pending
 **Verification**: POST happy path → 201. Duplicate slug → 409. Invalid slug → 400. DELETE happy path → 204. Not owner → 403. Not found → 404.
 **Spec coverage**: REQ-T001 (slug validation, reserved words, duplicate), REQ-T002 (provisioning entry point), REQ-T003 (all 4 deletion scenarios).
 
-### Task 4.3: Tenant provisioning logic
+### [x] Task 4.3: Tenant provisioning logic
 **Priority**: P0
 **Depends on**: 2.1, 2.2
 **Estimated lines**: ±80
@@ -206,7 +206,7 @@ Chain strategy: pending
 **Verification**: Integration test with real DB. Successful provisioning creates schema with links table. Schema creation failure rolls back tenant + profile inserts. Generated schema name follows `tenant_XXXXXXXX` pattern.
 **Spec coverage**: REQ-T002 (successful provisioning, schema creation failure → rollback).
 
-### Task 4.4: Tenant deprovisioning logic
+### [x] Task 4.4: Tenant deprovisioning logic
 **Priority**: P0
 **Depends on**: 2.1, 2.2, 2.5, 2.7
 **Estimated lines**: ±70
@@ -250,7 +250,7 @@ Chain strategy: pending
 
 ## Phase 6: Router & Integration
 
-### Task 6.1: Hono route definitions
+### [x] Task 6.1: Hono route definitions
 **Priority**: P0
 **Depends on**: 3.3, 4.1, 4.2, 5.1, 5.2
 **Estimated lines**: ±45
@@ -259,7 +259,7 @@ Chain strategy: pending
 **Verification**: Hono router compiles without type errors. All route handlers receive correct context types. Middleware chains match design route table.
 **Spec coverage**: Integration point for all endpoint REQs.
 
-### Task 6.2: Worker entry point and integration
+### [x] Task 6.2: Worker entry point and integration
 **Priority**: P0
 **Depends on**: 1.2, 1.3, 6.1
 **Estimated lines**: ±85
@@ -272,7 +272,7 @@ Chain strategy: pending
 
 ## Phase 7: Testing
 
-### Task 7.1: Unit tests for utilities
+### [x] Task 7.1: Unit tests for utilities
 **Priority**: P0
 **Depends on**: 2.3, 2.4, 2.5
 **Estimated lines**: ±120
@@ -281,7 +281,7 @@ Chain strategy: pending
 **Verification**: All 53 spec scenarios for REQ-S001, REQ-T001, REQ-A002 pass. `npx vitest run test/utils/` passes.
 **Spec coverage**: REQ-S001, REQ-T001, REQ-A002, REQ-S002 (collision scenarios).
 
-### Task 7.2: Unit tests for cache and DB modules
+### [x] Task 7.2: Unit tests for cache and DB modules
 **Priority**: P0
 **Depends on**: 2.1, 2.2, 2.6, 2.7
 **Estimated lines**: ±100
@@ -290,7 +290,7 @@ Chain strategy: pending
 **Verification**: Mocked KV calls return expected values. SQL injection via schema name blocked by regex. `npx vitest run test/db/ test/cache/` passes.
 **Spec coverage**: REQ-R002 (schema validation), REQ-O002 (KV error fallback).
 
-### Task 7.3: Unit tests for middleware
+### [x] Task 7.3: Unit tests for middleware
 **Priority**: P0
 **Depends on**: 3.1, 3.2, 3.3
 **Estimated lines**: ±120
@@ -299,7 +299,7 @@ Chain strategy: pending
 **Verification**: Auth: 3 scenarios pass. Tenant: 4 scenarios pass (hit, miss→DB, unknown, injection attempt). Error: code mapping + no PII in logs.
 **Spec coverage**: REQ-T002 (auth failure), REQ-R002 (tenant resolution scenarios), REQ-O001 (no PII in error logs).
 
-### Task 7.4: Integration tests for API endpoints and handlers
+### [x] Task 7.4: Integration tests for API endpoints and handlers
 **Priority**: P0
 **Depends on**: 4.1, 4.2, 5.1, 5.3, 7.1
 **Estimated lines**: ±180
@@ -308,7 +308,7 @@ Chain strategy: pending
 **Verification**: Each handler/API returns correct status code + body per spec scenarios. `npx vitest run test/api/ test/handlers/ test/analytics/` passes.
 **Spec coverage**: REQ-L001, REQ-L002, REQ-L003, REQ-R001, REQ-A001, REQ-S002.
 
-### Task 7.5: Integration tests for tenant lifecycle and landing page
+### [x] Task 7.5: Integration tests for tenant lifecycle and landing page
 **Priority**: P0
 **Depends on**: 4.3, 4.4, 5.2
 **Estimated lines**: ±80
@@ -321,7 +321,7 @@ Chain strategy: pending
 
 ## Phase 8: Landing Page Content
 
-### Task 8.1: Landing page HTML design
+### [x] Task 8.1: Landing page HTML design
 **Priority**: P1
 **Depends on**: 5.2
 **Estimated lines**: ±80

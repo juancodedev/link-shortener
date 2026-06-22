@@ -261,7 +261,7 @@ describe("redirectHandler", () => {
     vi.mocked(withClient).mockImplementationOnce(async (_env: any, fn: any) => {
       return fn({
         query: vi.fn().mockResolvedValueOnce({
-          rows: [{ id: "tenant-uuid", schema_name: "tenant_db1" }],
+          rows: [{ id: "tenant-uuid", schema_name: "tenant_db1", salt: "salt-db1" }],
         }),
       });
     });

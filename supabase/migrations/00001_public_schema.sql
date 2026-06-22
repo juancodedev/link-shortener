@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS public.tenants (
     display_name TEXT NOT NULL,                     -- e.g. 'Acme Corp'
     subdomain    TEXT UNIQUE NOT NULL,              -- e.g. 'acme' (path segment)
     owner_id     UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+    salt         TEXT NOT NULL DEFAULT gen_random_uuid()::text,  -- per-tenant salt for IP hashing (REQ-A002)
     is_active    BOOLEAN DEFAULT true NOT NULL,
     created_at   TIMESTAMPTZ DEFAULT now() NOT NULL
 );

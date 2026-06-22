@@ -18,6 +18,8 @@ export interface TrackClickParams {
   shortCode: string;
   /** The incoming Worker request (for header extraction). */
   request: Request;
+  /** Per-tenant salt for IP hashing (REQ-A002). */
+  tenantSalt: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -142,10 +144,8 @@ export async function trackClick(
     // --- 2. Parse User-Agent into summary ---
     const uaSummary = userAgent ? parseUserAgent(userAgent) : null;
 
-    // --- 3. Hash IP ---
-    // Uses SUPABASE_ANON_KEY as salt for MVP (per-design: per-tenant salt
-    // stored in public.tenants is a post-MVP improvement).
-    const ipHash = await hashIp(ip, env.SUPABASE_ANON_KEY);
+    // --- 3. Hash IP with per-tenant salt (REQ-A002) ---
+    const ipHash = await hashIp(ip, params.tenantSalt);
 
     // --- 4. INSERT into analytics.link_clicks ---
     await withClient(env, async (client) => {

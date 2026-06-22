@@ -265,10 +265,11 @@ export const landingHandler: Handler<{ Bindings: AppEnv }> = (c) => {
     <header>
       <h1>Link Shortener</h1>
       <p class="tagline">Short links with analytics — simple, fast, multi-tenant.</p>
-      <div class="actions">
-        <a href="${supabaseUrl}/auth/v1/authorize?provider=signup" class="btn btn-primary">Sign Up</a>
-        <a href="${supabaseUrl}/auth/v1/authorize?provider=login" class="btn btn-outline">Log In</a>
-      </div>
+        <p class="auth-note">Authentication is handled via our API. Use the endpoints below to get started.</p>
+        <div class="actions">
+          <a href="/api/tenants" class="btn btn-primary">Create Tenant</a>
+          <a href="${supabaseUrl}" class="btn btn-outline" target="_blank" rel="noopener">Supabase Project</a>
+        </div>
     </header>
 
     <h2>How It Works</h2>

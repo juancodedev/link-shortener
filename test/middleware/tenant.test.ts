@@ -93,6 +93,7 @@ describe("createTenantMiddleware (path-based)", () => {
       tenantSlug: "acme",
       schemaName: "tenant_a7f3",
       tenantId: "",
+      tenantSalt: "",
     });
     expect(nextFn).toHaveBeenCalled();
   });
@@ -103,7 +104,7 @@ describe("createTenantMiddleware (path-based)", () => {
     vi.mocked(withClient).mockImplementationOnce(async (_env: any, fn: any) => {
       return fn({
         query: vi.fn().mockResolvedValueOnce({
-          rows: [{ id: "tenant-uuid", schema_name: "tenant_b12d" }],
+          rows: [{ id: "tenant-uuid", schema_name: "tenant_b12d", salt: "salt-abc" }],
         }),
       });
     });
@@ -119,6 +120,7 @@ describe("createTenantMiddleware (path-based)", () => {
       tenantSlug: "acme",
       schemaName: "tenant_b12d",
       tenantId: "tenant-uuid",
+      tenantSalt: "salt-abc",
     });
     // KV population is fire-and-forget via waitUntil
     expect(waitUntilFn).toHaveBeenCalled();
@@ -185,7 +187,7 @@ describe("createUserProfileTenantMiddleware", () => {
       return fn({
         query: vi.fn().mockResolvedValueOnce({
           rows: [
-            { id: "tenant-uuid", schema_name: "tenant_c34e", subdomain: "testco" },
+            { id: "tenant-uuid", schema_name: "tenant_c34e", subdomain: "testco", salt: "salt-xyz" },
           ],
         }),
       });
@@ -202,6 +204,7 @@ describe("createUserProfileTenantMiddleware", () => {
       tenantSlug: "testco",
       schemaName: "tenant_c34e",
       tenantId: "tenant-uuid",
+      tenantSalt: "salt-xyz",
     });
     expect(waitUntilFn).toHaveBeenCalled();
     expect(nextFn).toHaveBeenCalled();

@@ -93,6 +93,7 @@ export function createTenantMiddleware(
           tenantSlug: slug,
           schemaName: cachedSchema,
           tenantId: "", // Resolved by handler when needed
+          tenantSalt: "", // Not available from KV cache; resolved by handler
         });
         return await next();
       }
@@ -102,7 +103,7 @@ export function createTenantMiddleware(
     try {
       const result = await withClient(c.env, async (client) => {
         const query = `
-          SELECT id, schema_name
+          SELECT id, schema_name, salt
           FROM public.tenants
           WHERE subdomain = $1 AND is_active = true
           LIMIT 1
@@ -110,6 +111,7 @@ export function createTenantMiddleware(
         const res = await client.query<{
           id: string;
           schema_name: string;
+          salt: string;
         }>(query, [slug]);
         return res.rows;
       });
@@ -118,7 +120,7 @@ export function createTenantMiddleware(
         return c.json({ error: "tenant_not_found" }, 404);
       }
 
-      const { id: tenantId, schema_name: schemaName } = result[0]!;
+      const { id: tenantId, schema_name: schemaName, salt: tenantSalt } = result[0]!;
 
       // Validate schema name from database (defense-in-depth)
       try {
@@ -154,6 +156,7 @@ export function createTenantMiddleware(
         tenantSlug: slug,
         schemaName,
         tenantId,
+        tenantSalt,
       });
 
       return await next();
@@ -198,7 +201,7 @@ export function createUserProfileTenantMiddleware(): MiddlewareHandler<TenantEnv
     try {
       const result = await withClient(c.env, async (client) => {
         const query = `
-          SELECT t.id, t.schema_name, t.subdomain
+          SELECT t.id, t.schema_name, t.subdomain, t.salt
           FROM public.profiles p
           JOIN public.tenants t ON p.tenant_id = t.id
           WHERE p.id = $1 AND t.is_active = true
@@ -208,6 +211,7 @@ export function createUserProfileTenantMiddleware(): MiddlewareHandler<TenantEnv
           id: string;
           schema_name: string;
           subdomain: string;
+          salt: string;
         }>(query, [user.userId]);
         return res.rows;
       });
@@ -216,7 +220,7 @@ export function createUserProfileTenantMiddleware(): MiddlewareHandler<TenantEnv
         return c.json({ error: "tenant_not_found" }, 404);
       }
 
-      const { id: tenantId, schema_name: schemaName, subdomain } = result[0]!;
+      const { id: tenantId, schema_name: schemaName, subdomain, salt: tenantSalt } = result[0]!;
 
       // Validate schema name from database (defense-in-depth)
       try {
@@ -250,6 +254,7 @@ export function createUserProfileTenantMiddleware(): MiddlewareHandler<TenantEnv
         tenantSlug: subdomain,
         schemaName,
         tenantId,
+        tenantSalt,
       });
 
       return await next();

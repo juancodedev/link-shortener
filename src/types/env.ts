@@ -26,6 +26,8 @@ export interface TenantContext {
   tenantSlug: string;
   schemaName: string;
   tenantId: string;
+  /** Per-tenant salt for IP hashing — retrieved from public.tenants.salt (REQ-A002). */
+  tenantSalt: string;
 }
 
 /**

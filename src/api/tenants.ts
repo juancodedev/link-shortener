@@ -1,7 +1,7 @@
 import type { Handler } from "hono";
 import type { AppEnv, HonoVars } from "../types/env";
 import { withClient } from "../db/client";
-import { validateSlug } from "../utils/validation";
+import { validateSlug, sanitizeInput } from "../utils/validation";
 import { provisionTenant } from "../tenants/provision";
 import { deprovisionTenant } from "../tenants/deprovision";
 import { setCachedSchema } from "../cache/tenant";
@@ -59,7 +59,7 @@ export const createTenant: Handler<{
   }
 
   const { subdomain, display_name } = body;
-  const displayName = (display_name ?? subdomain).trim().slice(0, 100);
+  const displayName = sanitizeInput(display_name ?? subdomain, 100);
 
   // --- 2. Validate slug ---
   const slugLower = subdomain.toLowerCase();

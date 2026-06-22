@@ -24,6 +24,7 @@ interface CachedLink {
 interface ResolvedTenant {
   tenantId: string;
   schemaName: string;
+  tenantSalt: string;
 }
 
 /**
@@ -46,7 +47,7 @@ async function resolveTenant(
       // tenantId not available from KV-only path; we set "" and handlers
       // that need it can query DB. For redirect, tenantId comes from the
       // link row query or a separate tenant query.
-      return { tenantId: "", schemaName: cachedSchema };
+      return { tenantId: "", schemaName: cachedSchema, tenantSalt: "" };
     } catch {
       // Invalid cached value — fall through to DB
     }
@@ -54,8 +55,8 @@ async function resolveTenant(
 
   // 2. Cache miss — query public.tenants via Hyperdrive
   const rows = await withClient(env, async (client) => {
-    const res = await client.query<{ id: string; schema_name: string }>(
-      `SELECT id, schema_name FROM public.tenants WHERE subdomain = $1 AND is_active = true LIMIT 1`,
+    const res = await client.query<{ id: string; schema_name: string; salt: string }>(
+      `SELECT id, schema_name, salt FROM public.tenants WHERE subdomain = $1 AND is_active = true LIMIT 1`,
       [slug],
     );
     return res.rows;
@@ -65,7 +66,7 @@ async function resolveTenant(
     return null;
   }
 
-  const { id: tenantId, schema_name: schemaName } = rows[0]!;
+  const { id: tenantId, schema_name: schemaName, salt: tenantSalt } = rows[0]!;
   validateSchemaName(schemaName); // Defense-in-depth — throws on invalid
 
   // 3. Populate KV cache asynchronously (not awaited — non-critical path)
@@ -75,7 +76,7 @@ async function resolveTenant(
     // KV write failure is non-fatal — we already have the schema
   });
 
-  return { tenantId, schemaName };
+  return { tenantId, schemaName, tenantSalt };
 }
 
 // ---------------------------------------------------------------------------
@@ -132,7 +133,7 @@ export const redirectHandler: Handler<{
     return c.json({ error: "tenant_not_found" }, 404);
   }
 
-  const { schemaName, tenantId } = tenant;
+  const { schemaName, tenantId, tenantSalt } = tenant;
 
   // --- 2. KV cache lookup ---
   let cacheHit = false;
@@ -265,6 +266,7 @@ export const redirectHandler: Handler<{
       linkId,
       shortCode: code,
       request: c.req.raw,
+      tenantSalt: tenantSalt || "",
     }).catch((err) => {
       // trackClick catches internally, but belt-and-suspenders
       console.error(

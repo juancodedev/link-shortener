@@ -4,7 +4,7 @@ import { withClient } from "../db/client";
 import { validateSlug, sanitizeInput } from "../utils/validation";
 import { provisionTenant } from "../tenants/provision";
 import { deprovisionTenant } from "../tenants/deprovision";
-import { setCachedSchema } from "../cache/tenant";
+import { setCachedTenant } from "../cache/tenant";
 import {
   ValidationError,
   ConflictError,
@@ -96,7 +96,11 @@ export const createTenant: Handler<{
 
   // --- 5. Warm KV cache (fire-and-forget via waitUntil) ---
   c.executionCtx.waitUntil(
-    setCachedSchema(env, slugLower, result.schemaName).catch((err) => {
+    setCachedTenant(env, slugLower, {
+      schemaName: result.schemaName,
+      tenantId: result.tenantId,
+      tenantSalt: result.tenantSalt,
+    }).catch((err) => {
       console.error(
         JSON.stringify({
           event: "error",

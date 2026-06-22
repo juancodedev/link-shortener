@@ -48,10 +48,9 @@ ON CONFLICT (version) DO NOTHING;
 // ---------------------------------------------------------------------------
 
 export interface ProvisionResult {
-  /** The generated schema name (e.g., "tenant_a7f3d2b1"). */
   schemaName: string;
-  /** The UUID of the newly inserted tenant row. */
   tenantId: string;
+  tenantSalt: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -89,13 +88,14 @@ export async function provisionTenant(
 
   return withClient(env, async (client) => {
     // --- 1. INSERT into public.tenants ---
-    const tenantRes = await client.query<{ id: string }>(
+    const tenantRes = await client.query<{ id: string; salt: string }>(
       `INSERT INTO public.tenants (schema_name, display_name, subdomain, owner_id, is_active, created_at)
        VALUES ($1, $2, $3, $4, true, $5)
-       RETURNING id`,
+       RETURNING id, salt`,
       [schemaName, displayName, subdomain, userId, now],
     );
     const tenantId = tenantRes.rows[0]!.id;
+    const tenantSalt = tenantRes.rows[0]!.salt;
 
     // --- 2. INSERT into public.profiles ---
     await client.query(
@@ -120,6 +120,6 @@ export async function provisionTenant(
       await client.query(stmt + ";");
     }
 
-    return { schemaName, tenantId };
+    return { schemaName, tenantId, tenantSalt };
   });
 }

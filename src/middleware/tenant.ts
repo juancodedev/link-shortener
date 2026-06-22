@@ -2,7 +2,7 @@ import type { MiddlewareHandler, Context } from "hono";
 import type { AppEnv, HonoVars } from "../types/env";
 import { withClient } from "../db/client";
 import { validateSchemaName } from "../db/schema";
-import { getCachedSchema, setCachedSchema } from "../cache/tenant";
+import { getCachedSchema, setCachedTenant } from "../cache/tenant";
 
 // ---------------------------------------------------------------------------
 // Pluggable tenant extraction strategy
@@ -139,7 +139,7 @@ export function createTenantMiddleware(
 
       // --- 3. Populate KV cache (fire-and-forget through waitUntil) ---
       c.executionCtx.waitUntil(
-        setCachedSchema(c.env, slug, schemaName).catch((err) => {
+        setCachedTenant(c.env, slug, { schemaName, tenantId, tenantSalt }).catch((err) => {
           console.error(
             JSON.stringify({
               event: "error",
@@ -238,7 +238,7 @@ export function createUserProfileTenantMiddleware(): MiddlewareHandler<TenantEnv
 
       // Populate KV cache (fire-and-forget through waitUntil)
       c.executionCtx.waitUntil(
-        setCachedSchema(c.env, subdomain, schemaName).catch((err) => {
+        setCachedTenant(c.env, subdomain, { schemaName, tenantId, tenantSalt }).catch((err) => {
           console.error(
             JSON.stringify({
               event: "error",

@@ -2,12 +2,19 @@ import { Client } from "pg";
 import type { AppEnv } from "../types/env";
 
 /**
- * Creates a new pg.Client connected via Hyperdrive connection string.
+ * Creates a new pg.Client connected via Hyperdrive (production) or direct
+ * connection string (local dev via DATABASE_URL env var).
+ *
  * Hyperdrive manages connection pooling — creating a new Client per request
  * is the correct pattern. Always call client.end() after use to return the
  * connection to the pool.
  */
 export function createClient(env: AppEnv): Client {
+  // Local dev: use DATABASE_URL from .dev.vars for direct Supabase connection
+  if (env.DATABASE_URL) {
+    return new Client({ connectionString: env.DATABASE_URL });
+  }
+  // Production: Hyperdrive connection pooling
   return new Client({
     connectionString: env.HYPERDRIVE.connectionString,
   });

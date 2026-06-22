@@ -7,6 +7,8 @@ export interface SupabaseSecrets {
   SUPABASE_ANON_KEY: string;
   SUPABASE_SERVICE_ROLE_KEY: string;
   SUPABASE_JWT_SECRET: string;
+  /** Direct connection string for local dev (bypasses Hyperdrive). Not set in production. */
+  DATABASE_URL?: string;
 }
 
 /**

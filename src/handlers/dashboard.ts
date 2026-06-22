@@ -230,39 +230,37 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       <button id="logout-nav">Log Out</button>
     </div>
   </nav>
+  <div class="container">
+    ${body}
+  </div>
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script>
-    if (!window.supabase) {
-      document.body.innerHTML = '<p style="text-align:center;padding:2rem;">Failed to load. Check connection.</p>';
-      throw new Error("Supabase load failed");
-    }
-    var sb = window.supabase.createClient("${supabaseUrl}", "${supabaseAnonKey}");
-    var token = null;
+    (async () => {
+      if (!window.supabase) return;
+      var sb = window.supabase.createClient("${supabaseUrl}", "${supabaseAnonKey}");
 
-    async function init() {
       const { data: { session } } = await sb.auth.getSession();
       if (!session) { window.location.href = "/login"; return; }
-      token = session.access_token;
-      document.getElementById("nav-email").textContent = session.user.email;
 
+      document.getElementById("nav-email").textContent = session.user.email;
       document.getElementById("logout-nav").addEventListener("click", async () => {
         await sb.auth.signOut();
         window.location.href = "/";
       });
 
-      if (typeof loadLinks === "function") loadLinks();
-    }
+      window.__sb = sb;
+      window.__token = session.access_token;
+      window.__api = async function(method, path, body) {
+        const headers = { "Content-Type": "application/json", "Authorization": "Bearer " + window.__token };
+        const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+        if (res.status === 401) { window.location.href = "/login"; throw new Error("Unauthorized"); }
+        if (!res.ok) return res;
+        return res;
+      };
 
-    async function api(method, path, body) {
-      const headers = { "Content-Type": "application/json", "Authorization": "Bearer " + token };
-      const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
-      if (res.status === 401) { window.location.href = "/login"; return; }
-      return res;
-    }
+      if (typeof loadLinks === "function") loadLinks();
+    })();
   </script>
-  <div class="container">
-    ${body}
-  </div>
 </body>
 </html>`;
 }
@@ -322,7 +320,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
     </div>
 
     <script>
-      init();
+      loadLinks();
 
       document.getElementById("create-form").addEventListener("submit", async (e) => {
         e.preventDefault();
@@ -335,7 +333,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         result.style.display = "none";
 
         try {
-          const res = await api("POST", "/api/links", {
+          const res = await window.__api("POST", "/api/links", {
             original_url: document.getElementById("url").value,
             title: document.getElementById("title").value || undefined,
           });
@@ -375,7 +373,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         empty.style.display = "none";
 
         try {
-          const res = await api("GET", "/api/links");
+          const res = await window.__api("GET", "/api/links");
           if (!res || !res.ok) throw new Error("Failed to load links");
           const links = await res.json();
 
@@ -431,7 +429,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
 
       async function toggleLink(id, active) {
         try {
-          const res = await api("PATCH", "/api/links/" + id, { is_active: active });
+          const res = await window.__api("PATCH", "/api/links/" + id, { is_active: active });
           if (!res.ok) throw new Error("Failed");
           loadLinks();
         } catch (err) {
@@ -456,7 +454,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         if (countryDiv.dataset.loaded) return;
 
         try {
-          const res = await api("GET", "/api/links/" + linkId + "/clicks");
+          const res = await window.__api("GET", "/api/links/" + linkId + "/clicks");
           if (!res || !res.ok) throw new Error("Failed");
           const data = await res.json();
 
@@ -486,7 +484,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       async function deleteLink(id) {
         if (!confirm("Delete this link permanently?")) return;
         try {
-          const res = await api("DELETE", "/api/links/" + id);
+          const res = await window.__api("DELETE", "/api/links/" + id);
           if (!res.ok) throw new Error("Failed");
           loadLinks();
         } catch (err) {

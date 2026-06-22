@@ -272,5 +272,5 @@ export const redirectHandler: Handler<{
     }),
   );
 
-  return c.redirect(redirectUrl!, 301);
+  return c.redirect(redirectUrl!, 302);
 };

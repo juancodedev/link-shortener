@@ -390,7 +390,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
               : "active";
             const shortUrl = l.short_url || "";
             return \`<tr>
-              <td><span class="code">\${l.short_code}</span></td>
+              <td><span class="code" onclick="copyUrl('\${shortUrl}', this)" title="Click to copy \${shortUrl}" style="cursor:pointer;" data-code="\${l.short_code}">\${l.short_code}</span></td>
               <td><span class="url-trunc" title="\${l.original_url}">\${l.original_url}</span></td>
               <td><a href="#" onclick="showMetrics('\${l.id}','\${l.short_code}',event)" style="color:#2563eb;text-decoration:none;font-weight:600;">\${l.clicks_count}</a></td>
               <td><span class="badge badge-\${status}">\${status}</span></td>
@@ -489,6 +489,24 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           loadLinks();
         } catch (err) {
           alert("Error: " + (err instanceof Error ? err.message : ""));
+        }
+      }
+
+      async function copyUrl(url, el) {
+        try {
+          await navigator.clipboard.writeText(url);
+          el.textContent = "Copied!";
+          setTimeout(() => { el.textContent = el.dataset.code; }, 1500);
+        } catch {
+          // Fallback for older browsers
+          const input = document.createElement("input");
+          input.value = url;
+          document.body.appendChild(input);
+          input.select();
+          document.execCommand("copy");
+          document.body.removeChild(input);
+          el.textContent = "Copied!";
+          setTimeout(() => { el.textContent = el.dataset.code; }, 1500);
         }
       }
     </script>

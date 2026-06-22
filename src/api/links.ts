@@ -4,8 +4,8 @@ import { withClient } from "../db/client";
 import { qualifyTable } from "../db/schema";
 import { validateUrl } from "../utils/validation";
 import { generateShortCode } from "../utils/short-code";
-import { setCachedUrl } from "../cache/shortcode";
-import { LimitError, ValidationError } from "../middleware/error";
+import { setCachedUrl, invalidateCachedUrl } from "../cache/shortcode";
+import { LimitError, ValidationError, NotFoundError } from "../middleware/error";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -164,4 +164,131 @@ export const createLink: Handler<{
     },
     201,
   );
+};
+
+// ---------------------------------------------------------------------------
+// GET /api/links — list user's links
+// ---------------------------------------------------------------------------
+
+export const listLinks: Handler<{
+  Bindings: AppEnv;
+  Variables: HonoVars;
+}> = async (c) => {
+  const tenant = c.get("tenant");
+
+  const rows = await withClient(c.env, async (client) => {
+    const table = qualifyTable(tenant.schemaName, "links");
+    const res = await client.query<LinkRow & { clicks_count: number; is_active: boolean; expires_at: string | null; updated_at: string }>(
+      `SELECT id, short_code, original_url, title, clicks_count, is_active, expires_at, created_at, updated_at
+       FROM ${table}
+       ORDER BY created_at DESC
+       LIMIT 100`,
+    );
+    return res.rows;
+  });
+
+  const domain = `https://${c.env.SHORT_URL_DOMAIN}/r/${tenant.tenantSlug}`;
+
+  return c.json(
+    rows.map((r) => ({
+      id: r.id,
+      short_code: r.short_code,
+      original_url: r.original_url,
+      short_url: `${domain}/${r.short_code}`,
+      title: r.title,
+      clicks_count: r.clicks_count,
+      is_active: r.is_active,
+      expires_at: r.expires_at,
+      created_at: r.created_at,
+      updated_at: r.updated_at,
+    })),
+  );
+};
+
+// ---------------------------------------------------------------------------
+// PATCH /api/links/:id — update link (toggle active, change title)
+// ---------------------------------------------------------------------------
+
+export const updateLink: Handler<{
+  Bindings: AppEnv;
+  Variables: HonoVars;
+}> = async (c) => {
+  const tenant = c.get("tenant");
+  const linkId = c.req.param("id")!;
+
+  let body: { is_active?: boolean; title?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    throw new ValidationError("Invalid JSON body", "invalid_request");
+  }
+
+  const rows = await withClient(c.env, async (client) => {
+    const table = qualifyTable(tenant.schemaName, "links");
+    const sets: string[] = [];
+    const vals: (string | boolean)[] = [];
+
+    if (typeof body.is_active === "boolean") {
+      sets.push(`is_active = $${vals.length + 1}`);
+      vals.push(body.is_active);
+    }
+    if (typeof body.title === "string") {
+      sets.push(`title = $${vals.length + 1}`);
+      vals.push(body.title.slice(0, 200));
+    }
+
+    if (sets.length === 0) {
+      throw new ValidationError("No fields to update", "invalid_request");
+    }
+
+    sets.push(`updated_at = NOW()`);
+    vals.push(linkId);
+
+    const res = await client.query<{ short_code: string; is_active: boolean }>(
+      `UPDATE ${table} SET ${sets.join(", ")} WHERE id = $${vals.length} RETURNING short_code, is_active`,
+      vals,
+    );
+    return res.rows;
+  });
+
+  if (rows.length === 0) throw new NotFoundError("Link not found", "not_found");
+
+  // Invalidate KV cache on status change
+  if (typeof body.is_active === "boolean") {
+    c.executionCtx.waitUntil(
+      invalidateCachedUrl(c.env, tenant.tenantSlug, rows[0]!.short_code).catch(() => {}),
+    );
+  }
+
+  return c.json({ ok: true });
+};
+
+// ---------------------------------------------------------------------------
+// DELETE /api/links/:id — delete a link
+// ---------------------------------------------------------------------------
+
+export const deleteLink: Handler<{
+  Bindings: AppEnv;
+  Variables: HonoVars;
+}> = async (c) => {
+  const tenant = c.get("tenant");
+  const linkId = c.req.param("id")!;
+
+  const rows = await withClient(c.env, async (client) => {
+    const table = qualifyTable(tenant.schemaName, "links");
+    const res = await client.query<{ short_code: string }>(
+      `DELETE FROM ${table} WHERE id = $1 RETURNING short_code`,
+      [linkId],
+    );
+    return res.rows;
+  });
+
+  if (rows.length === 0) throw new NotFoundError("Link not found", "not_found");
+
+  // Invalidate KV cache
+  c.executionCtx.waitUntil(
+    invalidateCachedUrl(c.env, tenant.tenantSlug, rows[0]!.short_code).catch(() => {}),
+  );
+
+  return c.json({ ok: true });
 };

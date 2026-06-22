@@ -277,7 +277,7 @@ export const landingHandler: Handler<{ Bindings: AppEnv }> = (c) => {
       <div id="user-view" style="display:none;">
         <p class="auth-note" id="user-greeting"></p>
         <div class="actions">
-          <a href="/api/links" class="btn btn-primary">My Links</a>
+          <a href="/dashboard" class="btn btn-primary">Dashboard</a>
           <button id="logout-btn" class="btn btn-outline">Log Out</button>
         </div>
       </div>

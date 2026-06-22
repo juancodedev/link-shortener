@@ -10,7 +10,8 @@ import { createUserProfileTenantMiddleware } from "./middleware/tenant";
 import { landingHandler } from "./handlers/landing";
 import { redirectHandler } from "./handlers/redirect";
 import { signupHandler, loginHandler, resetPasswordHandler, authCallbackHandler } from "./handlers/auth";
-import { createLink } from "./api/links";
+import { dashboardHandler } from "./handlers/dashboard";
+import { createLink, listLinks, updateLink, deleteLink } from "./api/links";
 import { createTenant, deleteTenant } from "./api/tenants";
 
 // ---------------------------------------------------------------------------
@@ -53,12 +54,18 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
   // Redirect — tenant resolved inline inside handler
   app.get("/r/:tenant/:code", redirectHandler);
 
+  // Dashboard (authenticated via client-side Supabase session)
+  app.get("/dashboard", dashboardHandler);
+
   // -----------------------------------------------------------------------
   // API routes (authenticated)
   // -----------------------------------------------------------------------
 
-  // Link creation: auth → resolve tenant from user profile → handler
+  // Link CRUD: auth → resolve tenant from user profile → handler
   app.post("/api/links", auth, userProfileTenantMiddleware, createLink);
+  app.get("/api/links", auth, userProfileTenantMiddleware, listLinks);
+  app.patch("/api/links/:id", auth, userProfileTenantMiddleware, updateLink);
+  app.delete("/api/links/:id", auth, userProfileTenantMiddleware, deleteLink);
 
   // Tenant provisioning: auth required, no tenant middleware (tenant doesn't exist yet)
   app.post("/api/tenants", auth, createTenant);

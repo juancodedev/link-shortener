@@ -24,17 +24,23 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     .container {
       max-width: 720px;
       margin: 0 auto;
-      padding: 1.5rem;
+      padding: 1rem;
+    }
+    @media (min-width: 768px) {
+      .container { padding: 1.5rem; }
     }
     nav {
       background: #fff;
       border-bottom: 1px solid #e2e8f0;
-      padding: 0.75rem 1.5rem;
+      padding: 0.5rem 1rem;
       display: flex;
       justify-content: space-between;
       align-items: center;
       flex-wrap: wrap;
-      gap: 0.5rem;
+      gap: 0.25rem;
+    }
+    @media (min-width: 768px) {
+      nav { padding: 0.75rem 1.5rem; }
     }
     nav h2 { font-size: 1.125rem; color: #0f172a; }
     nav a, nav button {
@@ -147,6 +153,15 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     .badge-active { background: #dcfce7; color: #166534; }
     .badge-inactive { background: #fef2f2; color: #991b1b; }
     .badge-expired { background: #fef9c3; color: #854d0e; }
+    .table-wrap {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      margin: 0 -1rem;
+      padding: 0 1rem;
+    }
+    @media (min-width: 768px) {
+      .table-wrap { margin: 0; padding: 0; }
+    }
     .message {
       font-size: 0.813rem;
       padding: 0.5rem 0.75rem;
@@ -156,14 +171,18 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     }
     .message.success { display: block; background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
     .message.error { display: block; background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
-    .row-actions { display: flex; gap: 0.375rem; }
+    .row-actions { display: flex; gap: 0.25rem; flex-wrap: wrap; }
+    @media (min-width: 768px) { .row-actions { gap: 0.375rem; } }
     .empty { text-align: center; color: #94a3b8; padding: 2rem; }
     .loading { text-align: center; color: #94a3b8; padding: 1rem; }
     .metrics-grid {
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 1rem;
+      grid-template-columns: 1fr;
+      gap: 0.5rem;
       margin-top: 0.5rem;
+    }
+    @media (min-width: 768px) {
+      .metrics-grid { grid-template-columns: 1fr 1fr; gap: 1rem; }
     }
     .metric-box {
       background: #f8fafc;
@@ -270,6 +289,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
     <div class="card">
       <h3>Your Links (<span id="link-count">0</span>/30)</h3>
       <div id="links-loading" class="loading">Loading...</div>
+      <div class="table-wrap">
       <table id="links-table" style="display:none;">
         <thead>
           <tr>
@@ -282,6 +302,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         </thead>
         <tbody id="links-body"></tbody>
       </table>
+      </div>
       <div id="links-empty" class="empty" style="display:none;">
         No links yet. Create your first one above!
       </div>

@@ -31,7 +31,7 @@
     {
       "binding": "HYPERDRIVE",
       "id": "b0a3e0bd8a7d4f85b3eb790baf3939c3",
-      "localConnectionString": "postgresql://postgres:duleVXr6Z57iZ6Wv@db.fjdypirneeadkqxhogaz.supabase.co:5432/postgres"
+      "localConnectionString": "postgresql://postgres:postgres@localhost:54322/postgres"
     }
   ],
 

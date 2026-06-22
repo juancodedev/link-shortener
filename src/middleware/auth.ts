@@ -1,13 +1,12 @@
 import type { MiddlewareHandler } from "hono";
-import { jwtVerify, createRemoteJWKSet } from "jose";
 import type { AppEnv, HonoVars } from "../types/env";
 
 /**
  * JWT authentication middleware.
  *
- * Validates Supabase JWTs using the JWKS (JSON Web Key Set) endpoint.
- * This supports both HS256 and ES256/RS256 algorithms — Supabase projects
- * may use either. The remote JWK set is cached and automatically rotated.
+ * Validates Supabase access tokens by calling the Supabase Auth API
+ * (GET /auth/v1/user). This avoids the need for local cryptographic
+ * verification and supports all signing algorithms.
  *
  * On success: c.set('user', { userId, email })
  * On failure: 401 with structured JSON error
@@ -25,27 +24,27 @@ export const auth: MiddlewareHandler<{
   const token = authHeader.slice(7);
 
   try {
-    // Use remote JWKS for ES256/RS256; falls back to local secret for HS256
-    const JWKS = createRemoteJWKSet(
-      new URL(`${c.env.SUPABASE_URL}/auth/v1/jwks`),
-    );
-
-    const { payload } = await jwtVerify(token, JWKS, {
-      audience: "authenticated",
-      issuer: `${c.env.SUPABASE_URL}/auth/v1`,
-      clockTolerance: 5,
+    // Validate token by calling Supabase Auth API
+    const res = await fetch(`${c.env.SUPABASE_URL}/auth/v1/user`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        apikey: c.env.SUPABASE_ANON_KEY,
+      },
     });
 
-    if (!payload.sub) {
-      console.error(JSON.stringify({
-        event: "error", type: "jwt_invalid", message: "JWT missing sub claim",
-      }));
-      return c.json({ error: "unauthenticated" }, 401);
+    if (!res.ok) {
+      throw new Error(`Auth API returned ${res.status}`);
+    }
+
+    const user = await res.json() as { id: string; email?: string };
+
+    if (!user.id) {
+      throw new Error("Invalid user response");
     }
 
     c.set("user", {
-      userId: payload.sub,
-      email: (payload.email as string) ?? "",
+      userId: user.id,
+      email: user.email ?? "",
     });
 
     await next();

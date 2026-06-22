@@ -36,7 +36,7 @@
   ],
 
   "vars": {
-    "SHORT_URL_DOMAIN": "acortador.juancode.dev",
+    "SHORT_URL_DOMAIN": "shorter.juancode.dev",
     "ENVIRONMENT": "development"
   }
 }

@@ -106,6 +106,36 @@ function htmlShell(title: string, body: string, supabaseUrl: string, supabaseAno
     }
     .back-link a { color: #64748b; text-decoration: none; }
     .back-link a:hover { color: #2563eb; }
+    .password-field {
+      position: relative;
+    }
+    .password-field input {
+      padding-right: 2.75rem;
+    }
+    .toggle-password {
+      position: absolute;
+      right: 0.5rem;
+      top: 0;
+      bottom: 0;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: none;
+      border: none;
+      padding: 0.25rem;
+      cursor: pointer;
+      color: #94a3b8;
+      width: 2rem;
+    }
+    .toggle-password:hover {
+      color: #475569;
+    }
+    .toggle-password svg {
+      width: 1.25rem;
+      height: 1.25rem;
+      pointer-events: none;
+    }
   </style>
 </head>
 <body>
@@ -116,6 +146,18 @@ function htmlShell(title: string, body: string, supabaseUrl: string, supabaseAno
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <script>
     const supabase = supabase.createClient("${supabaseUrl}", "${supabaseAnonKey}");
+
+    function togglePassword(inputId, btn) {
+      const input = document.getElementById(inputId);
+      const svg = btn.querySelector("svg");
+      if (input.type === "password") {
+        input.type = "text";
+        svg.innerHTML = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>';
+      } else {
+        input.type = "password";
+        svg.innerHTML = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
+      }
+    }
   </script>
 </body>
 </html>`;
@@ -134,7 +176,12 @@ export const signupHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }> =
       <label for="email">Email</label>
       <input type="email" id="email" name="email" placeholder="you@example.com" required>
       <label for="password">Password</label>
-      <input type="password" id="password" name="password" placeholder="Min. 8 characters" minlength="8" required>
+      <div class="password-field">
+        <input type="password" id="password" name="password" placeholder="Min. 8 characters" minlength="8" required>
+        <button type="button" class="toggle-password" onclick="togglePassword('password', this)" aria-label="Show password">
+          <svg id="eye-password" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
       <label for="display">Display Name</label>
       <input type="text" id="display" name="display" placeholder="Your team or company name" required>
       <label for="subdomain">Subdomain</label>
@@ -219,8 +266,13 @@ export const loginHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }> = 
     <form id="login-form">
       <label for="email">Email</label>
       <input type="email" id="email" name="email" placeholder="you@example.com" required>
-      <label for="password">Password</label>
-      <input type="password" id="password" name="password" placeholder="Your password" required>
+      <label for="login-password">Password</label>
+      <div class="password-field">
+        <input type="password" id="login-password" name="password" placeholder="Your password" required>
+        <button type="button" class="toggle-password" onclick="togglePassword('login-password', this)" aria-label="Show password">
+          <svg id="eye-login-password" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
       <button type="submit" id="submit-btn">Log In</button>
     </form>
     <div id="message" class="message"></div>
@@ -249,7 +301,7 @@ export const loginHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }> = 
       msg.textContent = "";
 
       const email = document.getElementById("email").value;
-      const password = document.getElementById("password").value;
+      const password = document.getElementById("login-password").value;
 
       try {
         const { data, error } = await supabase.auth.signInWithPassword({ email, password });
@@ -281,8 +333,13 @@ export const resetPasswordHandler: Handler<{ Bindings: AppEnv; Variables: HonoVa
     ? `
     <p class="subtitle">Choose a new password</p>
     <form id="reset-form">
-      <label for="password">New Password</label>
-      <input type="password" id="password" name="password" placeholder="Min. 8 characters" minlength="8" required>
+      <label for="reset-password">New Password</label>
+      <div class="password-field">
+        <input type="password" id="reset-password" name="password" placeholder="Min. 8 characters" minlength="8" required>
+        <button type="button" class="toggle-password" onclick="togglePassword('reset-password', this)" aria-label="Show password">
+          <svg id="eye-reset-password" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
       <button type="submit" id="submit-btn">Update Password</button>
     </form>
     <div id="message" class="message"></div>
@@ -321,7 +378,7 @@ export const resetPasswordHandler: Handler<{ Bindings: AppEnv; Variables: HonoVa
       msg.className = "message";
       msg.textContent = "";
 
-      const password = document.getElementById("password").value;
+      const password = document.getElementById("reset-password").value;
 
       try {
         const { error } = await supabase.auth.updateUser({ password });

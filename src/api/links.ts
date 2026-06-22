@@ -292,3 +292,62 @@ export const deleteLink: Handler<{
 
   return c.json({ ok: true });
 };
+
+// ---------------------------------------------------------------------------
+// GET /api/links/:id/clicks — click analytics for a specific link
+// ---------------------------------------------------------------------------
+
+export const linkClicks: Handler<{
+  Bindings: AppEnv;
+  Variables: HonoVars;
+}> = async (c) => {
+  const tenant = c.get("tenant");
+  const linkId = c.req.param("id")!;
+
+  const rows = await withClient(c.env, async (client) => {
+    const table = qualifyTable(tenant.schemaName, "links");
+    const linkRes = await client.query<{ id: string }>(
+      `SELECT id FROM ${table} WHERE id = $1`, [linkId],
+    );
+    if (linkRes.rows.length === 0) return null;
+
+    const res = await client.query<{
+      country_code: string | null;
+      device_type: string | null;
+      referrer: string | null;
+      created_at: string;
+    }>(
+      `SELECT country_code, device_type, referrer, created_at
+       FROM analytics.link_clicks
+       WHERE link_id = $1
+       ORDER BY created_at DESC
+       LIMIT 50`,
+      [linkId],
+    );
+    return res.rows;
+  });
+
+  if (rows === null) throw new NotFoundError("Link not found", "not_found");
+
+  const byCountry: Record<string, number> = {};
+  const byDevice: Record<string, number> = {};
+
+  for (const r of rows) {
+    const c = r.country_code ?? "Unknown";
+    byCountry[c] = (byCountry[c] || 0) + 1;
+    const d = r.device_type ?? "Unknown";
+    byDevice[d] = (byDevice[d] || 0) + 1;
+  }
+
+  return c.json({
+    total: rows.length,
+    by_country: byCountry,
+    by_device: byDevice,
+    recent: rows.slice(0, 10).map((r) => ({
+      country: r.country_code ?? "Unknown",
+      device: r.device_type ?? "Unknown",
+      referrer: r.referrer ?? "Direct",
+      time: r.created_at,
+    })),
+  });
+};

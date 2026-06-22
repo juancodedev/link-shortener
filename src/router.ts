@@ -11,7 +11,7 @@ import { landingHandler } from "./handlers/landing";
 import { redirectHandler } from "./handlers/redirect";
 import { signupHandler, loginHandler, resetPasswordHandler, authCallbackHandler } from "./handlers/auth";
 import { dashboardHandler } from "./handlers/dashboard";
-import { createLink, listLinks, updateLink, deleteLink } from "./api/links";
+import { createLink, listLinks, updateLink, deleteLink, linkClicks } from "./api/links";
 import { createTenant, deleteTenant } from "./api/tenants";
 
 // ---------------------------------------------------------------------------
@@ -65,7 +65,7 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
   app.post("/api/links", auth, userProfileTenantMiddleware, createLink);
   app.get("/api/links", auth, userProfileTenantMiddleware, listLinks);
   app.patch("/api/links/:id", auth, userProfileTenantMiddleware, updateLink);
-  app.delete("/api/links/:id", auth, userProfileTenantMiddleware, deleteLink);
+  app.get("/api/links/:id/clicks", auth, userProfileTenantMiddleware, linkClicks);
 
   // Tenant provisioning: auth required, no tenant middleware (tenant doesn't exist yet)
   app.post("/api/tenants", auth, createTenant);

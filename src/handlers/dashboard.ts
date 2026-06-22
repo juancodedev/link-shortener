@@ -159,6 +159,47 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     .row-actions { display: flex; gap: 0.375rem; }
     .empty { text-align: center; color: #94a3b8; padding: 2rem; }
     .loading { text-align: center; color: #94a3b8; padding: 1rem; }
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-top: 0.5rem;
+    }
+    .metric-box {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 0.5rem;
+      padding: 0.75rem;
+    }
+    .metric-box h4 {
+      font-size: 0.688rem;
+      text-transform: uppercase;
+      color: #94a3b8;
+      margin-bottom: 0.5rem;
+    }
+    .metric-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      padding: 0.125rem 0;
+    }
+    .qr-modal {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    .qr-modal.hidden { display: none; }
+    .qr-card {
+      background: #fff;
+      border-radius: 0.75rem;
+      padding: 1.5rem;
+      text-align: center;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.12);
+    }
   </style>
 </head>
 <body>
@@ -246,6 +287,16 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       </div>
     </div>
 
+    <!-- QR code modal -->
+    <div id="qr-modal" class="qr-modal hidden" onclick="this.classList.add('hidden')">
+      <div class="qr-card" onclick="event.stopPropagation()">
+        <h3 style="margin-bottom:0.5rem;">QR Code</h3>
+        <img id="qr-img" src="" alt="QR Code" style="max-width:200px;">
+        <p id="qr-url" style="font-size:0.75rem;color:#64748b;margin-top:0.5rem;word-break:break-all;"></p>
+        <button class="btn-sm" style="margin-top:0.5rem;" onclick="document.getElementById('qr-modal').classList.add('hidden')">Close</button>
+      </div>
+    </div>
+
     <script>
       document.addEventListener("DOMContentLoaded", init);
 
@@ -315,18 +366,34 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
             const status = !l.is_active ? "inactive"
               : (l.expires_at && new Date(l.expires_at) < new Date()) ? "expired"
               : "active";
-            return \\\`<tr>
+            const shortUrl = l.short_url || "";
+            return \`<tr>
               <td><span class="code">\${l.short_code}</span></td>
               <td><span class="url-trunc" title="\${l.original_url}">\${l.original_url}</span></td>
-              <td>\${l.clicks_count}</td>
+              <td><a href="#" onclick="showMetrics('\${l.id}','\${l.short_code}',event)" style="color:#2563eb;text-decoration:none;font-weight:600;">\${l.clicks_count}</a></td>
               <td><span class="badge badge-\${status}">\${status}</span></td>
               <td>
                 <div class="row-actions">
+                  <button class="btn-sm" onclick="showQR('\${encodeURIComponent(shortUrl)}',event)" title="QR Code">QR</button>
                   <button class="btn-sm btn-outline" onclick="toggleLink('\${l.id}', \${!l.is_active})">\${l.is_active ? "Disable" : "Enable"}</button>
-                  <button class="btn-sm btn-danger" onclick="deleteLink('\${l.id}')">Delete</button>
+                  <button class="btn-sm btn-danger" onclick="deleteLink('\${l.id}')">Del</button>
                 </div>
               </td>
-            </tr>\\\`;
+            </tr>
+            <tr id="metrics-\${l.id}" style="display:none;">
+              <td colspan="5" style="padding:0;">
+                <div class="metrics-grid" style="padding:0.75rem;">
+                  <div class="metric-box">
+                    <h4>By Country</h4>
+                    <div id="country-\${l.id}"><div class="loading">Loading...</div></div>
+                  </div>
+                  <div class="metric-box">
+                    <h4>By Device</h4>
+                    <div id="device-\${l.id}"><div class="loading">Loading...</div></div>
+                  </div>
+                </div>
+              </td>
+            </tr>\`;
           }).join("");
 
           table.style.display = "";
@@ -346,6 +413,50 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         } catch (err) {
           alert("Error: " + (err instanceof Error ? err.message : ""));
         }
+      }
+
+      async function showMetrics(linkId, code, e) {
+        e.preventDefault();
+        const row = document.getElementById("metrics-" + linkId);
+        const isOpen = row.style.display !== "none";
+
+        if (isOpen) {
+          row.style.display = "none";
+          return;
+        }
+
+        row.style.display = "";
+        const countryDiv = document.getElementById("country-" + linkId);
+        const deviceDiv = document.getElementById("device-" + linkId);
+
+        if (countryDiv.dataset.loaded) return;
+
+        try {
+          const res = await api("GET", "/api/links/" + linkId + "/clicks");
+          if (!res || !res.ok) throw new Error("Failed");
+          const data = await res.json();
+
+          countryDiv.innerHTML = Object.entries(data.by_country)
+            .sort((a, b) => b[1] - a[1])
+            .map(([k, v]) => \`<div class="metric-row"><span>\${k}</span><strong>\${v}</strong></div>\`)
+            .join("") || "<div class='metric-row'>No data</div>";
+
+          deviceDiv.innerHTML = Object.entries(data.by_device)
+            .sort((a, b) => b[1] - a[1])
+            .map(([k, v]) => \`<div class="metric-row"><span>\${k}</span><strong>\${v}</strong></div>\`)
+            .join("") || "<div class='metric-row'>No data</div>";
+
+          countryDiv.dataset.loaded = "1";
+        } catch (err) {
+          countryDiv.innerHTML = "<div class='metric-row'>Error loading</div>";
+        }
+      }
+
+      function showQR(url, e) {
+        e.stopPropagation();
+        document.getElementById("qr-img").src = "https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=" + encodeURIComponent(url);
+        document.getElementById("qr-url").textContent = decodeURIComponent(url);
+        document.getElementById("qr-modal").classList.remove("hidden");
       }
 
       async function deleteLink(id) {

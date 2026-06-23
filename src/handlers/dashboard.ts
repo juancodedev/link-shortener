@@ -254,7 +254,11 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
         const headers = { "Content-Type": "application/json", "Authorization": "Bearer " + window.__token };
         const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
         if (res.status === 401) { window.location.href = "/login"; throw new Error("Unauthorized"); }
-        if (!res.ok) return res;
+        if (!res.ok) {
+          let msg = "Server error";
+          try { const e = await res.json(); msg = e.error || msg; } catch {}
+          throw new Error(msg);
+        }
         return res;
       };
 
@@ -456,8 +460,9 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
 
         try {
           const res = await window.__api("GET", "/api/links/" + linkId + "/clicks");
-          if (!res || !res.ok) throw new Error("Failed");
+          if (!res) throw new Error("No response");
           const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Server error");
 
           countryDiv.innerHTML = Object.entries(data.by_country)
             .sort((a, b) => b[1] - a[1])
@@ -476,7 +481,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
 
           countryDiv.dataset.loaded = "1";
         } catch (err) {
-          countryDiv.innerHTML = "<div class='metric-row'>Error loading</div>";
+          countryDiv.innerHTML = "<div class='metric-row'>Error: " + (err instanceof Error ? err.message : "Unknown") + "</div>";
         }
       }
 

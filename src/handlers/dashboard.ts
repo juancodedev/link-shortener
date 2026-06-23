@@ -414,6 +414,10 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
                     <div id="country-\${l.id}"><div class="loading">Loading...</div></div>
                   </div>
                   <div class="metric-box">
+                    <h4>By Device</h4>
+                    <div id="device-\${l.id}"><div class="loading">Loading...</div></div>
+                  </div>
+                  <div class="metric-box">
                     <h4>By Source</h4>
                     <div id="source-\${l.id}"><div class="loading">Loading...</div></div>
                   </div>

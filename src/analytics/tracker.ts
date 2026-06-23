@@ -87,6 +87,26 @@ function extractUa(ua: string): UaSummary {
   return { browser, os };
 }
 
+/**
+ * Detects device type with CF-Device-Type as primary, UA parsing as fallback.
+ */
+function detectDeviceType(request: Request): string {
+  // 1. Cloudflare's built-in detection
+  const cfDevice = request.headers.get("CF-Device-Type");
+  if (cfDevice === "mobile") return "Mobile";
+  if (cfDevice === "tablet") return "Tablet";
+  if (cfDevice === "desktop") return "Desktop";
+
+  // 2. Fallback: User-Agent parsing
+  const ua = request.headers.get("User-Agent") ?? "";
+  if (ua.includes("iPad") || (ua.includes("Android") && !ua.includes("Mobile"))) {
+    return "Tablet";
+  }
+  if (ua.includes("Mobile") || ua.includes("iPhone") || ua.includes("Android")) {
+    return "Mobile";
+  }
+  return "Desktop";
+
 // ---------------------------------------------------------------------------
 // Header extraction helpers
 // ---------------------------------------------------------------------------
@@ -143,7 +163,7 @@ export async function trackClick(
     // --- 1. Extract headers ---
     const ip = request.headers.get("CF-Connecting-IP");
     const country = request.headers.get("CF-IPCountry") ?? null;
-    const deviceType = request.headers.get("CF-Device-Type") ?? null;
+    const deviceType = detectDeviceType(request);
     const userAgent = request.headers.get("User-Agent") ?? "";
     const referrer = extractReferrer(request);
 

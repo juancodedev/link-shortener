@@ -106,6 +106,7 @@ function detectDeviceType(request: Request): string {
     return "Mobile";
   }
   return "Desktop";
+}
 
 // ---------------------------------------------------------------------------
 // Header extraction helpers

@@ -131,6 +131,12 @@ export async function trackClick(
   env: AppEnv,
   params: TrackClickParams,
 ): Promise<void> {
+  console.log(JSON.stringify({
+    event: "tracker_called",
+    tenant: params.tenantId,
+    code: params.shortCode,
+  }));
+
   try {
     const { tenantId, schemaName, linkId, shortCode, request } = params;
 
@@ -163,6 +169,13 @@ export async function trackClick(
         [shortCode],
       );
     });
+
+    console.log(JSON.stringify({
+      event: "click_tracked",
+      tenant: tenantId,
+      code: shortCode,
+      country: country ?? "unknown",
+    }));
   } catch (err) {
     // NEVER propagate — analytics failures must not affect the redirect
     console.error(

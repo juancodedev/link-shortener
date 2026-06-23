@@ -319,9 +319,10 @@ export const linkClicks: Handler<{
       country_code: string | null;
       device_type: string | null;
       referrer: string | null;
+      referrer_source: string | null;
       created_at: string;
     }>(
-      `SELECT country_code, device_type, referrer, created_at
+      `SELECT country_code, device_type, referrer, referrer_source, created_at
        FROM analytics.link_clicks
        WHERE link_id = $1
        ORDER BY created_at DESC
@@ -335,18 +336,22 @@ export const linkClicks: Handler<{
 
   const byCountry: Record<string, number> = {};
   const byDevice: Record<string, number> = {};
+  const bySource: Record<string, number> = {};
 
   for (const r of rows) {
     const c = r.country_code ?? "Unknown";
     byCountry[c] = (byCountry[c] || 0) + 1;
     const d = r.device_type ?? "Unknown";
     byDevice[d] = (byDevice[d] || 0) + 1;
+    const s = r.referrer_source ?? "Direct";
+    bySource[s] = (bySource[s] || 0) + 1;
   }
 
   return c.json({
     total: rows.length,
     by_country: byCountry,
     by_device: byDevice,
+    by_source: bySource,
     recent: rows.slice(0, 10).map((r) => ({
       country: r.country_code ?? "Unknown",
       device: r.device_type ?? "Unknown",

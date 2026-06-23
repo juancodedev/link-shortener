@@ -89,23 +89,66 @@ function extractUa(ua: string): UaSummary {
 
 /**
  * Detects device type with CF-Device-Type as primary, UA parsing as fallback.
+ * Returns granular info: "Android Phone", "iPhone", "iPad", "Windows", "Mac", etc.
  */
 function detectDeviceType(request: Request): string {
+  const ua = request.headers.get("User-Agent") ?? "";
+
   // 1. Cloudflare's built-in detection
   const cfDevice = request.headers.get("CF-Device-Type");
+
+  // 2. Specific device detection from User-Agent
+  if (ua.includes("iPhone")) return "iPhone";
+  if (ua.includes("iPad")) return "iPad";
+  if (ua.includes("Android")) {
+    if (cfDevice === "tablet" || ua.includes(" Tablet ")) return "Android Tablet";
+    return "Android Phone";
+  }
+
+  // 3. Desktop
   if (cfDevice === "mobile") return "Mobile";
   if (cfDevice === "tablet") return "Tablet";
-  if (cfDevice === "desktop") return "Desktop";
 
-  // 2. Fallback: User-Agent parsing
-  const ua = request.headers.get("User-Agent") ?? "";
-  if (ua.includes("iPad") || (ua.includes("Android") && !ua.includes("Mobile"))) {
-    return "Tablet";
-  }
-  if (ua.includes("Mobile") || ua.includes("iPhone") || ua.includes("Android")) {
-    return "Mobile";
-  }
+  if (ua.includes("Windows")) return "Windows";
+  if (ua.includes("Mac OS") || ua.includes("macOS")) return "Mac";
+  if (ua.includes("Linux") && !ua.includes("Android")) return "Linux";
+  if (ua.includes("CrOS")) return "ChromeOS";
+
   return "Desktop";
+}
+
+/**
+ * Detects the traffic source from the Referer header.
+ * Categorizes into: Instagram, Facebook, WhatsApp, Twitter/X, LinkedIn,
+ * Telegram, YouTube, Reddit, TikTok, Direct, or the domain name.
+ */
+function getReferrerSource(referrer: string | null): string {
+  if (!referrer) return "Direct";
+
+  try {
+    const host = new URL(referrer).hostname.toLowerCase();
+
+    if (host.includes("instagram.com") || host === "l.instagram.com") return "Instagram";
+    if (host.includes("facebook.com") || host === "l.facebook.com" || host === "lm.facebook.com") return "Facebook";
+    if (host.includes("whatsapp.com") || host === "wa.me") return "WhatsApp";
+    if (host.includes("t.co") || host.includes("twitter.com") || host.includes("x.com")) return "Twitter/X";
+    if (host.includes("linkedin.com")) return "LinkedIn";
+    if (host.includes("t.me") || host.includes("telegram.org")) return "Telegram";
+    if (host.includes("youtube.com") || host.includes("youtu.be")) return "YouTube";
+    if (host.includes("reddit.com")) return "Reddit";
+    if (host.includes("tiktok.com")) return "TikTok";
+    if (host.includes("tumblr.com")) return "Tumblr";
+    if (host.includes("pinterest.com")) return "Pinterest";
+    if (host.includes("discord.com")) return "Discord";
+    if (host.includes("slack.com")) return "Slack";
+    if (host.includes("github.com")) return "GitHub";
+    if (host.includes("google.com")) return "Google";
+
+    // Return the site name (strip www and TLD)
+    return host.replace(/^www\./, "").split(".")[0]!;
+  } catch {
+    return "Unknown";
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -167,6 +210,7 @@ export async function trackClick(
     const deviceType = detectDeviceType(request);
     const userAgent = request.headers.get("User-Agent") ?? "";
     const referrer = extractReferrer(request);
+    const referrerSource = getReferrerSource(referrer);
 
     // --- 2. Parse User-Agent into summary ---
     const uaSummary = userAgent ? parseUserAgent(userAgent) : null;
@@ -178,9 +222,9 @@ export async function trackClick(
     await withClient(env, async (client) => {
       await client.query(
         `INSERT INTO analytics.link_clicks
-           (tenant_id, link_id, ip_hash, user_agent_summary, device_type, country_code, referrer)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [tenantId, linkId, ipHash, uaSummary, deviceType, country, referrer],
+           (tenant_id, link_id, ip_hash, user_agent_summary, device_type, country_code, referrer, referrer_source)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [tenantId, linkId, ipHash, uaSummary, deviceType, country, referrer, referrerSource],
       );
 
       // --- 5. Increment clicks_count atomically ---

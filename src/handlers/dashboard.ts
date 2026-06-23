@@ -182,7 +182,7 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       margin-top: 0.5rem;
     }
     @media (min-width: 768px) {
-      .metrics-grid { grid-template-columns: 1fr 1fr; gap: 1rem; }
+      .metrics-grid { grid-template-columns: 1fr 1fr 1fr; gap: 1rem; }
     }
     .metric-box {
       background: #f8fafc;
@@ -410,8 +410,8 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
                     <div id="country-\${l.id}"><div class="loading">Loading...</div></div>
                   </div>
                   <div class="metric-box">
-                    <h4>By Device</h4>
-                    <div id="device-\${l.id}"><div class="loading">Loading...</div></div>
+                    <h4>By Source</h4>
+                    <div id="source-\${l.id}"><div class="loading">Loading...</div></div>
                   </div>
                 </div>
               </td>
@@ -450,6 +450,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         row.style.display = "";
         const countryDiv = document.getElementById("country-" + linkId);
         const deviceDiv = document.getElementById("device-" + linkId);
+        const sourceDiv = document.getElementById("source-" + linkId);
 
         if (countryDiv.dataset.loaded) return;
 
@@ -464,6 +465,11 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
             .join("") || "<div class='metric-row'>No data</div>";
 
           deviceDiv.innerHTML = Object.entries(data.by_device)
+            .sort((a, b) => b[1] - a[1])
+            .map(([k, v]) => \`<div class="metric-row"><span>\${k}</span><strong>\${v}</strong></div>\`)
+            .join("") || "<div class='metric-row'>No data</div>";
+
+          sourceDiv.innerHTML = Object.entries(data.by_source || {})
             .sort((a, b) => b[1] - a[1])
             .map(([k, v]) => \`<div class="metric-row"><span>\${k}</span><strong>\${v}</strong></div>\`)
             .join("") || "<div class='metric-row'>No data</div>";

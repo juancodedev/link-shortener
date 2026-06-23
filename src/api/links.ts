@@ -315,42 +315,40 @@ export const linkClicks: Handler<{
     );
     if (linkRes.rows.length === 0) return null;
 
-    const res = await withClient(c.env, async (client) => {
-      // Try with referrer_source first, fall back if column doesn't exist yet
-      try {
-        const r = await client.query<{
-          country_code: string | null;
-          device_type: string | null;
-          referrer: string | null;
-          referrer_source: string | null;
-          created_at: string;
-        }>(
-          `SELECT country_code, device_type, referrer, referrer_source, created_at
-           FROM analytics.link_clicks
-           WHERE link_id = $1
-           ORDER BY created_at DESC
-           LIMIT 50`,
-          [linkId],
-        );
-        return r.rows;
-      } catch {
-        // Column doesn't exist yet — fall back
-        const r = await client.query<{
-          country_code: string | null;
-          device_type: string | null;
-          referrer: string | null;
-          created_at: string;
-        }>(
-          `SELECT country_code, device_type, referrer, created_at
-           FROM analytics.link_clicks
-           WHERE link_id = $1
-           ORDER BY created_at DESC
-           LIMIT 50`,
-          [linkId],
-        );
-        return r.rows.map((row) => ({ ...row, referrer_source: "Direct" as string | null }));
-      }
-    });
+    // Try with referrer_source first, fall back if column doesn't exist yet
+    let result;
+    try {
+      result = await client.query<{
+        country_code: string | null;
+        device_type: string | null;
+        referrer: string | null;
+        referrer_source: string | null;
+        created_at: string;
+      }>(
+        `SELECT country_code, device_type, referrer, referrer_source, created_at
+         FROM analytics.link_clicks
+         WHERE link_id = $1
+         ORDER BY created_at DESC
+         LIMIT 50`,
+        [linkId],
+      );
+      return result.rows;
+    } catch {
+      result = await client.query<{
+        country_code: string | null;
+        device_type: string | null;
+        referrer: string | null;
+        created_at: string;
+      }>(
+        `SELECT country_code, device_type, referrer, created_at
+         FROM analytics.link_clicks
+         WHERE link_id = $1
+         ORDER BY created_at DESC
+         LIMIT 50`,
+        [linkId],
+      );
+      return result.rows.map((row): typeof result.rows[number] & { referrer_source: string | null } => ({ ...row, referrer_source: "Direct" }));
+    }
   });
 
   if (rows === null) throw new NotFoundError("Link not found", "not_found");

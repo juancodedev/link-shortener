@@ -220,12 +220,22 @@ export async function trackClick(
 
     // --- 4. INSERT into analytics.link_clicks ---
     await withClient(env, async (client) => {
-      await client.query(
-        `INSERT INTO analytics.link_clicks
-           (tenant_id, link_id, ip_hash, user_agent_summary, device_type, country_code, referrer, referrer_source)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [tenantId, linkId, ipHash, uaSummary, deviceType, country, referrer, referrerSource],
-      );
+      try {
+        await client.query(
+          `INSERT INTO analytics.link_clicks
+             (tenant_id, link_id, ip_hash, user_agent_summary, device_type, country_code, referrer, referrer_source)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [tenantId, linkId, ipHash, uaSummary, deviceType, country, referrer, referrerSource],
+        );
+      } catch {
+        // Column might not exist yet — fall back
+        await client.query(
+          `INSERT INTO analytics.link_clicks
+             (tenant_id, link_id, ip_hash, user_agent_summary, device_type, country_code, referrer)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [tenantId, linkId, ipHash, uaSummary, deviceType, country, referrer],
+        );
+      }
 
       // --- 5. Increment clicks_count atomically ---
       const table = qualifyTable(schemaName, "links");

@@ -149,6 +149,8 @@ export const redirectHandler: Handler<{
         }
         redirectUrl = parsed.url;
         linkId = parsed.linkId || "";
+        // Cache missing linkId (old format) — force DB refresh
+        if (!parsed.linkId) cacheHit = false;
       } catch {
         // Legacy plain-URL format — treat as active with no expiry
         redirectUrl = cached;

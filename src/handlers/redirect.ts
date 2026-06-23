@@ -14,7 +14,8 @@ import { trackClick } from "../analytics/tracker";
 interface CachedLink {
   url: string;
   isActive: boolean;
-  expiresAt: string | null; // ISO 8601 timestamp or null
+  expiresAt: string | null;
+  linkId: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -147,6 +148,7 @@ export const redirectHandler: Handler<{
           return c.json({ error: "link_expired" }, 410);
         }
         redirectUrl = parsed.url;
+        linkId = parsed.linkId || "";
       } catch {
         // Legacy plain-URL format — treat as active with no expiry
         redirectUrl = cached;
@@ -198,6 +200,7 @@ export const redirectHandler: Handler<{
         url: row.original_url,
         isActive: row.is_active,
         expiresAt: row.expires_at,
+        linkId: row.id,
       };
 
       c.executionCtx.waitUntil(

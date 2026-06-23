@@ -134,6 +134,7 @@ export const createLink: Handler<{
     url: linkRow.original_url,
     isActive: true,
     expiresAt: expires_at ?? null,
+    linkId: linkRow.id,
   });
 
   c.executionCtx.waitUntil(

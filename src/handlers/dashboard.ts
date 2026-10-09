@@ -302,6 +302,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
             <th>URL</th>
             <th>Clicks</th>
             <th>Status</th>
+            <th>Client Ref</th>
             <th></th>
           </tr>
         </thead>
@@ -365,6 +366,25 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         }
       });
 
+      /**
+       * Escapes a value for interpolation into innerHTML or a double-quoted
+       * attribute value.
+       *
+       * The links table is built by assigning a string to innerHTML, so every
+       * interpolated value is an injection vector. This helper is the sanctioned
+       * way to put record data into markup: client_ref and the row id reach the
+       * new column through it.
+       */
+      function esc(value) {
+        if (value === null || value === undefined) return "";
+        return String(value)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
       async function loadLinks() {
         const loading = document.getElementById("links-loading");
         const table = document.getElementById("links-table");
@@ -398,8 +418,10 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
               <td><span class="url-trunc" title="\${l.original_url}">\${l.original_url}</span></td>
               <td><a href="#" onclick="showMetrics('\${l.id}','\${l.short_code}',event)" style="color:#2563eb;text-decoration:none;font-weight:600;">\${l.clicks_count}</a></td>
               <td><span class="badge badge-\${status}">\${status}</span></td>
+              <td><input type="text" id="client-ref-\${esc(l.id)}" value="\${esc(l.client_ref)}" placeholder="None" maxlength="200" style="width:130px;padding:0.25rem 0.5rem;margin-bottom:0;border-radius:0.375rem;font-size:0.75rem;"></td>
               <td>
                 <div class="row-actions">
+                  <button class="btn-sm btn-outline" onclick="saveClientRef('\${l.id}')" title="Save client identifier">Save</button>
                   <button class="btn-sm" onclick="showQR('\${encodeURIComponent(shortUrl)}',event)" title="QR Code">QR</button>
                   <button class="btn-sm btn-outline" onclick="toggleLink('\${l.id}', \${!l.is_active})">\${l.is_active ? "Disable" : "Enable"}</button>
                   <button class="btn-sm btn-danger" onclick="deleteLink('\${l.id}')">Del</button>
@@ -407,7 +429,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
               </td>
             </tr>
             <tr id="metrics-\${l.id}" style="display:none;">
-              <td colspan="5" style="padding:0;">
+              <td colspan="6" style="padding:0;">
                 <div class="metrics-grid" style="padding:0.75rem;">
                   <div class="metric-box">
                     <h4>By Country</h4>
@@ -438,6 +460,24 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       async function toggleLink(id, active) {
         try {
           const res = await window.__api("PATCH", "/api/links/" + id, { is_active: active });
+          if (!res.ok) throw new Error("Failed");
+          loadLinks();
+        } catch (err) {
+          alert("Error: " + (err instanceof Error ? err.message : ""));
+        }
+      }
+
+      // Same update path as toggleLink — PATCH then re-render. An emptied field
+      // is sent as null so clearing the identifier removes it rather than
+      // storing an empty string that would never match a CRM record.
+      async function saveClientRef(id) {
+        const input = document.getElementById("client-ref-" + id);
+        if (!input) return;
+        const value = input.value.trim();
+        try {
+          const res = await window.__api("PATCH", "/api/links/" + id, {
+            client_ref: value === "" ? null : value,
+          });
           if (!res.ok) throw new Error("Failed");
           loadLinks();
         } catch (err) {

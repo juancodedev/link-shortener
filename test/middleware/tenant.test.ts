@@ -4,9 +4,17 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // Mock cache modules
 // ---------------------------------------------------------------------------
 
+//
+// The mock must mirror the exports `src/middleware/tenant.ts` actually imports
+// (`getCachedSchema` / `setCachedTenant` — see src/middleware/tenant.ts:5). A
+// factory that only provides the legacy pair makes the imported bindings
+// undefined, so `setCachedTenant` throws "No export is defined on the mock" and
+// the broad catch turns the request into a misleading 503.
+// ---------------------------------------------------------------------------
+
 vi.mock("../../src/cache/tenant", () => ({
   getCachedSchema: vi.fn().mockResolvedValue(null),
-  setCachedSchema: vi.fn().mockResolvedValue(undefined),
+  setCachedTenant: vi.fn().mockResolvedValue(undefined),
 }));
 
 // ---------------------------------------------------------------------------
@@ -17,7 +25,7 @@ vi.mock("../../src/db/client", () => ({
   withClient: vi.fn(),
 }));
 
-import { getCachedSchema, setCachedSchema } from "../../src/cache/tenant";
+import { getCachedSchema } from "../../src/cache/tenant";
 import { withClient } from "../../src/db/client";
 import {
   createTenantMiddleware,

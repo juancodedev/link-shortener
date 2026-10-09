@@ -16,6 +16,7 @@ interface LinkRow {
   short_code: string;
   original_url: string;
   title: string | null;
+  client_ref: string | null;
   created_at: string;
 }
 
@@ -40,6 +41,18 @@ const RECENT_CLICK_LIMIT = 10;
 
 /** Maximum number of active links per tenant on the free tier. */
 const MAX_ACTIVE_LINKS = 30;
+
+/**
+ * Maximum length of `client_ref`.
+ *
+ * `title` is capped at 200 too, but there it is a display label, so silently
+ * truncating it is harmless. `client_ref` is an IDENTIFIER the user copies into
+ * an external CRM: if we truncated it, the stored value would no longer equal
+ * what they typed and the correlation would silently fail to match. So we
+ * reject an over-long value instead, and do so on create as well as update
+ * (`title` is only capped on update — that gap is pre-existing).
+ */
+const MAX_CLIENT_REF_LENGTH = 200;
 
 /** Maximum retries for short code collision handling. */
 const MAX_RETRIES = 3;
@@ -72,12 +85,18 @@ export const createLink: Handler<{
   const tenant = c.get("tenant");
 
   // --- 1. Parse and validate request body ---
-  let body: { original_url?: string; title?: string; expires_at?: string };
+  let body: {
+    original_url?: string;
+    title?: string;
+    expires_at?: string;
+    client_ref?: string;
+  };
   try {
     body = await c.req.json<{
       original_url?: string;
       title?: string;
       expires_at?: string;
+      client_ref?: string;
     }>();
   } catch {
     throw new ValidationError("Invalid JSON body", "invalid_request");
@@ -87,7 +106,21 @@ export const createLink: Handler<{
     throw new ValidationError("original_url is required", "invalid_request");
   }
 
-  const { title, expires_at } = body;
+  // client_ref is optional free text the user types to correlate the link with
+  // an external CRM record. It is NOT validated against anything — there is no
+  // local client entity. Present-but-wrong-type is an error; absent is not, so
+  // links created before this column existed keep working.
+  if (body.client_ref !== undefined && typeof body.client_ref !== "string") {
+    throw new ValidationError("client_ref must be a string", "invalid_request");
+  }
+  if (typeof body.client_ref === "string" && body.client_ref.length > MAX_CLIENT_REF_LENGTH) {
+    throw new ValidationError(
+      `client_ref must be at most ${MAX_CLIENT_REF_LENGTH} characters`,
+      "invalid_request",
+    );
+  }
+
+  const { title, expires_at, client_ref } = body;
   let original_url = body.original_url!;
 
   // --- 2. Validate URL (open-redirect protection) ---
@@ -128,11 +161,11 @@ export const createLink: Handler<{
     const rows = await withClient(env, async (client) => {
       const table = qualifyTable(tenant.schemaName, "links");
       const res = await client.query<LinkRow>(
-        `INSERT INTO ${table} (original_url, short_code, title, expires_at)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO ${table} (original_url, short_code, title, expires_at, client_ref)
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (short_code) DO NOTHING
-         RETURNING id, short_code, original_url, title, created_at`,
-        [original_url, shortCode, title ?? null, expires_at ?? null],
+         RETURNING id, short_code, original_url, title, client_ref, created_at`,
+        [original_url, shortCode, title ?? null, expires_at ?? null, client_ref ?? null],
       );
       return res.rows;
     });
@@ -183,6 +216,7 @@ export const createLink: Handler<{
       short_url: shortUrl,
       title: linkRow.title,
       expires_at: expires_at ?? null,
+      client_ref: linkRow.client_ref ?? null,
       created_at: linkRow.created_at,
     },
     201,
@@ -202,7 +236,7 @@ export const listLinks: Handler<{
   const rows = await withClient(c.env, async (client) => {
     const table = qualifyTable(tenant.schemaName, "links");
     const res = await client.query<LinkRow & { clicks_count: number; is_active: boolean; expires_at: string | null; updated_at: string }>(
-      `SELECT id, short_code, original_url, title, clicks_count, is_active, expires_at, created_at, updated_at
+      `SELECT id, short_code, original_url, title, client_ref, clicks_count, is_active, expires_at, created_at, updated_at
        FROM ${table}
        ORDER BY created_at DESC
        LIMIT 100`,
@@ -219,6 +253,7 @@ export const listLinks: Handler<{
       original_url: r.original_url,
       short_url: `${domain}/${r.short_code}`,
       title: r.title,
+      client_ref: r.client_ref ?? null,
       clicks_count: r.clicks_count,
       is_active: r.is_active,
       expires_at: r.expires_at,
@@ -229,7 +264,7 @@ export const listLinks: Handler<{
 };
 
 // ---------------------------------------------------------------------------
-// PATCH /api/links/:id — update link (toggle active, change title)
+// PATCH /api/links/:id — update link (toggle active, change title, set client_ref)
 // ---------------------------------------------------------------------------
 
 export const updateLink: Handler<{
@@ -239,11 +274,31 @@ export const updateLink: Handler<{
   const tenant = c.get("tenant");
   const linkId = c.req.param("id")!;
 
-  let body: { is_active?: boolean; title?: string };
+  let body: { is_active?: boolean; title?: string; client_ref?: string };
   try {
     body = await c.req.json();
   } catch {
     throw new ValidationError("Invalid JSON body", "invalid_request");
+  }
+
+  // Reject a wrong-typed client_ref up front rather than silently ignoring it:
+  // a client that sends `client_ref` and gets `ok: true` would believe the
+  // identifier was saved when it was not.
+  // `null` is accepted explicitly as "clear the identifier" — the column is
+  // nullable and the dashboard needs a way to unset it. Any other non-string
+  // (number, object, array, boolean) is a caller bug.
+  if (
+    body.client_ref !== undefined &&
+    body.client_ref !== null &&
+    typeof body.client_ref !== "string"
+  ) {
+    throw new ValidationError("client_ref must be a string or null", "invalid_request");
+  }
+  if (typeof body.client_ref === "string" && body.client_ref.length > MAX_CLIENT_REF_LENGTH) {
+    throw new ValidationError(
+      `client_ref must be at most ${MAX_CLIENT_REF_LENGTH} characters`,
+      "invalid_request",
+    );
   }
 
   const rows = await withClient(c.env, async (client) => {
@@ -258,6 +313,15 @@ export const updateLink: Handler<{
     if (typeof body.title === "string") {
       sets.push(`title = $${vals.length + 1}`);
       vals.push(body.title.slice(0, 200));
+    }
+    // Not sliced — see MAX_CLIENT_REF_LENGTH: a truncated identifier stops
+    // matching the CRM record it is meant to point at.
+    if (body.client_ref === null) {
+      // Explicit clear. Takes no bind param, so it must not consume a slot.
+      sets.push(`client_ref = NULL`);
+    } else if (typeof body.client_ref === "string") {
+      sets.push(`client_ref = $${vals.length + 1}`);
+      vals.push(body.client_ref);
     }
 
     if (sets.length === 0) {

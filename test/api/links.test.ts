@@ -14,6 +14,7 @@ vi.mock("../../src/db/client", () => ({
 
 vi.mock("../../src/cache/shortcode", () => ({
   setCachedUrl: vi.fn().mockResolvedValue(undefined),
+  invalidateCachedUrl: vi.fn().mockResolvedValue(undefined),
 }));
 
 // ---------------------------------------------------------------------------
@@ -25,9 +26,10 @@ vi.mock("../../src/utils/short-code", () => ({
 }));
 
 import { withClient } from "../../src/db/client";
-import { setCachedUrl } from "../../src/cache/shortcode";
+import { setCachedUrl, invalidateCachedUrl } from "../../src/cache/shortcode";
 import { generateShortCode } from "../../src/utils/short-code";
-import { createLink, linkClicks } from "../../src/api/links";
+import { createLink, linkClicks, listLinks, updateLink } from "../../src/api/links";
+import { ValidationError } from "../../src/middleware/error";
 
 // ---------------------------------------------------------------------------
 // Helper: mock Hono context
@@ -550,5 +552,268 @@ describe("linkClicks handler", () => {
     const { c } = mockContext({ params: { id: "missing-link" } });
 
     await expect(linkClicks(c as any)).rejects.toThrow("not found");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// client_ref — user-defined CRM identifier (T1.4)
+//
+// Contract under test:
+//   - optional; omitting it is NOT an error (existing links have none)
+//   - stored verbatim on create, on the INSERT itself
+//   - patchable on update via the same PATCH endpoint as is_active/title
+//   - must be a string; anything else is a 400 ValidationError
+//   - returned by listLinks so the dashboard can render it
+// ---------------------------------------------------------------------------
+
+/**
+ * Records the SQL text and bind params of every query the handler issues, and
+ * returns each queued ROW ARRAY in call order. `query()` resolves to
+ * `{ rows: <the next queued array> }`.
+ */
+function mockRecordingDb(rowSets: unknown[][]) {
+  const calls: { sql: string; params: unknown[] }[] = [];
+  let i = 0;
+
+  vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) =>
+    fn({
+      query: vi.fn().mockImplementation(async (sql: string, params: unknown[]) => {
+        calls.push({ sql, params });
+        return { rows: rowSets[i++] ?? [], rowCount: 1 };
+      }),
+    }),
+  );
+
+  return calls;
+}
+
+describe("client_ref on createLink", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(generateShortCode).mockReturnValue("abc1234");
+    vi.mocked(setCachedUrl).mockResolvedValue(undefined);
+  });
+
+  it("persists and returns client_ref when supplied", async () => {
+    const calls = mockRecordingDb([
+      [{ count: "3" }],
+      [
+        {
+          id: "link-uuid",
+          short_code: "abc1234",
+          original_url: "https://example.com",
+          title: null,
+          client_ref: "ACME-0042",
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    ]);
+
+    const { c, jsonFn } = mockContext({
+      body: { original_url: "https://example.com", client_ref: "ACME-0042" },
+    });
+
+    await createLink(c as any);
+
+    // The column is written on the INSERT, not applied afterwards
+    const insert = calls.find((q) => /INSERT INTO/.test(q.sql))!;
+    expect(insert.sql).toMatch(/client_ref/);
+    expect(insert.params).toContain("ACME-0042");
+
+    expect(jsonFn).toHaveBeenCalledWith(
+      expect.objectContaining({ client_ref: "ACME-0042" }),
+      201,
+    );
+  });
+
+  it("succeeds with client_ref absent and returns null (backward compatibility)", async () => {
+    const calls = mockRecordingDb([
+      [{ count: "3" }],
+      [
+        {
+          id: "link-uuid",
+          short_code: "abc1234",
+          original_url: "https://example.com",
+          title: null,
+          client_ref: null,
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    ]);
+
+    const { c, jsonFn } = mockContext({
+      body: { original_url: "https://example.com" },
+    });
+
+    await createLink(c as any);
+
+    const insert = calls.find((q) => /INSERT INTO/.test(q.sql))!;
+    expect(insert.params).toContain(null);
+
+    expect(jsonFn).toHaveBeenCalledWith(
+      expect.objectContaining({ client_ref: null }),
+      201,
+    );
+  });
+
+  it("rejects a non-string client_ref with a 400 ValidationError", async () => {
+    const { c } = mockContext({
+      body: { original_url: "https://example.com", client_ref: 42 },
+    });
+
+    await expect(createLink(c as any)).rejects.toThrow(ValidationError);
+    // Rejected before the DB is touched
+    expect(withClient).not.toHaveBeenCalled();
+  });
+
+  it("rejects a client_ref longer than the cap with a 400 ValidationError", async () => {
+    const { c } = mockContext({
+      body: { original_url: "https://example.com", client_ref: "x".repeat(201) },
+    });
+
+    await expect(createLink(c as any)).rejects.toThrow(ValidationError);
+    expect(withClient).not.toHaveBeenCalled();
+  });
+});
+
+describe("client_ref on updateLink", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(generateShortCode).mockReturnValue("abc1234");
+    vi.mocked(setCachedUrl).mockResolvedValue(undefined);
+    vi.mocked(invalidateCachedUrl).mockResolvedValue(undefined);
+  });
+
+  it("updates client_ref on an existing link via the existing PATCH path", async () => {
+    const calls = mockRecordingDb([
+      [{ short_code: "abc1234", is_active: true }],
+    ]);
+
+    const { c, jsonFn } = mockContext({
+      params: { id: "link-uuid" },
+      body: { client_ref: "ACME-0042" },
+    });
+
+    await updateLink(c as any);
+
+    const update = calls.find((q) => /^UPDATE/i.test(q.sql.trim()))!;
+    expect(update.sql).toMatch(/client_ref\s*=/);
+    expect(update.params).toContain("ACME-0042");
+
+    expect(jsonFn).toHaveBeenCalledWith({ ok: true });
+  });
+
+  it("rejects a non-string client_ref with a 400 ValidationError", async () => {
+    const { c } = mockContext({
+      params: { id: "link-uuid" },
+      body: { client_ref: { id: 1 } },
+    });
+
+    await expect(updateLink(c as any)).rejects.toThrow(ValidationError);
+    expect(withClient).not.toHaveBeenCalled();
+  });
+
+  it("clears client_ref when sent as null (the dashboard's unset path)", async () => {
+    const calls = mockRecordingDb([
+      [{ short_code: "abc1234", is_active: true }],
+    ]);
+
+    const { c, jsonFn } = mockContext({
+      params: { id: "link-uuid" },
+      body: { client_ref: null },
+    });
+
+    await updateLink(c as any);
+
+    const update = calls.find((q) => /^UPDATE/i.test(q.sql.trim()))!;
+    // NULL is inlined, not bound — so it must not shift the WHERE id placeholder
+    expect(update.sql).toMatch(/client_ref = NULL/);
+    expect(update.sql).toMatch(/WHERE id = \$1\b/);
+    expect(update.params).toEqual(["link-uuid"]);
+
+    expect(jsonFn).toHaveBeenCalledWith({ ok: true });
+  });
+
+  it("still supports the pre-existing is_active and title fields", async () => {
+    const calls = mockRecordingDb([
+      [{ short_code: "abc1234", is_active: false }],
+    ]);
+
+    const { c, jsonFn } = mockContext({
+      params: { id: "link-uuid" },
+      body: { is_active: false, title: "Renamed" },
+    });
+
+    await updateLink(c as any);
+
+    const update = calls.find((q) => /^UPDATE/i.test(q.sql.trim()))!;
+    expect(update.sql).toMatch(/is_active\s*=/);
+    expect(update.sql).toMatch(/title\s*=/);
+    expect(update.sql).not.toMatch(/client_ref\s*=/);
+
+    expect(jsonFn).toHaveBeenCalledWith({ ok: true });
+  });
+});
+
+describe("client_ref in listLinks", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it("returns client_ref so the dashboard can render it", async () => {
+    const calls = mockRecordingDb([
+      [
+        {
+          id: "link-uuid",
+          short_code: "abc1234",
+          original_url: "https://example.com",
+          title: null,
+          client_ref: "ACME-0042",
+          clicks_count: 5,
+          is_active: true,
+          expires_at: null,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-02T00:00:00Z",
+        },
+      ],
+    ]);
+
+    const { c, jsonFn } = mockContext();
+
+    await listLinks(c as any);
+
+    // Selected in SQL, not assembled client-side
+    expect(calls[0]!.sql).toMatch(/client_ref/);
+
+    expect(jsonFn).toHaveBeenCalledWith([
+      expect.objectContaining({ client_ref: "ACME-0042" }),
+    ]);
+  });
+
+  it("returns client_ref null for links created before the column existed", async () => {
+    mockRecordingDb([
+      [
+        {
+          id: "old-link",
+          short_code: "old1234",
+          original_url: "https://example.com",
+          title: "Legacy",
+          client_ref: null,
+          clicks_count: 0,
+          is_active: true,
+          expires_at: null,
+          created_at: "2025-01-01T00:00:00Z",
+          updated_at: "2025-01-01T00:00:00Z",
+        },
+      ],
+    ]);
+
+    const { c, jsonFn } = mockContext();
+
+    await listLinks(c as any);
+
+    expect(jsonFn).toHaveBeenCalledWith([
+      expect.objectContaining({ client_ref: null }),
+    ]);
   });
 });

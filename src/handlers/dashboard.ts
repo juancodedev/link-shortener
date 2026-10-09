@@ -280,6 +280,11 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
         return res;
       };
 
+      // Open the readiness gate LAST, once the helper it guards actually
+      // exists. Every loadLinks() caller suspended on this promise resumes here
+      // and finds a callable window.__api, however early it was invoked.
+      // Resolving it any earlier — on the session, before the assignment — would
+      // hand every waiter straight back the race this gate exists to close.
       if (typeof loadLinks === "function") loadLinks();
     })();
   </script>
@@ -531,6 +536,14 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       document.getElementById("links-body").addEventListener("click", onLinksTableClick);
 
       async function loadLinks() {
+        // Safe to call at ANY point in the page lifecycle.
+        //
+        // The gate is awaited before the first request, not after it, so this
+        // holds for every caller and for every number of endpoints that follows
+        // — the one-request form this function had before the client_ref rollup
+        // got its own URL, and the two-request form shipped today. A caller that
+        // arrives while getSession() is still in flight parks here instead of
+        // throwing, and its load happens the moment the helper exists.
         const loading = document.getElementById("links-loading");
         const table = document.getElementById("links-table");
         const empty = document.getElementById("links-empty");

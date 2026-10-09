@@ -606,3 +606,59 @@ describe("Phase 2 markup did not regress the escaping and delegation guards", ()
     expect(script.match(/\.map\(\(\[k, v\]\) => `[\s\S]*?`\)/g)).toHaveLength(3);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The loadLinks / auth-bootstrap ordering
+//
+// The dashboard serves TWO inline scripts and they do not run in a
+// cooperative order:
+//
+//   <script>  (container)   defines loadLinks, wires the create form
+//   <script src=...supabase>
+//   <script>  (shell)       async IIFE -> await sb.auth.getSession()
+//                           -> defines window.__api -> loadLinks()
+//
+// The shell bootstrap suspends on a network round-trip, so anything the
+// container script does at parse time runs while window.__api does not yet
+// exist. A parse-time `loadLinks()` there therefore reached
+// `window.__api("GET", ...)` and threw a TypeError that loadLinks' own catch
+// turned into "Could not load links. window.__api is not a function".
+//
+// There is no DOM in the workers pool, so these tests do not simulate clicks or
+// run a live page. They work on the SERVED script two ways: the ordering
+// behaviour is exercised by executing the shipped `loadLinks` against a stub
+// `window`/`document` — which is where the real defect lived, inside the
+// function rather than in a click handler — and the parse-time wiring is
+// asserted on the served source, because that part genuinely is about the
+// order of statements in the document.
+// ---------------------------------------------------------------------------
+
+type ElementStub = {
+  style: { display: string };
+  textContent: string;
+  innerHTML: string;
+  dataset: Record<string, unknown>;
+  addEventListener: (type: string, handler: unknown) => void;
+};
+
+type Request = { method: string; path: string };
+
+interface Harness {
+  /** The shipped loadLinks, bound to the stubs below. */
+  loadLinks: () => Promise<void>;
+  /** Exactly what the shell bootstrap calls once window.__api exists. */
+  resolveGate: () => void;
+  requests: Request[];
+  el: (id: string) => ElementStub;
+  win: Record<string, any>;
+}
+
+function stubElement(): ElementStub {
+  return {
+    style: { display: "" },
+    textContent: "",
+    innerHTML: "",
+    dataset: {},
+    addEventListener: () => {},
+  };
+}

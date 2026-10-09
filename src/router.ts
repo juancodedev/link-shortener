@@ -12,6 +12,7 @@ import { redirectHandler } from "./handlers/redirect";
 import { signupHandler, loginHandler, resetPasswordHandler, authCallbackHandler } from "./handlers/auth";
 import { dashboardHandler } from "./handlers/dashboard";
 import { createLink, listLinks, updateLink, deleteLink, linkClicks } from "./api/links";
+import { listClientRefMetrics } from "./api/clients";
 import { createTenant, deleteTenant } from "./api/tenants";
 
 // ---------------------------------------------------------------------------
@@ -66,6 +67,16 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
   app.patch("/api/links/:id", auth, userProfileTenantMiddleware, updateLink);
   app.delete("/api/links/:id", auth, userProfileTenantMiddleware, deleteLink);
   app.get("/api/links/:id/clicks", auth, userProfileTenantMiddleware, linkClicks);
+
+  // Per-client_ref visitor rollup: auth → resolve tenant from user profile →
+  // handler. The same chain as every other tenant-scoped route above, and for
+  // the same reason: the tenant in context is what qualifies the links table the
+  // rollup joins against, so omitting it would read across tenants.
+  //
+  // Its own route rather than part of the GET /api/links payload — carrying it
+  // there changed that response from a bare array into an envelope. See
+  // src/api/clients.ts for the full reasoning.
+  app.get("/api/clients/metrics", auth, userProfileTenantMiddleware, listClientRefMetrics);
 
   // Tenant provisioning: auth required, no tenant middleware (tenant doesn't exist yet)
   app.post("/api/tenants", auth, createTenant);

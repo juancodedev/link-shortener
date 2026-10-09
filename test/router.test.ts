@@ -316,6 +316,98 @@ describe("router link routes", () => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /api/clients/metrics — the per-client_ref rollup's own route
+//
+// This exists because the rollup used to ride inside GET /api/links, which
+// turned that response from a bare array into an envelope. The route and its
+// middleware chain are load-bearing twice over: the endpoint must be reachable
+// at all, and it must be registered behind the SAME auth → tenant chain as every
+// other tenant-scoped route, because that chain is what puts a tenant schema in
+// context and the rollup joins against exactly that schema.
+// ---------------------------------------------------------------------------
+
+describe("router client metrics route", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("registers GET /api/clients/metrics", () => {
+    const app = createApp(testEnv());
+
+    const distinct = new Set(app.routes.map((r) => `${r.method} ${r.path}`));
+
+    expect(distinct.has("GET /api/clients/metrics")).toBe(true);
+  });
+
+  it("registers it with auth and the tenant middleware, like the other tenant-scoped routes", () => {
+    const app = createApp(testEnv());
+
+    // Hono flattens each registered chain into one entry per handler, so the
+    // chain length is the assertion: three means auth, tenant middleware, and
+    // the handler. Registering with `auth` alone would leave `c.get("tenant")`
+    // undefined and the rollup would join against nothing.
+    const chainFor = (method: string, path: string) =>
+      app.routes.filter((r) => r.method === method && r.path === path);
+
+    expect(chainFor("GET", "/api/clients/metrics")).toHaveLength(3);
+
+    // Same chain length as the routes it must match.
+    expect(chainFor("GET", "/api/links")).toHaveLength(3);
+    expect(chainFor("GET", "/api/links/:id/clicks")).toHaveLength(3);
+  });
+
+  it("routes GET /api/clients/metrics through to the rollup handler", async () => {
+    const sql: string[] = [];
+    vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) =>
+      fn({
+        query: vi.fn().mockImplementation(async (text: string) => {
+          sql.push(text);
+          return {
+            rows: [{ client_ref: "ACME-0042", unique_visitors: 30, sessions: 42 }],
+            rowCount: 1,
+          };
+        }),
+      }),
+    );
+
+    const app = createApp(testEnv());
+    const res = await app.request(
+      "/api/clients/metrics",
+      { method: "GET" },
+      testEnv(),
+      executionCtx,
+    );
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual([
+      { client_ref: "ACME-0042", unique_visitors: 30, sessions: 42 },
+    ]);
+    // End to end proof the tenant middleware ran: the query names the tenant
+    // schema that middleware put in context.
+    expect(sql[0]).toContain('"tenant_a7f3"."links"');
+  });
+
+  it("leaves GET /api/links a bare array while the rollup lives on its own route", async () => {
+    vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) =>
+      fn({ query: vi.fn().mockResolvedValue({ rows: [], rowCount: 0 }) }),
+    );
+
+    const app = createApp(testEnv());
+    const res = await app.request(
+      "/api/links",
+      { method: "GET" },
+      testEnv(),
+      executionCtx,
+    );
+
+    expect(res.status).toBe(200);
+    // Through the real app, so this asserts the wire format rather than what a
+    // handler passed to c.json.
+    await expect(res.json()).resolves.toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Error-handling integration tests (REQ-O001)
 //
 // These go through the REAL createApp so they prove Hono actually reaches our

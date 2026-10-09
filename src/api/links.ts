@@ -5,6 +5,13 @@ import { qualifyTable, validateSchemaName } from "../db/schema";
 import { validateUrl } from "../utils/validation";
 import { generateShortCode } from "../utils/short-code";
 import {
+  UNIQUE_WINDOW,
+  SESSION_WINDOW,
+  buildLinkVisitorMetricsQuery,
+  toCount,
+  type VisitorMetricsRow,
+} from "../analytics/metrics";
+import {
   setCachedUrl,
   invalidateCachedUrl,
   getCachedRegistryEntry,
@@ -396,7 +403,22 @@ export const createLink: Handler<{
 };
 
 // ---------------------------------------------------------------------------
-// GET /api/links — list user's links
+// GET /api/links — list the tenant's links
+//
+// THE RESPONSE IS A BARE ARRAY, and that is a contract, not an implementation
+// detail.
+//
+// Phase 2 briefly returned `{ links: [...], clients: {...} }` so the
+// per-client_ref visitor rollup could ride along in the same response. Nothing
+// asked for that shape and it broke every consumer of the original one: a
+// caller written against an array receives an object and fails on it. The
+// dashboard survived only because it was rewritten in the same change.
+//
+// The rollup now has its own endpoint — GET /api/clients/metrics, see
+// src/api/clients.ts — so there is nothing left to carry here and the array is
+// restored exactly. Per-link fields are unchanged; only the container moved
+// back. Adding a field to an existing collection means adding a field to each
+// element, never a wrapper around the collection.
 // ---------------------------------------------------------------------------
 
 export const listLinks: Handler<{
@@ -404,15 +426,16 @@ export const listLinks: Handler<{
   Variables: HonoVars;
 }> = async (c) => {
   const tenant = c.get("tenant");
+  const table = qualifyTable(tenant.schemaName, "links");
 
   const rows = await withClient(c.env, async (client) => {
-    const table = qualifyTable(tenant.schemaName, "links");
     const res = await client.query<LinkRow & { clicks_count: number; is_active: boolean; expires_at: string | null; updated_at: string }>(
       `SELECT id, short_code, original_url, title, client_ref, clicks_count, is_active, expires_at, created_at, updated_at
        FROM ${table}
        ORDER BY created_at DESC
        LIMIT 100`,
     );
+
     return res.rows;
   });
 
@@ -623,6 +646,26 @@ export const linkClicks: Handler<{
       groups = r.rows.map((row) => ({ ...row, referrer_source: "Direct" as string | null }));
     }
 
+    // --- Visitor figures: unique_visitors and sessions (Phase 2) ---
+    //
+    // Both come from ONE query over a de-duplicated (ip_hash, 30-minute
+    // bucket) row set — see buildLinkVisitorMetricsQuery. Computed in SQL and
+    // bounded by no LIMIT: folding these buckets in JavaScript is exactly the
+    // pre-Phase-0 defect that reported a 50-row sample as the total.
+    //
+    // Deliberately not wrapped in a try/catch the way the referrer_source
+    // aggregate above is. That fallback exists because the column may not
+    // exist on an already-deployed database, and degrading a breakdown is
+    // harmless. This one has no such drift risk, and a silent catch would
+    // publish "0 unique visitors" — a confident "nobody came" — for a store
+    // that was busy. An error is honest here.
+    const visitorsQuery = buildLinkVisitorMetricsQuery(linkId);
+    const visitorsRes = await client.query<VisitorMetricsRow>(
+      visitorsQuery.text,
+      visitorsQuery.params,
+    );
+    const visitorRow = visitorsRes.rows[0];
+
     // --- Recent-N window for the dashboard activity list ---
     // referrer_source is not projected here, so this stays valid whether or
     // not the column exists yet.
@@ -635,7 +678,14 @@ export const linkClicks: Handler<{
       [linkId],
     );
 
-    return { groups, recent: recentRes.rows };
+    return {
+      groups,
+      visitors: {
+        unique_visitors: toCount(visitorRow?.unique_visitors ?? 0),
+        sessions: toCount(visitorRow?.sessions ?? 0),
+      },
+      recent: recentRes.rows,
+    };
   });
 
   if (result === null) throw new NotFoundError("Link not found", "not_found");
@@ -660,6 +710,12 @@ export const linkClicks: Handler<{
 
   return c.json({
     total,
+    unique_visitors: result.visitors.unique_visitors,
+    sessions: result.visitors.sessions,
+    // Shipped with the figures so the dashboard labels can never drift from
+    // the windows the SQL actually used.
+    unique_window: UNIQUE_WINDOW,
+    session_window: SESSION_WINDOW,
     by_country: byCountry,
     by_device: byDevice,
     by_source: bySource,

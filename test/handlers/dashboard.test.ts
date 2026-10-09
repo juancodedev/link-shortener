@@ -125,6 +125,17 @@ async function loadMetricMapper(): Promise<(entry: [string, number]) => string> 
   ) => string;
 }
 
+/**
+ * Compiles a named client-side function out of the SERVED script, bound to the
+ * served `esc()`. Used for the Phase 2 renderers, which are deliberately their
+ * own functions rather than the shared breakdown mapper.
+ */
+async function loadClientFunction<T>(name: string): Promise<T> {
+  const src = extractFunction(await clientScript(), name);
+  const esc = await loadEsc();
+  return new Function("esc", `${src}\nreturn ${name};`)(esc) as T;
+}
+
 // ---------------------------------------------------------------------------
 // Shell contract
 // ---------------------------------------------------------------------------
@@ -353,5 +364,245 @@ describe("landing handler (confirmation)", () => {
     const interpolations = [...html.matchAll(/\$\{[^}]*\}/g)].map((m) => m[0]);
     expect(interpolations).toEqual([]);
     expect(html).not.toMatch(/\bon(click|error|load)\s*=\s*["'][^"']*\$/);
+  });
+});
+// ---------------------------------------------------------------------------
+// Phase 2 — visitor figures, and the caveat that qualifies them
+//
+// Two independent requirements, deliberately tested separately:
+//
+//   1. `unique_visitors` and `sessions` are rendered with EQUAL WEIGHT. The
+//      user rejected a hierarchy between them, and a hierarchy is exactly the
+//      kind of thing that sneaks back in through styling, so the assertion is
+//      on the markup shape rather than on a class name.
+//   2. The caveat is visible in the RENDERED MARKUP. Not in a comment, not in
+//      the README, not behind a tooltip. If it were only in the source it
+//      would be true of nobody who reads the page.
+// ---------------------------------------------------------------------------
+
+import { VISITOR_ESTIMATE_CAVEAT } from "../../src/analytics/metrics";
+
+/**
+ * The part of the served page that exists WITHOUT any script running.
+ *
+ * Every server-rendered element sits ahead of the dashboard's inline <script>
+ * — nav, the create form, the links card and the clients card. Note the
+ * boundary is the inline `<script>`, NOT `<script src=`: the dashboard's own
+ * script (which carries the row template, and a second copy of the caveat) is
+ * rendered INSIDE the container, ahead of the shell's Supabase loader. Cutting
+ * at `<script src=` therefore included script content and made every caveat
+ * assertion satisfiable by text a script produces — which is precisely the
+ * failure this function exists to prevent.
+ */
+async function staticRegion(): Promise<string> {
+  const html = await serve();
+  const cut = html.indexOf("<script>");
+  if (cut < 0) throw new Error("inline script boundary not found in served HTML");
+  return html.slice(0, cut);
+}
+
+/** The static "About visitor figures" note's text, or undefined if absent. */
+async function staticCaveatText(): Promise<string | undefined> {
+  return (await staticRegion()).match(
+    /<p class="estimate-note"><strong>About visitor figures:<\/strong>([\s\S]*?)<\/p>/,
+  )?.[1];
+}
+
+describe("visitor figures — the caveat is in the rendered markup", () => {
+  it("serves the caveat as static markup, visible before any script runs", async () => {
+    const text = await staticCaveatText();
+
+    // Static server-rendered text, not something a script injects after a
+    // fetch. This is the copy a store owner sees on page load.
+    expect(text).toBeDefined();
+    expect(text).toContain(VISITOR_ESTIMATE_CAVEAT);
+  });
+
+  it("states the actual limitation rather than gesturing at one", async () => {
+    const text = await staticCaveatText();
+
+    // A caveat that says only "figures are approximate" tells the reader
+    // nothing they can act on. It has to name the cause — people sharing an
+    // address — and the direction of the error — under-reporting.
+    expect(text).toMatch(/same Wi-Fi or mobile network/);
+    expect(text).toMatch(/counted as one visitor/i);
+    expect(text).toMatch(/UNDER-report/i);
+  });
+
+  it("repeats the caveat inside each link's metrics panel, next to the numbers", async () => {
+    // The static note is above the table; the numbers are inside the expander.
+    // Someone who expands a row without scrolling up must still meet the caveat.
+    const row = await renderRow();
+
+    expect(row).toContain(VISITOR_ESTIMATE_CAVEAT);
+    // It sits in the same panel as the two figures, not somewhere off in a footer.
+    const panel = row.slice(row.indexOf("Visitors (estimate)"));
+    expect(panel).toContain("visitors-");
+    expect(panel).toContain(VISITOR_ESTIMATE_CAVEAT);
+  });
+
+  it("labels the panel as an estimate in its own heading", async () => {
+    const row = await renderRow();
+
+    // The heading is what is visible at a glance; the caveat is the detail.
+    expect(row).toContain("Visitors (estimate)");
+  });
+
+  it("shows the store-level rollup behind the same caveat", async () => {
+    const region = await staticRegion();
+
+    expect(region).toContain('id="clients-card"');
+    expect(region).toContain('id="clients-body"');
+    // Bounded by the static region, so this cannot be satisfied by the copy
+    // that lives inside the inline script.
+    const card = region.slice(region.indexOf('id="clients-card"'));
+    expect(card).toContain(VISITOR_ESTIMATE_CAVEAT);
+  });
+});
+
+describe("renderVisitors", () => {
+  type Render = (data: Record<string, unknown>) => string;
+
+  it("renders both figures when the API supplies them", async () => {
+    const render = await loadClientFunction<Render>("renderVisitors");
+
+    const html = render({
+      unique_visitors: 30,
+      sessions: 42,
+      unique_window: "1 day",
+      session_window: "30 minutes",
+    });
+
+    expect(html).toContain("30");
+    expect(html).toContain("42");
+  });
+
+  it("gives the two figures identical markup — no hierarchy between them", async () => {
+    const render = await loadClientFunction<Render>("renderVisitors");
+
+    const html = render({
+      unique_visitors: 30,
+      sessions: 42,
+      unique_window: "1 day",
+      session_window: "30 minutes",
+    });
+
+    const rows = [...html.matchAll(/<div class="metric-row">[\s\S]*?<\/div>/g)].map((m) => m[0]);
+    expect(rows).toHaveLength(2);
+
+    // Same container, same label element, same value element, same ordering of
+    // label-then-value. If one figure were ever rendered as <h4> and the other
+    // as <strong>, or given its own class, this fails.
+    for (const row of rows) {
+      expect(row).toContain('<span>');
+      expect(row).toContain("<strong>");
+      expect(row).toContain('class="metric-row"');
+    }
+    // Neither is marked up as primary, secondary, or a footnote.
+    expect(html).not.toMatch(/class="[^"]*(primary|secondary|highlight|subtle)/i);
+  });
+
+  it("labels each figure with the window the API actually used", async () => {
+    const render = await loadClientFunction<Render>("renderVisitors");
+
+    const html = render({
+      unique_visitors: 30,
+      sessions: 42,
+      unique_window: "7 days",
+      session_window: "15 minutes",
+    });
+
+    // Read from the response, not hardcoded here — otherwise the label can
+    // describe a window the SQL no longer uses.
+    expect(html).toContain("7 days");
+    expect(html).toContain("15 minutes");
+  });
+
+  it("reports zero rather than undefined when a figure is absent", async () => {
+    const render = await loadClientFunction<Render>("renderVisitors");
+
+    const html = render({});
+
+    // "undefined" next to a real number reads as a measurement.
+    expect(html).not.toContain("undefined");
+    expect(html.match(/<strong>0<\/strong>/g)).toHaveLength(2);
+  });
+
+  it("escapes the window labels it interpolates", async () => {
+    const render = await loadClientFunction<Render>("renderVisitors");
+
+    const html = render({
+      unique_visitors: 1,
+      sessions: 1,
+      unique_window: XSS_URL,
+      session_window: XSS_URL,
+    });
+
+    expect(html).not.toContain("<img");
+    expect(html).toContain("&lt;img");
+  });
+});
+
+describe("renderClients", () => {
+  type Render = (clients: unknown) => string;
+
+  it("renders one row per client with both figures", async () => {
+    const render = await loadClientFunction<Render>("renderClients");
+
+    const html = render([
+      { client_ref: "ACME-0042", unique_visitors: 30, sessions: 42 },
+    ]);
+
+    expect(html).toContain("ACME-0042");
+    expect(html).toContain("30");
+    expect(html).toContain("42");
+    expect([...html.matchAll(/<tr>/g)]).toHaveLength(1);
+  });
+
+  it("escapes client_ref, which is user-supplied free text", async () => {
+    const render = await loadClientFunction<Render>("renderClients");
+
+    const html = render([
+      { client_ref: XSS_ATTR, unique_visitors: 1, sessions: 1 },
+    ]);
+
+    expect(html).not.toContain('"><img');
+    expect(html).toContain("&quot;&gt;&lt;img");
+  });
+
+  it("explains the empty state instead of rendering a bare table", async () => {
+    const render = await loadClientFunction<Render>("renderClients");
+
+    const html = render([]);
+
+    expect(html).toContain("No client identifiers");
+  });
+});
+
+describe("Phase 2 markup did not regress the escaping and delegation guards", () => {
+  it("keeps the metrics row free of inline event handlers", async () => {
+    // The visitors box was added inside the row template — the exact place
+    // Phase 1.5 removed the injected-JS vulnerability from.
+    const row = await renderRow();
+
+    expect(row).not.toContain("onclick");
+    expect(row).not.toMatch(/\son[a-z]+\s*=\s*["']/);
+  });
+
+  it("adds no new delegated actions to the links table", async () => {
+    const row = await renderRow();
+
+    const actions = [...row.matchAll(/data-action="([^"]+)"/g)].map((m) => m[1]);
+    expect(actions.sort()).toEqual(
+      ["copy", "delete", "metrics", "qr", "save-client-ref", "toggle"].sort(),
+    );
+  });
+
+  it("keeps exactly three breakdown panels on the shared mapper", async () => {
+    const script = await clientScript();
+
+    // The visitor pair has its own renderer precisely so it does not inflate
+    // this count.
+    expect(script.match(/\.map\(\(\[k, v\]\) => `[\s\S]*?`\)/g)).toHaveLength(3);
   });
 });

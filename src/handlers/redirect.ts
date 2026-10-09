@@ -82,9 +82,9 @@ async function resolveTenant(
  * 1. Extract tenant slug + short code from URL path params
  * 2. Resolve tenant → schema name (KV → Hyperdrive fallback)
  * 3. Look up short code in KV cache (24h TTL)
- * 4. KV hit → validate isActive/expiresAt from JSON blob → 301 or 410
- * 5. KV miss → query `{schema}.links` via Hyperdrive → 301 (cache) or 404/410
- * 6. On 301 → fire-and-forget click tracking via ctx.waitUntil
+ * 4. KV hit → validate isActive/expiresAt from JSON blob → 302 or 410
+ * 5. KV miss → query `{schema}.links` via Hyperdrive → 302 (cache) or 404/410
+ * 6. On 302 → fire-and-forget click tracking via ctx.waitUntil
  *
  * Never destructures `ctx` — uses `c.executionCtx.waitUntil()` directly.
  */
@@ -249,7 +249,7 @@ export const redirectHandler: Handler<{
       tenant: slug,
       cacheHit,
       durationMs,
-      status: 301,
+      status: 302,
     }),
   );
 

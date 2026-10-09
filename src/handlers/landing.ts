@@ -10,7 +10,9 @@ import type { AppEnv } from "../types/env";
  * - How-it-works section (3 steps)
  * - Footer with attribution
  * - Mobile breakpoint at 768px
- * - No external scripts, stylesheets, or frameworks
+ * - No external stylesheets, CSS frameworks, or third-party scripts
+ * - Loads the Supabase browser client from a CDN, plus one inline script that
+ *   reads the session and swaps between the guest and signed-in views
  *
  * Dark/light neutral color scheme using Tailwind-inspired slate palette.
  */

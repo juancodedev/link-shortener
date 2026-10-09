@@ -63,12 +63,34 @@ describe("landingHandler", () => {
     expect(text).toContain("Short links with analytics");
   });
 
-  it("contains no <script> tags", async () => {
+  it("loads only the Supabase browser client as an external script", async () => {
     const c = mockContext();
     const response = await landingHandler(c);
     const text = await response.text();
 
-    expect(text).not.toContain("<script");
+    // The page is not script-free: it deliberately loads the Supabase browser
+    // client to read the session and swap between the guest and signed-in
+    // views. What matters is that this is the *only* third-party script — no
+    // analytics, tag managers, or CSS frameworks.
+    const externalScripts = [...text.matchAll(/<script[^>]*\ssrc="([^"]+)"/gi)].map(
+      (m) => m[1],
+    );
+
+    expect(externalScripts).toEqual([
+      "https://unpkg.com/@supabase/supabase-js@2",
+    ]);
+  });
+
+  it("bootstraps the signed-in view from the Supabase session", async () => {
+    const c = mockContext();
+    const response = await landingHandler(c);
+    const text = await response.text();
+
+    // The inline script is the session bootstrap, and it must be handed the
+    // runtime env values rather than hardcoded placeholders.
+    expect(text).toContain("sb.auth.getSession()");
+    expect(text).toContain("sb.auth.onAuthStateChange");
+    expect(text).toContain("https://test.supabase.co");
   });
 
   it("contains no external CSS links", async () => {

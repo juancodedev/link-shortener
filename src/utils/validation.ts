@@ -9,7 +9,7 @@ export interface UrlValidationResult {
     | "blocked_host"
     | "blocked_ip_range"
     | "url_too_long";
-  /** Normalized URL with protocol prepended if missing. */
+  /** Normalized URL: scheme lowercased, host lowercased, default port dropped. */
   normalized?: string;
 }
 
@@ -69,8 +69,30 @@ const MAX_URL_LENGTH = 2048;
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
 
 /**
- * Checks if a string is a numeric IPv4 address in a private range.
- * Private ranges: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+ * URI scheme prefix per RFC 3986: `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`
+ * followed by a colon.
+ *
+ * Anchored at the start and deliberately independent of `//`, so schemes written
+ * without slashes (`javascript:`, `data:`, `mailto:`, `tel:`) are detected too.
+ * Anchoring also prevents a colon later in the string from being read as a
+ * scheme: `foo/bar:baz` fails at the `/` and is treated as scheme-less.
+ */
+const SCHEME_RE = /^([a-zA-Z][a-zA-Z0-9+\-.]*):/;
+
+/**
+ * Checks if a string is a numeric IPv4 address that must not be used as a
+ * redirect target.
+ *
+ * Covers:
+ * - 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 — RFC 1918 private space
+ * - 127.0.0.0/8 — loopback, as a bare address (`http://127.0.0.1` is also
+ *   caught by hostname, but `http://127.0.0.53` and friends are not)
+ * - 169.254.0.0/16 — link-local, which carries the cloud instance metadata
+ *   endpoint (169.254.169.254) on every major cloud provider
+ *
+ * Returns a single `blocked_ip_range` code for all of them. The check is
+ * hygiene rather than SSRF defence: nothing in this codebase ever fetches the
+ * target, it only becomes a `Location` header the visitor's browser follows.
  */
 function isPrivateIPv4(hostname: string): boolean {
   const parts = hostname.split(".");
@@ -86,6 +108,10 @@ function isPrivateIPv4(hostname: string): boolean {
   if (first === 172 && second! >= 16 && second! <= 31) return true;
   // 192.168.0.0/16
   if (first === 192 && second === 168) return true;
+  // 127.0.0.0/8 loopback
+  if (first === 127) return true;
+  // 169.254.0.0/16 link-local, incl. the cloud metadata endpoint
+  if (first === 169 && second === 254) return true;
 
   return false;
 }
@@ -93,22 +119,33 @@ function isPrivateIPv4(hostname: string): boolean {
 /**
  * Validates a URL for use as a redirect target.
  *
- * Checks performed:
- * 1. Must parse as a valid URL
- * 2. Protocol must be http: or https: only
- * 3. Hostname must not be localhost or loopback
- * 4. Hostname must not be a private IP address
- * 5. URL must not exceed 2048 characters
+ * Checks performed, in order:
+ * 1. Must not exceed 2048 characters
+ * 2. Must carry an explicit URI scheme — no scheme is rejected, never inferred
+ * 3. Must parse as a valid URL
+ * 4. Protocol must be http: or https: only
+ * 5. Hostname must not be localhost or loopback
+ * 6. Hostname must not be a private IP address
+ *
+ * Scheme detection runs *before* parsing and never prepends a protocol. An
+ * earlier version auto-prepended `https://` to any input lacking `://`, which
+ * promoted arbitrary strings — `//evil.com`, `not-a-url` — to trusted hosts and
+ * mangled `javascript:`/`data:` into unparseable `https://javascript:...` strings,
+ * making the protocol allowlist unreachable for exactly the payloads it exists
+ * to reject.
  */
 export function validateUrl(raw: string): UrlValidationResult {
-  let input = raw.trim();
+  const input = raw.trim();
   if (input.length > MAX_URL_LENGTH) {
     return { valid: false, error: "url_too_long" };
   }
 
-  // Auto-prepend https:// if no protocol is present
-  if (!/^[a-zA-Z][a-zA-Z0-9+\-.]*:\/\//.test(input)) {
-    input = "https://" + input;
+  // An explicit protocol is mandatory. Catching this here — before parsing —
+  // means `//evil.com`, `not-a-url` and `google.com/maps` are rejected outright
+  // instead of being rewritten into an https:// URL that skips every check.
+  const schemeMatch = SCHEME_RE.exec(input);
+  if (!schemeMatch) {
+    return { valid: false, error: "invalid_url" };
   }
 
   let parsed: URL;
@@ -118,8 +155,10 @@ export function validateUrl(raw: string): UrlValidationResult {
     return { valid: false, error: "invalid_url" };
   }
 
-  // Only allow http and https
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+  // Only allow http and https. Compared case-insensitively: RFC 3986 schemes are
+  // case-insensitive, so HTTPS:// is as valid as https://.
+  const protocol = parsed.protocol.toLowerCase();
+  if (protocol !== "http:" && protocol !== "https:") {
     return { valid: false, error: "invalid_protocol" };
   }
 

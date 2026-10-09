@@ -26,6 +26,14 @@ describe("validateUrl", () => {
       const result = validateUrl("https://example.com/path/to/resource#section");
       expect(result.valid).toBe(true);
     });
+
+    it("accepts an uppercase protocol", () => {
+      // Scheme comparison is case-insensitive: RFC 3986 schemes are not
+      // case-sensitive, and WHATWG URL parsing lowercases the protocol.
+      const result = validateUrl("HTTPS://Google.com");
+      expect(result.valid).toBe(true);
+      expect(result.normalized).toBe("https://google.com/");
+    });
   });
 
   describe("blocked protocols", () => {
@@ -125,6 +133,24 @@ describe("validateUrl", () => {
       expect(result.valid).toBe(false);
       expect(result.error).toBe("blocked_ip_range");
     });
+
+    it("rejects the cloud instance metadata endpoint 169.254.169.254", () => {
+      const result = validateUrl("http://169.254.169.254/latest/meta-data");
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe("blocked_ip_range");
+    });
+
+    it("rejects link-local addresses in 169.254.0.0/16", () => {
+      const result = validateUrl("http://169.254.1.1");
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe("blocked_ip_range");
+    });
+
+    it("rejects loopback addresses beyond the first octet", () => {
+      const result = validateUrl("http://127.0.0.53");
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe("blocked_ip_range");
+    });
   });
 
   describe("URL length", () => {
@@ -162,6 +188,36 @@ describe("validateUrl", () => {
 
     it("rejects an empty string", () => {
       const result = validateUrl("");
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe("invalid_url");
+    });
+
+    // A URL must carry an explicit protocol. Anything without one is rejected
+    // rather than auto-promoted to https://, which previously let an arbitrary
+    // string through as a trusted host.
+    it("rejects a protocol-relative URL", () => {
+      // "//evil.com" would otherwise become "https://evil.com/"
+      const result = validateUrl("//evil.com");
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe("invalid_url");
+    });
+
+    it("rejects a protocol-relative URL obfuscated with backslashes", () => {
+      const result = validateUrl("/\\/\\/evil.com");
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe("invalid_url");
+    });
+
+    it("rejects a protocol-relative URL padded with whitespace", () => {
+      // validateUrl trims before scheme detection, so the padding cannot hide
+      // the missing protocol from the check.
+      const result = validateUrl("\t//evil.com\n");
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe("invalid_url");
+    });
+
+    it("rejects a bare host with a path (protocol is required)", () => {
+      const result = validateUrl("google.com/maps/place/foo");
       expect(result.valid).toBe(false);
       expect(result.error).toBe("invalid_url");
     });

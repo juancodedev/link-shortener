@@ -370,10 +370,16 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
        * Escapes a value for interpolation into innerHTML or a double-quoted
        * attribute value.
        *
-       * The links table is built by assigning a string to innerHTML, so every
-       * interpolated value is an injection vector. This helper is the sanctioned
-       * way to put record data into markup: client_ref and the row id reach the
-       * new column through it.
+       * The links table and the metric panels are both built by assigning a
+       * string to innerHTML, so every interpolated value is an injection
+       * vector. This helper is the only sanctioned way to put record data into
+       * markup: short_code, original_url, clicks_count, client_ref, and the
+       * click-breakdown keys and counts all pass through it.
+       *
+       * It is NOT a defence for JavaScript context. An onclick="..." body is
+       * handed to the JS engine, where &quot; and &#39; are ordinary characters
+       * that terminate nothing — so the table carries no inline handlers at
+       * all, and values reach JS through data-* attributes read via \`dataset\`.
        */
       function esc(value) {
         if (value === null || value === undefined) return "";
@@ -384,6 +390,50 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           .replace(/"/g, "&quot;")
           .replace(/'/g, "&#39;");
       }
+
+      /**
+       * One delegated click handler for the whole links table.
+       *
+       * The rows used to carry inline onclick="..." attributes with record data
+       * interpolated into them. HTML-escaping cannot secure that position: the
+       * parser hands the attribute body straight to the JS engine, where the
+       * escaped entities are literal characters, so a short_code of ');alert(1)//
+       * still closes the argument list. Escaping the attribute would have been
+       * misleading — the only real fix is to keep user data out of source text.
+       *
+       * So the handlers live here and read what they need from the clicked
+       * element's dataset. Each existing function keeps its signature; only the
+       * call site moved.
+       */
+      function onLinksTableClick(e) {
+        const el = e.target.closest("[data-action]");
+        if (!el) return;
+        switch (el.dataset.action) {
+          case "copy":
+            copyUrl(el.dataset.url, el);
+            break;
+          case "qr":
+            showQR(encodeURIComponent(el.dataset.url), e);
+            break;
+          case "metrics":
+            showMetrics(el.dataset.id, el.dataset.code, e);
+            break;
+          case "save-client-ref":
+            saveClientRef(el.dataset.id);
+            break;
+          case "toggle":
+            toggleLink(el.dataset.id, el.dataset.active === "true");
+            break;
+          case "delete":
+            deleteLink(el.dataset.id);
+            break;
+        }
+      }
+
+      // #links-body is stable across refreshes: loadLinks replaces its
+      // innerHTML, never the element itself, so this one listener survives
+      // every re-render instead of needing rebinding per row.
+      document.getElementById("links-body").addEventListener("click", onLinksTableClick);
 
       async function loadLinks() {
         const loading = document.getElementById("links-loading");
@@ -414,34 +464,34 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
               : "active";
             const shortUrl = l.short_url || "";
             return \`<tr>
-              <td><span class="code" onclick="copyUrl('\${shortUrl}', this)" title="Click to copy \${shortUrl}" style="cursor:pointer;" data-code="\${l.short_code}">\${l.short_code}</span></td>
-              <td><span class="url-trunc" title="\${l.original_url}">\${l.original_url}</span></td>
-              <td><a href="#" onclick="showMetrics('\${l.id}','\${l.short_code}',event)" style="color:#2563eb;text-decoration:none;font-weight:600;">\${l.clicks_count}</a></td>
+              <td><span class="code" data-action="copy" data-url="\${esc(shortUrl)}" data-code="\${esc(l.short_code)}" title="Click to copy \${esc(shortUrl)}" style="cursor:pointer;">\${esc(l.short_code)}</span></td>
+              <td><span class="url-trunc" title="\${esc(l.original_url)}">\${esc(l.original_url)}</span></td>
+              <td><a href="#" data-action="metrics" data-id="\${esc(l.id)}" data-code="\${esc(l.short_code)}" style="color:#2563eb;text-decoration:none;font-weight:600;">\${esc(l.clicks_count)}</a></td>
               <td><span class="badge badge-\${status}">\${status}</span></td>
               <td><input type="text" id="client-ref-\${esc(l.id)}" value="\${esc(l.client_ref)}" placeholder="None" maxlength="200" style="width:130px;padding:0.25rem 0.5rem;margin-bottom:0;border-radius:0.375rem;font-size:0.75rem;"></td>
               <td>
                 <div class="row-actions">
-                  <button class="btn-sm btn-outline" onclick="saveClientRef('\${l.id}')" title="Save client identifier">Save</button>
-                  <button class="btn-sm" onclick="showQR('\${encodeURIComponent(shortUrl)}',event)" title="QR Code">QR</button>
-                  <button class="btn-sm btn-outline" onclick="toggleLink('\${l.id}', \${!l.is_active})">\${l.is_active ? "Disable" : "Enable"}</button>
-                  <button class="btn-sm btn-danger" onclick="deleteLink('\${l.id}')">Del</button>
+                  <button class="btn-sm btn-outline" data-action="save-client-ref" data-id="\${esc(l.id)}" title="Save client identifier">Save</button>
+                  <button class="btn-sm" data-action="qr" data-url="\${esc(shortUrl)}" title="QR Code">QR</button>
+                  <button class="btn-sm btn-outline" data-action="toggle" data-id="\${esc(l.id)}" data-active="\${!l.is_active}">\${l.is_active ? "Disable" : "Enable"}</button>
+                  <button class="btn-sm btn-danger" data-action="delete" data-id="\${esc(l.id)}">Del</button>
                 </div>
               </td>
             </tr>
-            <tr id="metrics-\${l.id}" style="display:none;">
+            <tr id="metrics-\${esc(l.id)}" style="display:none;">
               <td colspan="6" style="padding:0;">
                 <div class="metrics-grid" style="padding:0.75rem;">
                   <div class="metric-box">
                     <h4>By Country</h4>
-                    <div id="country-\${l.id}"><div class="loading">Loading...</div></div>
+                    <div id="country-\${esc(l.id)}"><div class="loading">Loading...</div></div>
                   </div>
                   <div class="metric-box">
                     <h4>By Device</h4>
-                    <div id="device-\${l.id}"><div class="loading">Loading...</div></div>
+                    <div id="device-\${esc(l.id)}"><div class="loading">Loading...</div></div>
                   </div>
                   <div class="metric-box">
                     <h4>By Source</h4>
-                    <div id="source-\${l.id}"><div class="loading">Loading...</div></div>
+                    <div id="source-\${esc(l.id)}"><div class="loading">Loading...</div></div>
                   </div>
                 </div>
               </td>
@@ -508,24 +558,27 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           const data = await res.json();
           if (!res.ok) throw new Error(data.error || "Server error");
 
+          // The breakdown keys come from request data (a Referer header can
+          // carry arbitrary text as referrer_source), so they are escaped here
+          // exactly like the link fields are.
           countryDiv.innerHTML = Object.entries(data.by_country)
             .sort((a, b) => b[1] - a[1])
-            .map(([k, v]) => \`<div class="metric-row"><span>\${k}</span><strong>\${v}</strong></div>\`)
+            .map(([k, v]) => \`<div class="metric-row"><span>\${esc(k)}</span><strong>\${esc(v)}</strong></div>\`)
             .join("") || "<div class='metric-row'>No data</div>";
 
           deviceDiv.innerHTML = Object.entries(data.by_device)
             .sort((a, b) => b[1] - a[1])
-            .map(([k, v]) => \`<div class="metric-row"><span>\${k}</span><strong>\${v}</strong></div>\`)
+            .map(([k, v]) => \`<div class="metric-row"><span>\${esc(k)}</span><strong>\${esc(v)}</strong></div>\`)
             .join("") || "<div class='metric-row'>No data</div>";
 
           sourceDiv.innerHTML = Object.entries(data.by_source || {})
             .sort((a, b) => b[1] - a[1])
-            .map(([k, v]) => \`<div class="metric-row"><span>\${k}</span><strong>\${v}</strong></div>\`)
+            .map(([k, v]) => \`<div class="metric-row"><span>\${esc(k)}</span><strong>\${esc(v)}</strong></div>\`)
             .join("") || "<div class='metric-row'>No data</div>";
 
           countryDiv.dataset.loaded = "1";
         } catch (err) {
-          countryDiv.innerHTML = "<div class='metric-row'>Error: " + (err instanceof Error ? err.message : "Unknown") + "</div>";
+          countryDiv.innerHTML = "<div class='metric-row'>Error: " + esc(err instanceof Error ? err.message : "Unknown") + "</div>";
         }
       }
 

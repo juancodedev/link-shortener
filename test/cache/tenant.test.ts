@@ -33,7 +33,16 @@ describe("getCachedSchema", () => {
   });
 
   it("returns the cached schema name on KV hit", async () => {
-    kv.get.mockResolvedValueOnce("tenant_a7f3");
+    // KV stores a JSON `CachedTenant` blob, not a bare schema string.
+    // Seeding a bare string would make getCachedTenant's JSON.parse throw,
+    // which it swallows into a cache miss (null).
+    kv.get.mockResolvedValueOnce(
+      JSON.stringify({
+        schemaName: "tenant_a7f3",
+        tenantId: "tenant-uuid",
+        tenantSalt: "salt-abc",
+      }),
+    );
 
     const result = await getCachedSchema(env, "acme");
 
@@ -74,9 +83,14 @@ describe("setCachedSchema", () => {
   it("writes with correct key (slug only) and TTL 3600", async () => {
     await setCachedSchema(env, "acme", "tenant_a7f3");
 
-    expect(kv.put).toHaveBeenCalledWith("acme", "tenant_a7f3", {
-      expirationTtl: 3600,
-    });
+    // setCachedSchema delegates to setCachedTenant, which persists the whole
+    // `CachedTenant` blob as JSON. The legacy wrapper back-fills empty
+    // tenantId/tenantSalt because it only carries a schema name.
+    expect(kv.put).toHaveBeenCalledWith(
+      "acme",
+      JSON.stringify({ schemaName: "tenant_a7f3", tenantId: "", tenantSalt: "" }),
+      { expirationTtl: 3600 },
+    );
   });
 
   it("does not throw on KV write error (non-fatal)", async () => {

@@ -28,8 +28,16 @@ vi.mock("../../src/tenants/deprovision", () => ({
 // Mock cache/tenant
 // ---------------------------------------------------------------------------
 
+//
+// The mock must mirror the export `src/api/tenants.ts` actually imports
+// (`setCachedTenant` — see src/api/tenants.ts:7). Providing only the legacy
+// `setCachedSchema` wrapper leaves the imported binding undefined, so the
+// KV warm call throws "No export is defined on the mock" and createTenant
+// never reaches its 201 response.
+// ---------------------------------------------------------------------------
+
 vi.mock("../../src/cache/tenant", () => ({
-  setCachedSchema: vi.fn().mockResolvedValue(undefined),
+  setCachedTenant: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { withClient } from "../../src/db/client";

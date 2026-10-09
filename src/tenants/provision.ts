@@ -14,13 +14,18 @@ import { buildQuery } from "../db/schema";
  *
  * This DDL must match `supabase/migrations/tenant/001_create_links.sql`.
  * When the migration file changes, update this constant.
+ *
+ * Exported so `test/db/schema.test.ts` can assert the two copies stay in sync —
+ * nothing reads the SQL file at runtime, so without this export the drift
+ * between them would be silent.
  */
-const TENANT_DDL = `
+export const TENANT_DDL = `
 CREATE TABLE IF NOT EXISTS {schema}.links (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   original_url TEXT NOT NULL,
   short_code TEXT NOT NULL,
   title TEXT,
+  client_ref TEXT,
   clicks_count INTEGER DEFAULT 0 NOT NULL,
   is_active BOOLEAN DEFAULT true NOT NULL,
   expires_at TIMESTAMPTZ,
@@ -33,6 +38,8 @@ CREATE INDEX IF NOT EXISTS idx_links_created_at
   ON {schema}.links(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_links_active_expires
   ON {schema}.links(is_active, expires_at) WHERE is_active = true;
+CREATE INDEX IF NOT EXISTS idx_links_client_ref
+  ON {schema}.links(client_ref);
 CREATE TABLE IF NOT EXISTS {schema}._migrations (
   version INTEGER PRIMARY KEY,
   name TEXT NOT NULL,

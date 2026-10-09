@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS {schema}.links (
     original_url TEXT NOT NULL,
     short_code   TEXT NOT NULL,
     title        TEXT,                              -- Optional display name
+    client_ref   TEXT,                              -- User-defined CRM identifier; NULL = no client
     clicks_count INTEGER DEFAULT 0 NOT NULL,
     is_active    BOOLEAN DEFAULT true NOT NULL,
     expires_at   TIMESTAMPTZ,                       -- NULL = never expires
@@ -28,6 +29,11 @@ CREATE INDEX IF NOT EXISTS idx_links_created_at
 -- Partial index for active links with expiration (redirect lookup optimization)
 CREATE INDEX IF NOT EXISTS idx_links_active_expires
     ON {schema}.links(is_active, expires_at) WHERE is_active = true;
+
+-- Index for rolling clicks up per client identifier
+-- Sparse: most links have no client_ref until the user fills one in
+CREATE INDEX IF NOT EXISTS idx_links_client_ref
+    ON {schema}.links(client_ref);
 
 -- Migration tracking table (one per tenant schema)
 CREATE TABLE IF NOT EXISTS {schema}._migrations (

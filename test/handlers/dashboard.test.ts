@@ -662,3 +662,295 @@ function stubElement(): ElementStub {
     addEventListener: () => {},
   };
 }
+
+/**
+ * The elements this page serves already hidden, per its own inline styles:
+ * #links-table, #links-empty and #clients-card all carry display:none and are
+ * revealed by loadLinks once it has something to show. Without seeding that, a
+ * stub that starts blank could not tell "loadLinks revealed nothing" apart from
+ * "loadLinks revealed the empty state" — which is the whole assertion.
+ */
+const SERVED_HIDDEN_IDS = ["links-table", "links-empty", "clients-card"];
+
+/**
+ * Compiles the served `loadLinks()` against a stub DOM and an EMPTY window.
+ *
+ * The stub document returns a fresh element per id, so loadLinks runs its real
+ * body — real assignments, real try/catch — without a browser. `window.__api`
+ * is deliberately left undefined: that is exactly the state the container
+ * script sees while the shell bootstrap is still awaiting getSession().
+ */
+async function mountDashboard(): Promise<Harness> {
+  const script = await clientScript();
+  const esc = await loadEsc();
+  const renderClients = await loadClientFunction<(c: unknown) => string>("renderClients");
+
+  // The gate statement is served source, not a stand-in. It is applied only if
+  // the page actually creates one: on the pre-fix page there is no gate, and
+  // the harness must still be able to run loadLinks so the test fails on its
+  // own assertion — the rendered production error — instead of on a missing
+  // fixture. That keeps the RED evidence about the defect rather than the rig.
+  const gateSrc = script.match(/\n\s*(window\.__apiReady = new Promise\(.*\);)\n/)?.[1];
+
+  const elements: Record<string, ElementStub> = {};
+  const el = (id: string): ElementStub => {
+    if (!elements[id]) {
+      elements[id] = stubElement();
+      if (SERVED_HIDDEN_IDS.includes(id)) elements[id].style.display = "none";
+    }
+    return elements[id];
+  };
+  const win: Record<string, any> = {};
+  const requests: Request[] = [];
+
+  if (gateSrc) new Function("window", gateSrc)(win);
+
+  // extractFunction() matches on `function loadLinks(`, which drops the `async`
+  // keyword, so the prefix is restored here — the shipped function is async and
+  // its body awaits.
+  const loadLinks = new Function(
+    "window",
+    "document",
+    "esc",
+    "renderClients",
+    `return async ${extractFunction(script, "loadLinks")}`,
+  )(win, { getElementById: el }, esc, renderClients) as () => Promise<void>;
+
+  return {
+    loadLinks,
+    // Optional call: a page without a gate must not hang this harness.
+    resolveGate: () => win.__apiReadyResolve?.(),
+    requests,
+    el,
+    win,
+  };
+}
+
+/** A window.__api that records its calls and answers with empty collections. */
+function recordingApi(requests: Request[]) {
+  return async (method: string, path: string) => {
+    requests.push({ method, path });
+    return { ok: true, json: async () => [] };
+  };
+}
+
+/**
+ * Executes the served shell auth bootstrap against a stub window, so the
+ * redirect path and the resolve ordering are observed rather than assumed.
+ * `session: null` is the unauthenticated visitor.
+ */
+async function runAuthBootstrap(session: unknown) {
+  const html = await serve();
+  const start = html.indexOf("<script src=");
+  if (start < 0) throw new Error("auth bootstrap not found in served HTML");
+  const end = html.indexOf("})();", start);
+  if (end < 0) throw new Error("auth bootstrap is not terminated in served HTML");
+  const iife = html.slice(html.indexOf("(async () => {", start), end + 5);
+
+  let resolveCalls = 0;
+  let apiTypeAtResolve = "<never called>";
+  const win: Record<string, any> = {
+    location: { href: "" },
+    supabase: {
+      createClient: () => ({ auth: { getSession: async () => ({ data: { session } }) } }),
+    },
+  };
+  // Pre-installed so the bootstrap finds one whichever order it is written in.
+  // The bootstrap itself never defines it — only the container script does.
+  win.__apiReadyResolve = () => {
+    resolveCalls++;
+    apiTypeAtResolve = typeof win.__api;
+  };
+
+  await new Function("window", "document", `return ${iife}`)(win, {
+    getElementById: stubElement,
+  });
+
+  return {
+    win,
+    resolveCalls: () => resolveCalls,
+    apiTypeAtResolve: () => apiTypeAtResolve,
+  };
+}
+
+describe("loadLinks ordering against the auth bootstrap", () => {
+  it("does not throw or request anything when invoked before the session resolves", async () => {
+    const dash = await mountDashboard();
+
+    // Parse-time ordering: loadLinks runs, window.__api does not exist yet.
+    const pending = dash.loadLinks();
+
+    // The defect surfaced as a rendered error, because loadLinks swallows the
+    // TypeError into the empty state. That message is the production symptom.
+    expect(dash.requests).toHaveLength(0);
+    expect(dash.el("links-empty").textContent).toBe("");
+    expect(dash.el("links-empty").style.display).toBe("none");
+
+    // And it is still waiting rather than having silently failed.
+    dash.win.__api = recordingApi(dash.requests);
+    dash.resolveGate();
+    await pending;
+
+    // The load it deferred actually happens, once the API is available.
+    //
+    // Asserted by SHAPE rather than by endpoint list, because the property
+    // under test is the ordering and not the number of requests: the same
+    // invariant has to hold for the one-request form of loadLinks that predates
+    // the client_ref rollup getting its own URL. The shipped endpoint set is
+    // pinned separately below.
+    expect(dash.requests.length).toBeGreaterThan(0);
+    for (const request of dash.requests) {
+      expect(request.method).toBe("GET");
+      expect(request.path).toMatch(/^\/api\//);
+    }
+    // The load ran to completion rather than parking half-rendered.
+    expect(dash.el("link-count").textContent).toBe(0);
+    expect(dash.el("links-loading").style.display).toBe("none");
+  });
+
+  it("uses whatever window.__api is bound at resolve time, not one captured early", async () => {
+    const dash = await mountDashboard();
+
+    const pending = dash.loadLinks();
+    // Bound AFTER loadLinks was invoked and while it was suspended.
+    dash.win.__api = recordingApi(dash.requests);
+    dash.resolveGate();
+    await pending;
+
+    // Nothing is requested until the late-bound helper is actually called, so
+    // a request here can only have come through the binding made after the
+    // invocation. Zero would mean the deferred load never ran.
+    expect(dash.requests.length).toBeGreaterThan(0);
+    expect(dash.el("links-empty").textContent).toBe("");
+  });
+
+  it("loads normally for a caller that runs after the gate is already open", async () => {
+    const dash = await mountDashboard();
+    dash.win.__api = recordingApi(dash.requests);
+    dash.resolveGate();
+    await Promise.resolve();
+
+    await dash.loadLinks();
+
+    // The gate adds a microtask to an already-open path; it does not swallow
+    // the load. This is the case the four in-handler refreshes depend on.
+    expect(dash.requests.length).toBeGreaterThan(0);
+    expect(dash.el("links-loading").style.display).toBe("none");
+  });
+
+  it("issues the shipped endpoint set once the gate opens", async () => {
+    // The Phase 2 contract itself: links collection and the client_ref rollup,
+    // fetched together. Pinned here rather than inside the ordering tests so
+    // those stay independent of how many endpoints loadLinks asks for.
+    const dash = await mountDashboard();
+    dash.win.__api = recordingApi(dash.requests);
+
+    const pending = dash.loadLinks();
+    dash.resolveGate();
+    await pending;
+
+    expect(dash.requests.map((r) => `${r.method} ${r.path}`)).toEqual([
+      "GET /api/links",
+      "GET /api/clients/metrics",
+    ]);
+  });
+
+  it("waits on the gate before the first request, whatever the endpoint count", async () => {
+    const src = extractFunction(await clientScript(), "loadLinks");
+
+    const gateAt = src.indexOf("__apiReady");
+    const firstRequestAt = src.indexOf("window.__api(");
+
+    expect(gateAt).toBeGreaterThan(-1);
+    expect(firstRequestAt).toBeGreaterThan(-1);
+    // The gate is awaited once, ahead of every request in the function. That
+    // ordering — not a particular number of endpoints — is what makes the fix
+    // hold for BOTH the one-request form of loadLinks (links only, pre-Phase 2)
+    // and the two-request form shipped today.
+    expect(gateAt).toBeLessThan(firstRequestAt);
+    // Guarded, so loadLinks stays safe if it is ever invoked in a context where
+    // the container script did not create the gate.
+    expect(src).toMatch(/if \(window\.__apiReady\) await window\.__apiReady;/);
+  });
+});
+
+describe("the dashboard script never triggers a load at parse time", () => {
+  it("never calls loadLinks from the script's top-level wiring", async () => {
+    const script = await clientScript();
+
+    // Matched as whole STATEMENTS at line start, so the prose beside the gate
+    // is free to name loadLinks() while explaining why it no longer calls it.
+    //
+    // Indentation carries the information here: this served script indents its
+    // top-level statements by exactly six spaces, and every call that lives
+    // inside a function or an event handler sits deeper. A bare loadLinks()
+    // statement at the parse-time indentation is exactly the regression — it
+    // ran before the session resolved and before window.__api existed.
+    const TOP_LEVEL_INDENT = 6;
+    const statements = [...script.matchAll(/^([ \t]*)loadLinks\(\);[ \t]*$/gm)].map(
+      (m) => m[1].length,
+    );
+
+    // One call per handler: create form submit, toggle, client-ref save,
+    // delete. A parse-time call anywhere pushes this to five.
+    expect(statements).toHaveLength(4);
+    expect(statements.every((indent) => indent > TOP_LEVEL_INDENT)).toBe(true);
+  });
+
+  it("creates the readiness gate in the container script, before the auth script", async () => {
+    const html = await serve();
+
+    const gateAt = html.indexOf("window.__apiReady = new Promise");
+    const authAt = html.indexOf("<script src=");
+    expect(gateAt).toBeGreaterThan(-1);
+    // If the gate were created after the bootstrap script, a parse-time caller
+    // would find it undefined and the race would come straight back.
+    expect(gateAt).toBeLessThan(authAt);
+  });
+});
+
+describe("the auth bootstrap gates its own load", () => {
+  it("resolves the gate only after window.__api exists", async () => {
+    const { resolveCalls, apiTypeAtResolve, win } = await runAuthBootstrap({
+      access_token: "tok",
+      user: { email: "owner@example.com" },
+    });
+
+    expect(win.location.href).toBe("");
+    expect(typeof win.__api).toBe("function");
+    expect(resolveCalls()).toBe(1);
+    // Ordering, observed: a resolver that ran before __api existed would
+    // release every waiter onto the same race.
+    expect(apiTypeAtResolve()).toBe("function");
+  });
+
+  it("keeps its guarded loadLinks call after the resolve", async () => {
+    const html = await serve();
+    const auth = html.slice(html.indexOf("<script src="));
+
+    // Matched as the whole statement, so the explanatory comment above it
+    // cannot satisfy — or break — the ordering assertion.
+    const call = 'if (typeof loadLinks === "function") loadLinks();';
+    const callAt = auth.indexOf(call);
+    const resolveAt = auth.indexOf("window.__apiReadyResolve?.()");
+    const helperAt = auth.indexOf("window.__api = async");
+
+    expect(callAt).toBeGreaterThan(-1);
+    expect(resolveAt).toBeGreaterThan(-1);
+    // The gate opens after the helper exists, not merely after the session.
+    expect(helperAt).toBeLessThan(resolveAt);
+    // And before the bootstrap's own load, so nothing is left waiting.
+    expect(resolveAt).toBeLessThan(callAt);
+  });
+
+  it("redirects without opening the gate or defining the api helper", async () => {
+    const { win, resolveCalls } = await runAuthBootstrap(null);
+
+    expect(win.location.href).toBe("/login");
+    expect(win.__api).toBeUndefined();
+    // The page is navigating away. Releasing the gate here would only start a
+    // load that cannot succeed, so the unauthenticated path leaves every waiter
+    // parked — nothing to render, nothing to fetch.
+    expect(resolveCalls()).toBe(0);
+  });
+});

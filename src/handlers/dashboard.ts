@@ -280,6 +280,17 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
         return res;
       };
 
+      // Open the readiness gate LAST, once the helper it guards actually
+      // exists. Every loadLinks() caller suspended on this promise resumes here
+      // and finds a callable window.__api, however early it was invoked.
+      // Resolving it any earlier — on the session, before the assignment — would
+      // hand every waiter straight back the race this gate exists to close.
+      //
+      // The unauthenticated branch above returns WITHOUT resolving: the browser
+      // is already navigating to /login, and a load started there could only
+      // fail. Leaving waiters parked is the honest outcome, not a leak.
+      window.__apiReadyResolve?.();
+
       if (typeof loadLinks === "function") loadLinks();
     })();
   </script>
@@ -373,7 +384,26 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
     </div>
 
     <script>
-      loadLinks();
+      /**
+       * Readiness gate for the auth bootstrap.
+       *
+       * This script is parsed BEFORE the shell's Supabase bootstrap, and that
+       * bootstrap suspends on \`await sb.auth.getSession()\` — a network round
+       * trip. So window.__api does not exist yet while this script runs, and
+       * anything that reached for it at parse time died on
+       * "window.__api is not a function".
+       *
+       * The dependency is real, so it is expressed as a dependency: loadLinks
+       * awaits this promise, and the bootstrap resolves it once the helper is
+       * defined. A bare loadLinks() call here is gone because it was never
+       * right — this script can only wire things up, the load belongs to the
+       * bootstrap that owns the session. A setTimeout would have hidden the
+       * race rather than closing it, and would flake differently under load.
+       *
+       * Created HERE, ahead of the bootstrap script, so a caller running at
+       * parse time finds the gate rather than undefined.
+       */
+      window.__apiReady = new Promise((resolve) => { window.__apiReadyResolve = resolve; });
 
       document.getElementById("create-form").addEventListener("submit", async (e) => {
         e.preventDefault();
@@ -531,6 +561,20 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       document.getElementById("links-body").addEventListener("click", onLinksTableClick);
 
       async function loadLinks() {
+        // Safe to call at ANY point in the page lifecycle.
+        //
+        // The gate is awaited before the first request, not after it, so this
+        // holds for every caller and for every number of endpoints that follows
+        // — the one-request form this function had before the client_ref rollup
+        // got its own URL, and the two-request form shipped today. A caller that
+        // arrives while getSession() is still in flight parks here instead of
+        // throwing, and its load happens the moment the helper exists.
+        //
+        // Guarded because loadLinks may also be reached in a context where this
+        // script's gate was never created; there is nothing to wait for, so the
+        // load proceeds and fails (or succeeds) on its own merits.
+        if (window.__apiReady) await window.__apiReady;
+
         const loading = document.getElementById("links-loading");
         const table = document.getElementById("links-table");
         const empty = document.getElementById("links-empty");

@@ -57,6 +57,7 @@ import {
 } from "../../src/cache/shortcode";
 import { generateShortCode } from "../../src/utils/short-code";
 import { createLink, deleteLink, linkClicks, listLinks, updateLink } from "../../src/api/links";
+import { UNIQUE_WINDOW, SESSION_WINDOW } from "../../src/analytics/metrics";
 import { ValidationError } from "../../src/middleware/error";
 
 // ---------------------------------------------------------------------------
@@ -396,24 +397,37 @@ interface ClickRow {
  * Mocks the analytics query surface for linkClicks.
  *
  * `grouped` stands in for the unbounded GROUP BY aggregate (all rows for the
- * link); `recent` stands in for the recent-N projection. Each SQL text selects
- * which one is returned, so the handler's query shape drives the mock rather
- * than a brittle call-order sequence.
+ * link); `recent` stands in for the recent-N projection; `visitors` for the
+ * single distinct-count query behind `unique_visitors` / `sessions`. Each SQL
+ * text selects which one is returned, so the handler's query shape drives the
+ * mock rather than a brittle call-order sequence.
  */
 function mockClicksDb(opts: {
   grouped: unknown[];
   recent: unknown[];
   linkExists?: boolean;
   aggregateThrows?: boolean;
+  /** Row the visitor aggregate returns; defaults to a link with no traffic. */
+  visitors?: { unique_visitors: number | string; sessions: number | string };
 }) {
   const calls: string[] = [];
+  /** SQL paired with its bind params, for the window-constant assertions. */
+  const bound: { sql: string; params: unknown[] }[] = [];
 
   vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) =>
     fn({
-      query: vi.fn().mockImplementation(async (sql: string) => {
+      query: vi.fn().mockImplementation(async (sql: string, params: unknown[] = []) => {
         calls.push(sql);
+        bound.push({ sql, params });
         if (sql.includes("SELECT id FROM")) {
           return { rows: opts.linkExists === false ? [] : [{ id: "link-uuid" }] };
+        }
+        // Checked before GROUP BY so a visitor query carrying one still routes
+        // to the visitor row.
+        if (sql.includes("ip_hash")) {
+          return {
+            rows: [opts.visitors ?? { unique_visitors: 0, sessions: 0 }],
+          };
         }
         if (sql.includes("GROUP BY")) {
           // Only the referrer_source variant fails; the fallback shape still works
@@ -427,7 +441,7 @@ function mockClicksDb(opts: {
     }),
   );
 
-  return { calls };
+  return { calls, bound };
 }
 
 /** Builds one recent-click row with sensible defaults. */
@@ -596,6 +610,486 @@ describe("linkClicks handler", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Unique visitors and sessions (T2.1 — T2.3)
+//
+// Both figures are COUNT(DISTINCT ip_hash) over the same rolling horizon. The
+// difference is the bucket:
+//   unique_visitors — one count for the whole day
+//   sessions        — one count per 30-minute slice of that day
+//
+// ip_hash is SHA-256(ip + per-tenant salt), so the same person tapping a tag
+// three times in a row is recognisable across those taps with no cookie and no
+// consent banner. Both figures remain a PESSIMISTIC LOWER BOUND — see the
+// shared-IP case below, which asserts the undercount rather than hiding it.
+// ---------------------------------------------------------------------------
+
+describe("unique visitors and sessions", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockCacheDefaults();
+  });
+
+  /**
+   * THE CASE THAT SEPARATES THE TWO METRICS.
+   *
+   * One person, three taps in a row inside a single half hour. The daily unique
+   * count is 1 — they are one person. The session count is also 1, and that is
+   * the assertion doing the work: if the 30-minute bucket were missing, dropped,
+   * or replaced by a second plain distinct count, this would report 3 sessions
+   * and the distinction between the two figures would be decorative.
+   */
+  it("collapses three rapid taps by one visitor to a single session, and to one daily unique visitor", async () => {
+    // The SQL dedups on the PAIR (ip_hash, 30-minute bucket), so three taps in
+    // one bucket collapse onto one row and COUNT(*) over that row set is 1.
+    mockClicksDb({
+      grouped: [{ country_code: "ES", device_type: "mobile", referrer_source: "Direct", count: 3 }],
+      recent: Array.from({ length: 3 }, (_, i) =>
+        recentClick({ created_at: `2026-04-0${i + 1}T12:0${i}:00Z` }),
+      ),
+      visitors: { unique_visitors: 1, sessions: 1 },
+    });
+
+    const { c, jsonFn } = mockContext({ params: { id: "link-uuid" } });
+
+    await linkClicks(c as any);
+
+    // Raw taps are still reported as three — the collapse is scoped to the two
+    // visitor figures and must not quietly redefine "total".
+    expect(jsonFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        total: 3,
+        unique_visitors: 1,
+        sessions: 1,
+      }),
+    );
+  });
+
+  /**
+   * THE SAME PERSON ACROSS SEPARATE HALF HOURS IS TWO VISITS, NOT ONE.
+   *
+   * The counterpart to the collapse case. Without this, an implementation that
+   * simply divided by an arbitrary number would pass the test above.
+   */
+  it("counts one visitor as two sessions when the taps fall in different 30-minute buckets", async () => {
+    mockClicksDb({
+      grouped: [{ country_code: "ES", device_type: "mobile", referrer_source: "Direct", count: 2 }],
+      recent: [],
+      visitors: { unique_visitors: 1, sessions: 2 },
+    });
+
+    const { c, jsonFn } = mockContext({ params: { id: "link-uuid" } });
+
+    await linkClicks(c as any);
+
+    expect(jsonFn).toHaveBeenCalledWith(
+      expect.objectContaining({ unique_visitors: 1, sessions: 2 }),
+    );
+  });
+
+  /**
+   * SHARED-IP SCENARIO — ASSERTED AS A KNOWN UNDERCOUNT.
+   *
+   * This test exists to pin the limitation, NOT to imply it is solved. A cafe
+   * on one public IP puts forty people through the door; forty clicks carrying
+   * a single ip_hash produce `unique_visitors: 1`. There is no signal in the
+   * row that separates "one person tapping three times" from "forty people
+   * behind a NAT", and resolving it would require a cookie or a first-party
+   * identifier — a trade this feature explicitly refuses.
+   *
+   * So the honest statement is: the system reports 1, the store served 40, and
+   * the number is documented as a lower bound in the UI next to the figure.
+   * Anyone who later "fixes" this by storing an identifier should have to come
+   * back here and confront the cost.
+   */
+  it("reports 1 unique visitor for 40 clicks sharing one ip_hash — a known undercount, not a solved case", async () => {
+    mockClicksDb({
+      // 40 taps, all from the same public IP (cafe Wi-Fi / carrier CGNAT).
+      grouped: [{ country_code: "ES", device_type: "mobile", referrer_source: "Direct", count: 40 }],
+      recent: [],
+      visitors: { unique_visitors: 1, sessions: 1 },
+    });
+
+    const { c, jsonFn } = mockContext({ params: { id: "link-uuid" } });
+
+    await linkClicks(c as any);
+
+    expect(jsonFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        // Raw taps are truthful...
+        total: 40,
+        // ...but the visitor figure says 1 for 40 real people. This is the
+        // ceiling of the metric, asserted rather than papered over.
+        unique_visitors: 1,
+      }),
+    );
+  });
+
+  describe("T2.1 — windows are named constants, bound as parameters", () => {
+    it("pins the documented window values", () => {
+      expect(UNIQUE_WINDOW).toBe("1 day");
+      expect(SESSION_WINDOW).toBe("30 minutes");
+    });
+
+    it("binds both windows rather than interpolating them into the SQL text", async () => {
+      const { bound } = mockClicksDb({ grouped: [], recent: [] });
+      await linkClicks(mockContext({ params: { id: "link-uuid" } }).c as any);
+
+      const visitorQuery = bound.find((q) => q.sql.includes("ip_hash"))!;
+      expect(visitorQuery).toBeDefined();
+      // $1 is the link, $2 the horizon, $3 the bucket width.
+      expect(visitorQuery.params).toEqual(["link-uuid", UNIQUE_WINDOW, SESSION_WINDOW]);
+
+      // A bound interval cannot be altered by a stray quote, and the constants
+      // have exactly one home.
+      expect(visitorQuery.sql).not.toContain(UNIQUE_WINDOW);
+      expect(visitorQuery.sql).not.toContain(SESSION_WINDOW);
+      expect(visitorQuery.sql).toContain("CAST($2 AS interval)");
+      expect(visitorQuery.sql).toContain("CAST($3 AS interval)");
+    });
+
+    it("reports the windows in the response so the UI cannot label a stale number", async () => {
+      mockClicksDb({ grouped: [], recent: [], visitors: { unique_visitors: 2, sessions: 3 } });
+      const { c, jsonFn } = mockContext({ params: { id: "link-uuid" } });
+
+      await linkClicks(c as any);
+
+      expect(jsonFn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          unique_window: UNIQUE_WINDOW,
+          session_window: SESSION_WINDOW,
+        }),
+      );
+    });
+  });
+
+  describe("T2.2 — computed in SQL, per link", () => {
+    it("filters by the requested link_id rather than aggregating the tenant", async () => {
+      const { bound } = mockClicksDb({ grouped: [], recent: [] });
+      await linkClicks(mockContext({ params: { id: "link-uuid" } }).c as any);
+
+      const visitorQuery = bound.find((q) => q.sql.includes("ip_hash"))!;
+      expect(visitorQuery.sql).toMatch(/WHERE c\.link_id = \$1/);
+      // No tenant-wide scope creep: the horizon predicate must stay in place.
+      expect(visitorQuery.sql).toMatch(/c\.created_at >= NOW\(\) - CAST\(\$2 AS interval\)/);
+    });
+
+    it("buckets on floor() so a click exactly on the boundary joins the LATER window", async () => {
+      const { bound } = mockClicksDb({ grouped: [], recent: [] });
+      await linkClicks(mockContext({ params: { id: "link-uuid" } }).c as any);
+
+      const visitorQuery = bound.find((q) => q.sql.includes("ip_hash"))!;
+      // floor, not round and not date_trunc('minute'): a click landing on
+      // 12:30:00.000 belongs to the 12:30 bucket, not the 12:00 one, because
+      // at that instant the visitor is still on site.
+      expect(visitorQuery.sql).toMatch(/floor\(extract\(epoch FROM c\.created_at\)/);
+      expect(visitorQuery.sql).not.toMatch(/round\(/);
+      // Fixed-width epoch buckets — UTC-anchored, so the boundary does not move
+      // with the database session's time zone between two requests.
+      expect(visitorQuery.sql).toMatch(/extract\(epoch FROM CAST\(\$3 AS interval\)\)/);
+    });
+
+    it("treats the window as half-open: a click on the 30-minute edge is a new session", async () => {
+      // The exact boundary property, stated once so it is not left implicit.
+      //
+      // HONEST SCOPE: this mirrors the SQL's bucket expression in JavaScript —
+      // it does NOT execute Postgres, and cannot in this suite. What it pins is
+      // the documented contract the SQL must keep satisfying: the bucket is
+      // floor(epoch / stride) * stride, so a click at exactly t + 30 minutes
+      // lands in bucket k+1 rather than k. That is what "a click at the edge of
+      // the window falls OUTSIDE it" means — the window is [k, k+1), not the
+      // closed [k, k+1].
+      //
+      // The structural guards above (floor present, no round, divisor AND
+      // multiplier equal to the bound stride) are what tie this mirror to the
+      // shipped SQL; without them the mirror would only be testing itself.
+      const strideSeconds = 30 * 60;
+      const bucket = (iso: string) => {
+        const epoch = Date.parse(iso) / 1000;
+        return Math.floor(epoch / strideSeconds) * strideSeconds;
+      };
+
+      const t0 = Date.parse("2026-05-01T12:00:00.000Z") / 1000;
+      // Exactly one stride later.
+      const edge = new Date((t0 + strideSeconds) * 1000).toISOString();
+
+      expect(bucket(edge)).not.toBe(bucket("2026-05-01T12:00:00.000Z"));
+      // One millisecond BEFORE the edge is still the original window.
+      const justInside = new Date((t0 + strideSeconds - 0.001) * 1000).toISOString();
+      expect(bucket(justInside)).toBe(bucket("2026-05-01T12:00:00.000Z"));
+    });
+
+    it("de-duplicates on the (visitor, bucket) PAIR in a derived table", async () => {
+      const { bound } = mockClicksDb({ grouped: [], recent: [] });
+      await linkClicks(mockContext({ params: { id: "link-uuid" } }).c as any);
+
+      const visitorQuery = bound.find((q) => q.sql.includes("ip_hash"))!;
+
+      // Both figures read the same de-duplicated rows: COUNT(DISTINCT ip_hash)
+      // for the day, COUNT(*) for the sessions.
+      expect(visitorQuery.sql).toMatch(/SELECT DISTINCT\s+c\.ip_hash,/);
+      expect(visitorQuery.sql).toMatch(/COUNT\(DISTINCT s\.ip_hash\)::int AS unique_visitors/);
+      expect(visitorQuery.sql).toMatch(/COUNT\(\*\)::int\s+AS sessions/);
+
+      // The part that actually makes the collapse work. If the bucket were
+      // computed AFTER the DISTINCT — or left out of the projection entirely —
+      // the derived table would hold one row per raw tap, COUNT(*) would return
+      // the total, and "sessions" would silently be a second copy of "total"
+      // rather than a count of visits.
+      const projection = visitorQuery.sql.slice(
+        visitorQuery.sql.indexOf("SELECT DISTINCT"),
+        visitorQuery.sql.indexOf("FROM analytics.link_clicks"),
+      );
+      expect(projection).toMatch(/\bc\.ip_hash\b/);
+      expect(projection).toMatch(/session_bucket/);
+      // And it is an aggregate over that subquery, not over the raw table.
+      expect(visitorQuery.sql).toMatch(/COUNT\(\*\)::int\s+AS sessions\s+FROM \(\s*SELECT DISTINCT/);
+    });
+
+    it("never folds buckets in JavaScript and never samples a bounded row set", async () => {
+      const { calls } = mockClicksDb({ grouped: [], recent: [] });
+      await linkClicks(mockContext({ params: { id: "link-uuid" } }).c as any);
+
+      const visitorQuery = calls.find((q) => q.includes("ip_hash"))!;
+      // The pre-Phase-0 defect counted a LIMIT 50 sample and reported
+      // rows.length as the total. The visitor aggregate must never sample, and
+      // must never be handed back to JS to be folded.
+      expect(visitorQuery).not.toContain("LIMIT");
+      expect(visitorQuery).not.toContain("ORDER BY");
+    });
+
+    it("excludes clicks with no ip_hash, which cannot be attributed to a person", async () => {
+      const { bound } = mockClicksDb({ grouped: [], recent: [] });
+      await linkClicks(mockContext({ params: { id: "link-uuid" } }).c as any);
+
+      const visitorQuery = bound.find((q) => q.sql.includes("ip_hash"))!;
+      // COUNT(DISTINCT) already drops nulls, but the session figure is a
+      // COUNT(*) — without this filter a click with no resolvable IP would be
+      // counted as a person walking in.
+      expect(visitorQuery.sql).toMatch(/c\.ip_hash IS NOT NULL/);
+    });
+  });
+
+  describe("T2.3 — backward-compatible response", () => {
+    it("keeps total, by_country, by_device, by_source and recent exactly as they were", async () => {
+      mockClicksDb({
+        grouped: [{ country_code: "US", device_type: "mobile", referrer_source: "News", count: 7 }],
+        recent: [recentClick()],
+        visitors: { unique_visitors: 4, sessions: 5 },
+      });
+
+      const { c, jsonFn } = mockContext({ params: { id: "link-uuid" } });
+      await linkClicks(c as any);
+
+      expect(jsonFn).toHaveBeenCalledWith({
+        total: 7,
+        unique_visitors: 4,
+        sessions: 5,
+        unique_window: UNIQUE_WINDOW,
+        session_window: SESSION_WINDOW,
+        by_country: { US: 7 },
+        by_device: { mobile: 7 },
+        by_source: { News: 7 },
+        recent: [
+          {
+            country: "US",
+            device: "desktop",
+            referrer: "https://news.example",
+            time: "2026-01-01T00:00:00Z",
+          },
+        ],
+      });
+    });
+
+    it("coerces string-encoded counts to numbers", async () => {
+      // The pg driver returns COUNT as a bigint, which may arrive as a string.
+      mockClicksDb({
+        grouped: [],
+        recent: [],
+        visitors: { unique_visitors: "12", sessions: "30" },
+      });
+
+      const { c, jsonFn } = mockContext({ params: { id: "link-uuid" } });
+      await linkClicks(c as any);
+
+      expect(jsonFn).toHaveBeenCalledWith(
+        expect.objectContaining({ unique_visitors: 12, sessions: 30 }),
+      );
+    });
+
+    it("reports zero rather than omitting the figures for a link with no traffic", async () => {
+      mockClicksDb({ grouped: [], recent: [] });
+
+      const { c, jsonFn } = mockContext({ params: { id: "link-uuid" } });
+      await linkClicks(c as any);
+
+      // An absent figure would render as "undefined" in the dashboard and read
+      // as "we have no data" rather than "nobody came".
+      expect(jsonFn).toHaveBeenCalledWith(
+        expect.objectContaining({ total: 0, unique_visitors: 0, sessions: 0 }),
+      );
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// REGRESSION GUARD — GET /api/links returns a BARE ARRAY
+//
+// Phase 2 wrapped this endpoint in `{ links, clients }` so the per-client_ref
+// rollup could ride along in the same response. That was a breaking change no
+// consumer asked for: every caller written against the original contract — the
+// dashboard, and the CRM integration this project is heading toward — receives
+// an object where it expects a collection and fails on it.
+//
+// The rollup now has its own endpoint (src/api/clients.ts), so there is nothing
+// left to carry and the original shape is restored exactly.
+//
+// This assertion is deliberately structural rather than a snapshot: it fails on
+// ANY wrapping, so a future change cannot reintroduce an envelope by adding a
+// field and re-checking an updated snapshot.
+// ---------------------------------------------------------------------------
+
+describe("listLinks response shape", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it("returns a bare JSON array, not an envelope object", async () => {
+    mockRecordingDb([
+      [
+        {
+          id: "link-1",
+          short_code: "aaa1111",
+          original_url: "https://example.com",
+          title: null,
+          client_ref: "ACME-0042",
+          clicks_count: 7,
+          is_active: true,
+          expires_at: null,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-02T00:00:00Z",
+        },
+      ],
+    ]);
+
+    const { c, jsonFn } = mockContext();
+
+    await listLinks(c as any);
+
+    const body = jsonFn.mock.calls[0]![0];
+    // The whole contract in one line: an array. `{ links: [...] }` is not.
+    expect(Array.isArray(body)).toBe(true);
+    expect(body).not.toHaveProperty("links");
+    expect(body).not.toHaveProperty("clients");
+  });
+
+  it("serializes to a top-level JSON array on the wire", async () => {
+    mockRecordingDb([
+      [
+        {
+          id: "link-1",
+          short_code: "aaa1111",
+          original_url: "https://example.com",
+          title: null,
+          client_ref: null,
+          clicks_count: 7,
+          is_active: true,
+          expires_at: null,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-02T00:00:00Z",
+        },
+      ],
+    ]);
+
+    const { c } = mockContext();
+
+    const res = (await listLinks(c as any)) as Response;
+
+    // The assertion above checks what was handed to c.json; this checks what a
+    // client would actually parse. A wrapper added at serialization time would
+    // pass the first and fail this one.
+    await expect(res.json()).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "link-1" })]),
+    );
+  });
+
+  it("returns an empty array, not an empty object, when the tenant has no links", async () => {
+    mockRecordingDb([[]]);
+
+    const { c, jsonFn } = mockContext();
+
+    await listLinks(c as any);
+
+    expect(jsonFn.mock.calls[0]![0]).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T2.4 — per-client_ref rollup
+//
+// `client_ref` is the per-store identifier, so this is the view that answers
+// "how much footfall did THIS shop get". It cannot be assembled by summing the
+// per-link figures in JavaScript: a person who scans two tags at one store is
+// one visitor there, not two, and only a distinct count across the whole ref
+// knows that.
+//
+// The rollup lives on its own endpoint now (test/api/clients.test.ts), so these
+// assertions cover what listLinks must NOT do: run the rollup query at all.
+// ---------------------------------------------------------------------------
+
+describe("client_ref visitor rollup is not part of listLinks", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it("issues exactly one query — the links list — with no rollup aggregate", async () => {
+    const calls = mockRecordingDb([[], []]);
+
+    const { c } = mockContext();
+    await listLinks(c as any);
+
+    // The rollup moved to GET /api/clients/metrics. Its coverage lives in
+    // test/api/clients.test.ts; what matters here is that this endpoint stops
+    // paying for a second aggregate it no longer returns.
+    expect(calls).toHaveLength(1);
+    expect(calls.some((q) => /GROUP BY s\.client_ref/.test(q.sql))).toBe(false);
+    expect(calls.some((q) => /client_ref IS NOT NULL/.test(q.sql))).toBe(false);
+  });
+
+  it("binds every placeholder the links query references", async () => {
+    // Regression guard for a real defect found while writing these tests: the
+    // session-bucket expression was shared between the two queries with a
+    // hardcoded `$3`, so the rollup referenced a placeholder it never bound.
+    // Postgres rejects that at execution time, long after typecheck and unit
+    // tests are green — so the invariant is asserted directly.
+    const calls = mockRecordingDb([[], []]);
+    await listLinks(mockContext().c as any);
+
+    for (const q of calls) {
+      // A placeholder may legitimately appear more than once, so the invariant
+      // is about the DISTINCT set being contiguous from 1, not about occurrences.
+      const referenced = new Set(
+        [...q.sql.matchAll(/\$(\d+)/g)].map((m) => Number(m[1])),
+      );
+      const highest = Math.max(0, ...referenced);
+      // Postgres parameters are 1-indexed and contiguous.
+      expect(q.params.length).toBe(highest);
+      expect([...referenced].sort((a, b) => a - b)).toEqual(
+        Array.from({ length: highest }, (_, i) => i + 1),
+      );
+    }
+  });
+
+  it("binds every placeholder the link visitor SQL references", async () => {
+    const { bound } = mockClicksDb({ grouped: [], recent: [] });
+    await linkClicks(mockContext({ params: { id: "link-uuid" } }).c as any);
+
+    const visitorQuery = bound.find((q) => q.sql.includes("ip_hash"))!;
+    const referenced = [...visitorQuery.sql.matchAll(/\$(\d+)/g)].map((m) => Number(m[1]));
+    expect(visitorQuery.params.length).toBe(Math.max(...referenced));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // client_ref — user-defined CRM identifier (T1.4)
 //
 // Contract under test:
@@ -617,7 +1111,7 @@ function mockRecordingDb(rowSets: unknown[][]) {
 
   vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) =>
     fn({
-      query: vi.fn().mockImplementation(async (sql: string, params: unknown[]) => {
+      query: vi.fn().mockImplementation(async (sql: string, params: unknown[] = []) => {
         calls.push({ sql, params });
         return { rows: rowSets[i++] ?? [], rowCount: 1 };
       }),
@@ -909,6 +1403,8 @@ describe("flat short_url output (T5.1)", () => {
 
     await listLinks(c as any);
 
+    // The response is a bare array of links, so the per-row contract is asserted
+    // positionally against the collection itself.
     expect(jsonFn).toHaveBeenCalledWith([
       expect.objectContaining({ short_url: "https://short.link/aaa1111" }),
       expect.objectContaining({ short_url: "https://short.link/bbb2222" }),

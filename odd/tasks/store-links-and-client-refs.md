@@ -360,3 +360,286 @@ handlers and no `innerHTML` assignment. This is now asserted by a test rather th
 Start Phase 2 (unique visitors). T2.3 rolls up per `client_ref` and depends on
 `idx_links_client_ref`, which now exists in both the new-tenant DDL and the existing-tenant ALTER.
 Apply `00004` to deployed databases before relying on per-client rollups.
+---
+
+# Phase 2 — Unique visitors (appended 2026-10-09)
+
+## Status
+
+**COMPLETE** — all six tasks delivered, uncommitted, for review. Suite is **373 passed / 0 failed**
+(was 322 before Phase 2; +38 for Phase 2 itself and +15 for the `listLinks` contract correction,
+zero pre-existing failures reintroduced). `npm run typecheck` clean.
+
+## The problem this solves
+
+`analytics.link_clicks` stores raw taps. Someone touching a tag three times counts as three
+visits. For measuring footfall to a physical store — the entire NFC/QR use case — raw taps are
+meaningless.
+
+## What the data allows
+
+`ip_hash` is `SHA-256(ip + per-tenant salt)` (`src/utils/ip-hash.ts`). That gives a **stable,
+deterministic** per-tenant identifier: the same person scanning tomorrow produces the same hash.
+No cookie and no consent banner are involved. `COUNT(DISTINCT ip_hash)` is viable.
+
+It is also a **persistent pseudonymous identifier**. Fine for counting, but it must never be
+exposed to a client or joined against another dataset — the hash outlives the individual click.
+
+## The ceiling: NAT and CGNAT
+
+Unique-by-hash is a **pessimistic lower bound**:
+
+- a café on shared Wi-Fi sends 40 people through one public IP → the count says 1
+- a mobile customer behind carrier CGNAT may share an IP with many other subscribers
+
+## Metric decision
+
+Offer **both**, because they answer different questions:
+
+- **unique_visitors** — `COUNT(DISTINCT ip_hash)` over a rolling window. Daily by default.
+  Undercounts shared-IP populations. This is the "how many people came back" figure.
+- **sessions** — distinct `ip_hash` per window of **30 minutes**. A person scanning three times
+  in a row is one visit, not three. This tracks a real store far better than a daily unique,
+  because a lunch rush genuinely is ~30 distinct people rather than 1.
+
+Neither is exact. Both must be labelled as estimates **in the UI**, not only in the docs — a
+number called "unique visitors" with no caveat is worse than no number.
+
+## Scope
+
+### In scope
+
+- `unique_visitors` and `sessions` in `linkClicks`, computed in SQL alongside the existing
+  accurate `total` and `by_*` breakdowns.
+- Both figures rolled up per `client_ref`, since that is the per-store identifier.
+- Dashboard display with the estimate caveat visible next to the numbers.
+- The window parameters (daily, 30-minute) as named constants, not magic numbers.
+
+### Out of scope
+
+- Cookies, consent banners, or any first-party identifier — none are needed and none should be
+  added for this metric.
+- City/region/ASN geolocation. Country and device are enough.
+- Storing an aggregate table or any denormalized counter. Compute on read; the click volume per
+  link does not justify it yet.
+- Changing how clicks are recorded.
+
+## Tasks
+
+- [x] **T2.1** `UNIQUE_WINDOW` and `SESSION_WINDOW` named constants in `src/analytics/metrics.ts`,
+      with the NAT caveat explained at the point of definition. See "Where the caveat lives".
+- [x] **T2.2** Both metrics computed in SQL in `linkClicks`, filtered per `link_id`. One
+      aggregate, no `LIMIT`, no folding in JavaScript. See "How the 30-minute window works".
+- [x] **T2.3** Both returned alongside `total`, `by_country`, `by_device`, `by_source`, `recent`,
+      plus `unique_window` / `session_window` so a label cannot drift from the SQL. Existing keys
+      unchanged.
+- [x] **T2.4** Per-`client_ref` rollup, on its own endpoint `GET /api/clients/metrics`.
+      See "The correction: the rollup's own endpoint".
+- [x] **T2.5** Dashboard: both figures per link, plus a store-level rollup card, with the caveat
+      in the rendered markup.
+- [x] **T2.6** Tests, mutation-checked. See "Verification".
+
+---
+
+## Implementation notes
+
+### How the 30-minute window works
+
+Both figures read **one** de-duplicated derived table:
+
+```sql
+SELECT COUNT(DISTINCT s.ip_hash)::int AS unique_visitors,
+       COUNT(*)::int                 AS sessions
+  FROM (
+    SELECT DISTINCT c.ip_hash,
+           (floor(extract(epoch FROM c.created_at)
+                  / extract(epoch FROM CAST($3 AS interval)))
+            * extract(epoch FROM CAST($3 AS interval)))::bigint AS session_bucket
+      FROM analytics.link_clicks c
+     WHERE c.link_id = $1
+       AND c.created_at >= NOW() - CAST($2 AS interval)
+       AND c.ip_hash IS NOT NULL
+  ) s
+```
+
+The pair `(ip_hash, bucket)` is what collapses. `COUNT(DISTINCT ip_hash)` over it is the daily
+unique; `COUNT(*)` over it is the session count, because each surviving row is one person in one
+half hour — a second and third tap inside the same bucket deduplicate onto the row the first one
+already produced.
+
+Four decisions worth recording:
+
+1. **Epoch division, not `date_bin()`.** `date_bin()` needs PostgreSQL 14+, and the deployed major
+   version cannot be verified from this repository, so using it would be an unverifiable
+   dependency for no gain. Epoch division is exact on every version.
+2. **Fixed-width epoch buckets are UTC-anchored.** A `to_char()` / `date_trunc()` string bucket
+   would drift with the session time zone and stop meaning anything between two requests.
+3. **`floor`, not `round`** — the window is half-open `[k, k+1)`. A click landing exactly on a
+   30-minute boundary joins the *later* bucket, i.e. falls outside the earlier one. At that
+   instant the person is demonstrably still on site, so the window should still be open.
+4. **`ip_hash IS NOT NULL` is load-bearing, not decorative.** `COUNT(DISTINCT)` already drops
+   nulls, but `sessions` is a `COUNT(*)`: without the filter a click with no resolvable IP would
+   be counted as a person walking in.
+
+Both windows are **bound parameters**, never interpolated. `$3` appears twice in the expression
+(as divisor and multiplier) and the two queries bind at different positions — hardcoding the
+placeholder produced an unbound `$3` in the rollup, which typecheck and the unit tests both
+passed over and Postgres would have rejected at execution time. A test now asserts that every
+placeholder a query references has a bound parameter.
+
+### Why the rollup is a second query and not arithmetic
+
+`client_ref` is the per-store identifier, so the store view is the whole point of the feature. A
+person who scans two tags in one shop is **one** visitor there, not two — only a distinct count
+across every link sharing the ref knows that, so the rollup cannot be assembled by summing the
+per-link figures in JavaScript. It also reuses the same `(visitor, bucket)` dedup, so a shopper
+who scans both tags inside one half hour is one *session* for the store.
+
+Tenant isolation is inherited from the inner join against the tenant's own links table:
+`analytics.link_clicks.link_id` has no foreign key, so that join **is** the boundary — the same
+one `linkClicks` already relies on.
+
+### Where the caveat lives
+
+`VISITOR_ESTIMATE_CAVEAT` is exported from `src/analytics/metrics.ts`, next to the window
+constants it qualifies. That definition plus three interpolation sites in the served dashboard
+markup is four places the sentence lives, and all four survive the `listLinks` correction:
+
+1. **Static server-rendered note** above the links table — visible on page load, before any
+   script runs and before anything is expanded.
+2. **Inside every link's metrics panel**, next to the two figures — for someone who expands a row
+   without scrolling back up.
+3. **On the store-level rollup card.**
+
+One exported string, three render points in the markup plus the definition itself, so the sentence
+cannot drift from the numbers. The tests assert against the static region of the served page
+specifically, not the whole document — an earlier version of that assertion passed while the static
+copy was deleted, because the string also occurs inside the inline script.
+
+### The correction: the rollup's own endpoint
+
+Phase 2 shipped `listLinks` returning `{ links, clients }` instead of the bare array it had always
+returned. That was a breaking API contract change nobody asked for, taken only because
+`src/router.ts` sat outside the edit surface this slice was allowed to touch — a new handler could
+not be registered, so the rollup had to ride along inside an existing response. **That constraint is
+gone, and so is the deviation.**
+
+The "risk is close to zero" reasoning recorded here was wrong, and wrong in a specific way: the
+dashboard kept working *because it was rewritten in the same change*, which is exactly what hid the
+breakage from every other caller. The single current consumer passing its own tests is not evidence
+that the shape is safe — it is evidence that there is no second consumer yet. This project is
+explicitly heading toward a CRM integration that will call this endpoint.
+
+What it is now:
+
+| | |
+| --- | --- |
+| `GET /api/links` | **Bare array of links**, exactly as before Phase 2. Per-link fields unchanged (`client_ref` present/null, flat `short_url`, `clicks_count`, `is_active`, `expires_at`, `created_at`, `updated_at`). Only the container moved back. The rollup query is gone from it. |
+| `GET /api/clients/metrics` | New. Returns a **bare array** of `{ client_ref, unique_visitors, sessions }`. Same SQL, same bind parameters, same windows, same `ip_hash IS NOT NULL` filter — moved, not redesigned. |
+
+Handler `listClientRefMetrics` in `src/api/clients.ts`, registered in `src/router.ts` with the same
+`auth` → `userProfileTenantMiddleware` chain as every other tenant-scoped route. That chain is
+load-bearing, not decorative: the tenant in context is what qualifies the links table the rollup
+joins against, so omitting it would read across tenants.
+
+Why `/api/clients/metrics` and not `/api/clients`: `client_ref` is free text the user types. There is
+no client entity in this system, so a bare `/api/clients` would advertise a CRUD resource that does
+not exist. The export keeps `client_ref` in its name for the same reason.
+
+Why the response is a bare array rather than an envelope: an envelope is the exact mistake being
+corrected, and repeating it on the new endpoint would double it. The trade-off is recorded rather
+than hidden — unlike `linkClicks`, this response does **not** ship `unique_window` / `session_window`
+next to the figures. That is safe here specifically because the dashboard renders no window label on
+this table, whereas `linkClicks` ships them because it does.
+
+The dashboard now issues two fetches in parallel (`/api/links` and `/api/clients/metrics`) inside
+the existing `loadLinks`. Behaviour is unchanged, including the all-or-nothing failure path: a
+failure in either request shows the same error state rather than a half-rendered dashboard. A
+non-array `/api/links` payload is treated as a contract violation and surfaced, not silently
+rendered as "you have no links".
+
+**The rule this establishes:** a field is added to a collection by adding it to each element, never
+by wrapping the collection. Two collection endpoints can be cached and versioned independently; one
+endpoint cannot change shape without breaking half its consumers. `test/api/links.test.ts` now
+asserts the bare array structurally (`Array.isArray`, and no `links` / `clients` property) rather
+than by snapshot, so a future change cannot reintroduce an envelope by adding a field and
+re-baselining an expectation.
+
+### Deliberately not defensive: no try/catch on either new query
+
+The `referrer_source` aggregate has a fallback because the column may be absent on an
+already-deployed database, and degrading a breakdown is harmless. Neither new query has that
+drift risk, and a silent catch would publish `unique_visitors: 0` for a store that was busy — a
+confident "nobody came in today" that is a lie. An error is honest; a wrong zero is not.
+
+### Verification
+
+`npm run typecheck` clean. `npm test` → **373 passed / 0 failed** across 19 files.
+
+The two decisive cases were written before the implementation and observed failing (RED): the
+session collapse (`unique_visitors: 1, sessions: 1` from three taps) and the shared-IP scenario
+(`total: 40, unique_visitors: 1`), both failing because the fields did not yet exist.
+
+The `listLinks` contract guard was also test-first. Four assertions were written against the wrapped
+shape and observed RED — `Array.isArray(body)` returned `false`, the on-wire payload parsed as
+`{ clients, links }`, the empty case returned an object instead of `[]`, and the endpoint was issuing
+two queries instead of one. Two mutations were then applied and reverted to confirm the new guards
+are not vacuous:
+
+| Mutation | Caught by |
+| --- | --- |
+| `listLinks` response re-wrapped as `{ links }` | `returns a bare JSON array, not an envelope object` (+2 more) |
+| `listClientRefMetrics` response re-wrapped as `{ clients }` | `returns visitors per client_ref as a bare array` (+4 more) |
+| `userProfileTenantMiddleware` dropped from the new route | `registers it with auth and the tenant middleware` + `routes GET /api/clients/metrics through to the rollup handler` |
+
+The middleware mutation is the one worth keeping: with the tenant middleware removed, the request
+does not merely return the wrong numbers, it throws on `c.get("tenant")` being undefined and comes
+back a 500.
+
+Eight mutations were applied and reverted to prove the guards are not vacuous:
+
+| Mutation | Caught by |
+| --- | --- |
+| `ip_hash` dropped from the DISTINCT projection (sessions becomes total) | `de-duplicates on the (visitor, bucket) PAIR` |
+| `floor` → `round` in the bucket expression | `buckets on floor() so a click on the boundary joins the LATER window` |
+| Static caveat replaced with "Estimates only." | `serves the caveat as static markup` + `states the actual limitation` |
+| Per-row caveat replaced with "Approximate." | `repeats the caveat inside each link's metrics panel` |
+| Clients-card caveat replaced with "Approximate." | `shows the store-level rollup behind the same caveat` |
+| `?? 0` fallback dropped from `renderVisitors` | `reports zero rather than undefined` |
+| Sessions demoted to a footnote class (hierarchy reintroduced) | `gives the two figures identical markup` |
+| `esc()` dropped from `client_ref` in `renderClients` | `escapes client_ref, which is user-supplied free text` |
+
+The shared-IP test asserts the **undercount** (`total: 40`, `unique_visitors: 1`) with a comment
+stating that the system does not solve NAT, so nobody later reads a green suite as evidence that
+it does.
+
+## Acceptance criteria
+
+- [x] Both metrics are computed in SQL and returned by `linkClicks`.
+- [x] A session window genuinely collapses repeat taps within 30 minutes.
+- [x] The dashboard labels both numbers as estimates, in the rendered markup.
+- [x] `npm run typecheck` and `npm test` stay green (322 → 360 → 373, zero failures).
+- [x] `GET /api/links` returns a bare array again, with a structural regression guard against re-wrapping.
+
+## Applicable checks
+
+Test-first throughout, with one honest exception recorded below.
+
+The API layer (T2.1–T2.4) was written test-first: 18 assertions were observed failing before
+any implementation existed. The dashboard markup (T2.5) was written before its tests, so its
+guards were established by the eight-mutation check above instead. The net position is the same —
+every guard is demonstrably non-vacuous — but the ordering was not strict for the dashboard.
+
+## Next step
+
+Phase 3 — links at physical scale: the `MAX_ACTIVE_LINKS = 30` cap, caller-supplied short codes
+for pre-printed tags, and batch creation.
+
+Two things to confirm before relying on this in production:
+
+- **`ip_hash` NULL rate.** A deployment behind a proxy that strips the client IP would report
+  `unique_visitors: 0` while `total` climbs. The NULL filter makes the figures honest rather
+  than inflated, but the ratio is worth watching.
+- **PostgreSQL version.** The epoch-division bucket works on every version, so nothing to verify
+  — noted only because `date_bin()` was the obvious alternative and was rejected on exactly this
+  ground.

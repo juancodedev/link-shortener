@@ -1,5 +1,6 @@
 import type { Handler } from "hono";
 import type { AppEnv, HonoVars } from "../types/env";
+import { VISITOR_ESTIMATE_CAVEAT } from "../analytics/metrics";
 
 // ---------------------------------------------------------------------------
 // Shared shell
@@ -202,6 +203,23 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       font-size: 0.75rem;
       padding: 0.125rem 0;
     }
+    .estimate-note {
+      font-size: 0.688rem;
+      line-height: 1.5;
+      color: #64748b;
+      margin-top: 0.625rem;
+      padding-top: 0.5rem;
+      border-top: 1px dashed #e2e8f0;
+    }
+    .visitors-box { margin-bottom: 1rem; }
+    .visitors-pair {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 0.25rem 1rem;
+    }
+    @media (min-width: 768px) {
+      .visitors-pair { grid-template-columns: 1fr 1fr; }
+    }
     .qr-modal {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -312,6 +330,36 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       <div id="links-empty" class="empty" style="display:none;">
         No links yet. Create your first one above!
       </div>
+      <!--
+        Server-rendered, not injected by script, and not behind a tooltip.
+
+        This is the whole point of the caveat's placement: a store owner acts on
+        the visitor number, so the limitation has to be on the page before they
+        expand anything and look for it. A note hidden behind a hover, a
+        disclosure, or a README is a note nobody reads — and a bare "42 unique
+        visitors" is worse than no figure at all, because someone will make a
+        decision with it. The sentence lives beside the constants it qualifies
+        in src/analytics/metrics.ts so the two cannot drift apart.
+      -->
+      <p class="estimate-note"><strong>About visitor figures:</strong> ${VISITOR_ESTIMATE_CAVEAT}</p>
+    </div>
+
+    <div class="card" id="clients-card" style="display:none;">
+      <h3>Stores by Client Ref</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Client Ref</th>
+              <th>Unique Visitors</th>
+              <th>Sessions</th>
+            </tr>
+          </thead>
+          <tbody id="clients-body"></tbody>
+        </table>
+      </div>
+      <!-- Same caveat, next to the store-level rollup. -->
+      <p class="estimate-note">${VISITOR_ESTIMATE_CAVEAT}</p>
     </div>
 
     <!-- QR code modal -->
@@ -365,6 +413,53 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           btn.textContent = "Shorten";
         }
       });
+
+      /**
+       * Renders the two visitor figures for one link.
+       *
+       * Deliberately NOT the \`([k, v]) => ...\` breakdown mapper: these two are
+       * not a key/value breakdown, they are the headline pair, and giving them
+       * their own renderer keeps the invariant that every such shape is
+       * escaped rather than assuming the breakdown mapper was reused.
+       *
+       * EQUAL WEIGHT, ON PURPOSE. The product decision is that neither figure
+       * is the "real" one: \`unique_visitors\` answers "how many people came
+       * back", \`sessions\` answers "how many separate visits". Presenting one as
+       * the primary number and the other as a footnote would smuggle in a
+       * hierarchy the user explicitly rejected. Same markup, same weight, both
+       * qualified by the caveat baked into the panel around them.
+       *
+       * The window labels come from the API response rather than being written
+       * here, so the text can never describe a different window than the SQL
+       * actually used. \`?? 0\` matters: a bare missing value would render the
+       * string "undefined" next to a real number, which reads as a measurement
+       * rather than as an absence.
+       */
+      function renderVisitors(data) {
+        const uniqueWindow = data.unique_window || "1 day";
+        const sessionWindow = data.session_window || "30 minutes";
+        return \`<div class="metric-row"><span>Unique visitors (last \${esc(uniqueWindow)})</span><strong>\${esc(data.unique_visitors ?? 0)}</strong></div>
+                <div class="metric-row"><span>Sessions (per \${esc(sessionWindow)})</span><strong>\${esc(data.sessions ?? 0)}</strong></div>\`;
+      }
+
+      /**
+       * Renders the per-store rollup.
+       *
+       * \`client_ref\` is the identifier the user types per store, so it is user
+       * data from a Referer-adjacent source: it passes through esc() like every
+       * other record field. The caveat above this table is static server
+       * markup, so it is already on the page before a row renders.
+       */
+      function renderClients(clients) {
+        if (!clients || clients.length === 0) {
+          return "<tr><td colspan=\\"3\\" style=\\"color:#94a3b8;\\">No client identifiers yet — set one on a link to see store-level visitors.</td></tr>";
+        }
+        return clients.map((c) => \`<tr>
+          <td><span class="code">\${esc(c.client_ref)}</span></td>
+          <td>\${esc(c.unique_visitors)}</td>
+          <td>\${esc(c.sessions)}</td>
+        </tr>\`).join("");
+      }
 
       /**
        * Escapes a value for interpolation into innerHTML or a double-quoted
@@ -441,21 +536,55 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         const empty = document.getElementById("links-empty");
         const tbody = document.getElementById("links-body");
         const count = document.getElementById("link-count");
+        const clientsCard = document.getElementById("clients-card");
+        const clientsBody = document.getElementById("clients-body");
 
         loading.style.display = "";
         table.style.display = "none";
         empty.style.display = "none";
+        clientsCard.style.display = "none";
 
         try {
-          const res = await window.__api("GET", "/api/links");
-          if (!res || !res.ok) throw new Error("Failed to load links");
-          const links = await res.json();
+          // Two endpoints, two fetches: the links collection and the
+          // per-client_ref rollup. They used to be ONE response, which meant
+          // GET /api/links had to wrap its array in an object to carry the
+          // rollup — a shape change that broke every caller expecting the
+          // original array. The rollup keeps its metrics and its panel; it just
+          // has its own URL now.
+          //
+          // Fetched together so the panel and the table still arrive in one
+          // paint. A failure in EITHER one fails the load, because the previous
+          // behaviour was also all-or-nothing and a half-rendered dashboard is
+          // harder to trust than an error message.
+          const [linksRes, clientsRes] = await Promise.all([
+            window.__api("GET", "/api/links"),
+            window.__api("GET", "/api/clients/metrics"),
+          ]);
+          if (!linksRes || !linksRes.ok) throw new Error("Failed to load links");
+          if (!clientsRes || !clientsRes.ok) throw new Error("Failed to load client metrics");
+
+          const links = await linksRes.json();
+          // An array is the documented contract for /api/links. If that ever
+          // changes again the dashboard says so rather than rendering an empty
+          // table that looks like "you have no links".
+          if (!Array.isArray(links)) throw new Error("Unexpected /api/links response shape");
+
+          // The rollup panel degrades to nothing rather than failing: an empty
+          // list is its own honest meaning ("no store has recorded traffic"),
+          // and there is no figure here that a wrong zero would fake.
+          const clientsPayload = await clientsRes.json();
+          const clients = Array.isArray(clientsPayload) ? clientsPayload : [];
 
           count.textContent = links.length;
 
           if (links.length === 0) {
             empty.style.display = "";
             return;
+          }
+
+          if (clients.length > 0) {
+            clientsBody.innerHTML = renderClients(clients);
+            clientsCard.style.display = "";
           }
 
           tbody.innerHTML = links.map((l) => {
@@ -480,7 +609,17 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
             </tr>
             <tr id="metrics-\${esc(l.id)}" style="display:none;">
               <td colspan="6" style="padding:0;">
-                <div class="metrics-grid" style="padding:0.75rem;">
+                <div style="padding:0.75rem;">
+                  <div class="metric-box visitors-box">
+                    <h4>Visitors (estimate)</h4>
+                    <div id="visitors-\${esc(l.id)}"><div class="loading">Loading...</div></div>
+                    <!-- Build-time interpolation of a compile-time constant:
+                         the caveat text ships inside the served markup, so it is
+                         present wherever the numbers are, not just in the docs.
+                         No user data is involved, so nothing to escape here. -->
+                    <p class="estimate-note">${VISITOR_ESTIMATE_CAVEAT}</p>
+                  </div>
+                  <div class="metrics-grid">
                   <div class="metric-box">
                     <h4>By Country</h4>
                     <div id="country-\${esc(l.id)}"><div class="loading">Loading...</div></div>
@@ -493,6 +632,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
                     <h4>By Source</h4>
                     <div id="source-\${esc(l.id)}"><div class="loading">Loading...</div></div>
                   </div>
+                </div>
                 </div>
               </td>
             </tr>\`;
@@ -549,6 +689,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         const countryDiv = document.getElementById("country-" + linkId);
         const deviceDiv = document.getElementById("device-" + linkId);
         const sourceDiv = document.getElementById("source-" + linkId);
+        const visitorsDiv = document.getElementById("visitors-" + linkId);
 
         if (countryDiv.dataset.loaded) return;
 
@@ -557,6 +698,8 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           if (!res) throw new Error("No response");
           const data = await res.json();
           if (!res.ok) throw new Error(data.error || "Server error");
+
+          visitorsDiv.innerHTML = renderVisitors(data);
 
           // The breakdown keys come from request data (a Referer header can
           // carry arbitrary text as referrer_source), so they are escaped here

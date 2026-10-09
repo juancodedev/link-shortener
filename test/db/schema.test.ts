@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { validateSchemaName, qualifyTable, buildQuery } from "../../src/db/schema";
 
+import referrerSourceMigration from "../../supabase/migrations/00003_add_referrer_source.sql?raw";
+
 // ---------------------------------------------------------------------------
 // validateSchemaName tests (REQ-R002)
 // ---------------------------------------------------------------------------
@@ -136,5 +138,26 @@ describe("buildQuery", () => {
       "CREATE SCHEMA IF NOT EXISTS {schema}",
     );
     expect(result).toBe('CREATE SCHEMA IF NOT EXISTS "tenant_a7f3"');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Analytics migration tests
+// ---------------------------------------------------------------------------
+
+describe("00003_add_referrer_source migration", () => {
+  it("adds referrer_source to analytics.link_clicks", () => {
+    expect(referrerSourceMigration).toContain("referrer_source");
+    expect(referrerSourceMigration).toMatch(
+      /ALTER\s+TABLE\s+(IF\s+NOT\s+EXISTS\s+)?analytics\.link_clicks/i,
+    );
+    expect(referrerSourceMigration).toMatch(/ADD\s+COLUMN/i);
+  });
+
+  it("targets the shared analytics table, not a per-tenant schema", () => {
+    // Per-tenant links tables are unrelated; referrer_source belongs only to
+    // the shared click-tracking table written by the tracker.
+    expect(referrerSourceMigration).not.toMatch(/tenant_\w+\.link_clicks/i);
+    expect(referrerSourceMigration).toContain("analytics.link_clicks");
   });
 });

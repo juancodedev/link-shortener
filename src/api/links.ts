@@ -19,6 +19,25 @@ interface LinkRow {
   created_at: string;
 }
 
+/** One GROUP BY bucket from the click aggregate, with its row count. */
+interface ClickGroupRow {
+  country_code: string | null;
+  device_type: string | null;
+  referrer_source: string | null;
+  count: number | string;
+}
+
+/** A single recent click as rendered in the dashboard activity list. */
+interface RecentClickRow {
+  country_code: string | null;
+  device_type: string | null;
+  referrer: string | null;
+  created_at: string;
+}
+
+/** How many recent clicks the dashboard activity list shows. */
+const RECENT_CLICK_LIMIT = 10;
+
 /** Maximum number of active links per tenant on the free tier. */
 const MAX_ACTIVE_LINKS = 30;
 
@@ -308,57 +327,79 @@ export const linkClicks: Handler<{
   const tenant = c.get("tenant");
   const linkId = c.req.param("id")!;
 
-  const rows = await withClient(c.env, async (client) => {
+  const result = await withClient(c.env, async (client) => {
     const table = qualifyTable(tenant.schemaName, "links");
     const linkRes = await client.query<{ id: string }>(
       `SELECT id FROM ${table} WHERE id = $1`, [linkId],
     );
     if (linkRes.rows.length === 0) return null;
 
-    // Try with referrer_source first, fall back if column doesn't exist yet
+    // --- Aggregate across ALL clicks for this link (unbounded) ---
+    // One grouped query instead of downloading every click row; the three
+    // by_* maps and the total are folded from the buckets below.
+    // Try with referrer_source first, fall back if column doesn't exist yet.
+    let groups: ClickGroupRow[];
     try {
-      const r = await client.query<{
-        country_code: string | null; device_type: string | null; referrer: string | null;
-        referrer_source: string | null; created_at: string;
-      }>(
-        `SELECT country_code, device_type, referrer, referrer_source, created_at
-         FROM analytics.link_clicks WHERE link_id = $1 ORDER BY created_at DESC LIMIT 50`,
+      const r = await client.query<ClickGroupRow>(
+        `SELECT country_code, device_type, referrer_source, COUNT(*)::int AS count
+         FROM analytics.link_clicks
+         WHERE link_id = $1
+         GROUP BY country_code, device_type, referrer_source`,
         [linkId],
       );
-      return r.rows;
+      groups = r.rows;
     } catch {
-      const r = await client.query<{
-        country_code: string | null; device_type: string | null; referrer: string | null; created_at: string;
-      }>(
-        `SELECT country_code, device_type, referrer, created_at
-         FROM analytics.link_clicks WHERE link_id = $1 ORDER BY created_at DESC LIMIT 50`,
+      const r = await client.query<Omit<ClickGroupRow, "referrer_source"> & { referrer_source?: string | null }>(
+        `SELECT country_code, device_type, COUNT(*)::int AS count
+         FROM analytics.link_clicks
+         WHERE link_id = $1
+         GROUP BY country_code, device_type`,
         [linkId],
       );
-      return r.rows.map((row) => ({ ...row, referrer_source: "Direct" as string | null }));
+      groups = r.rows.map((row) => ({ ...row, referrer_source: "Direct" as string | null }));
     }
+
+    // --- Recent-N window for the dashboard activity list ---
+    // referrer_source is not projected here, so this stays valid whether or
+    // not the column exists yet.
+    const recentRes = await client.query<RecentClickRow>(
+      `SELECT country_code, device_type, referrer, created_at
+       FROM analytics.link_clicks
+       WHERE link_id = $1
+       ORDER BY created_at DESC
+       LIMIT ${RECENT_CLICK_LIMIT}`,
+      [linkId],
+    );
+
+    return { groups, recent: recentRes.rows };
   });
 
-  if (rows === null) throw new NotFoundError("Link not found", "not_found");
+  if (result === null) throw new NotFoundError("Link not found", "not_found");
 
   const byCountry: Record<string, number> = {};
   const byDevice: Record<string, number> = {};
   const bySource: Record<string, number> = {};
+  let total = 0;
 
-  for (const r of rows) {
-    const c = r.country_code ?? "Unknown";
-    byCountry[c] = (byCountry[c] || 0) + 1;
-    const d = r.device_type ?? "Unknown";
-    byDevice[d] = (byDevice[d] || 0) + 1;
-    const s = r.referrer_source ?? "Direct";
-    bySource[s] = (bySource[s] || 0) + 1;
+  for (const g of result.groups) {
+    // COUNT(*)::int already yields a number; Number() keeps the fold correct
+    // if a driver returns the count as a string.
+    const n = Number(g.count);
+    total += n;
+    const cc = g.country_code ?? "Unknown";
+    byCountry[cc] = (byCountry[cc] || 0) + n;
+    const d = g.device_type ?? "Unknown";
+    byDevice[d] = (byDevice[d] || 0) + n;
+    const s = g.referrer_source ?? "Direct";
+    bySource[s] = (bySource[s] || 0) + n;
   }
 
   return c.json({
-    total: rows.length,
+    total,
     by_country: byCountry,
     by_device: byDevice,
     by_source: bySource,
-    recent: rows.slice(0, 10).map((r) => ({
+    recent: result.recent.map((r) => ({
       country: r.country_code ?? "Unknown",
       device: r.device_type ?? "Unknown",
       referrer: r.referrer ?? "Direct",

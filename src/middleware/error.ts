@@ -1,5 +1,6 @@
-import type { MiddlewareHandler } from "hono";
-import type { HonoVars } from "../types/env";
+import type { ErrorHandler } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
+import type { AppEnv, HonoVars } from "../types/env";
 
 // ---------------------------------------------------------------------------
 // Custom error classes with HTTP status codes
@@ -86,62 +87,111 @@ export class DatabaseError extends AppError {
 }
 
 // ---------------------------------------------------------------------------
-// Error-handling middleware
+// Error mapping (pure)
+// ---------------------------------------------------------------------------
+
+/** The `{ error, code }` payload returned to the client. */
+export interface ErrorBody {
+  error: string;
+  code: string;
+}
+
+/** Fully resolved outcome for a thrown value. */
+export interface MappedError {
+  status: number;
+  body: ErrorBody;
+  /** Error class name, or `"unknown_error"` for non-`Error` throws. */
+  type: string;
+  /** Message for the log only — never for the response body of a 500. */
+  message: string;
+}
+
+/**
+ * Maps a thrown value to its HTTP status and response body.
+ *
+ * Known `AppError` subclasses map to their declared status; anything else is
+ * an opaque 500. Pure — no logging, no context, no I/O — so the mapping is
+ * directly unit-testable and cannot accidentally leak a stack trace.
+ */
+export function mapError(err: unknown): MappedError {
+  if (err instanceof AppError) {
+    return {
+      status: err.status,
+      body: { error: err.message, code: err.code },
+      type: err.name,
+      message: err.message,
+    };
+  }
+
+  return {
+    status: 500,
+    body: { error: "internal_error", code: "internal_error" },
+    type: "unknown_error",
+    message: err instanceof Error ? err.message : String(err),
+  };
+}
+
+/**
+ * Builds the structured log entry for a mapped error.
+ *
+ * No stack traces and no PII, per REQ-O001. `tenantSlug` is included only when
+ * the caller managed to read it off the context.
+ */
+export function buildErrorLog(
+  mapped: MappedError,
+  tenantSlug?: string,
+): Record<string, unknown> {
+  const logEntry: Record<string, unknown> = {
+    event: "error",
+    status: mapped.status,
+    type: mapped.type,
+    message: mapped.message,
+    code: mapped.body.code,
+  };
+
+  if (tenantSlug) {
+    logEntry.tenant = tenantSlug;
+  }
+
+  return logEntry;
+}
+
+// ---------------------------------------------------------------------------
+// Hono error handler
 // ---------------------------------------------------------------------------
 
 /**
- * Outermost error-handling middleware.
+ * Application-wide error handler, installed via `app.onError`.
  *
- * Wraps all route handlers. Catches any thrown error and:
+ * This MUST be an `onError` handler rather than `app.use("*", ...)`: Hono's
+ * `compose` installs its own `catch` on the frame that invokes the throwing
+ * handler, so an `await next()` middleware never observes a downstream throw —
+ * Hono's built-in handler converts it to a 500 `text/plain` response one frame
+ * below the middleware.
+ *
+ * On every throw this:
  * - Maps known `AppError` subclasses to their HTTP status codes
  * - Logs the error as structured JSON (no stack traces, no PII)
  * - Returns a consistent `{ error, code }` JSON body
  *
- * Unknown errors → 500 with generic message (no stack traces leaked).
+ * It never returns the bare `Error`; Hono would then print the raw stack.
  */
-export const errorHandler: MiddlewareHandler<{
+export const errorHandler: ErrorHandler<{
+  Bindings: AppEnv;
   Variables: HonoVars;
-}> = async (c, next) => {
+}> = (err, c) => {
+  const mapped = mapError(err as unknown);
+
+  // Tenant context may be absent (e.g. the throw happened before the tenant
+  // middleware ran). Reading it must never make error reporting throw.
+  let tenantSlug: string | undefined;
   try {
-    await next();
-    return;
-  } catch (err) {
-    // Determine status and code
-    let status: number;
-    let errorMessage: string;
-    let errorCode: string;
-
-    if (err instanceof AppError) {
-      status = err.status;
-      errorMessage = err.message;
-      errorCode = err.code;
-    } else {
-      status = 500;
-      errorMessage = "internal_error";
-      errorCode = "internal_error";
-    }
-
-    // Structured JSON log — never include stack traces or PII
-    const logEntry: Record<string, unknown> = {
-      event: "error",
-      status,
-      type: err instanceof AppError ? err.name : "unknown_error",
-      message: err instanceof Error ? err.message : String(err),
-      code: errorCode,
-    };
-
-    // Add tenant context if available (from previously set middleware)
-    try {
-      const tenant = c.get("tenant");
-      if (tenant) {
-        logEntry.tenant = tenant.tenantSlug;
-      }
-    } catch {
-      // Context lookup might fail if tenant middleware hasn't run
-    }
-
-    console.error(JSON.stringify(logEntry));
-
-    return c.json({ error: errorMessage, code: errorCode }, status as 200);
+    tenantSlug = c.get("tenant")?.tenantSlug;
+  } catch {
+    // Ignore — the log just goes out without tenant context.
   }
+
+  console.error(JSON.stringify(buildErrorLog(mapped, tenantSlug)));
+
+  return c.json(mapped.body, mapped.status as ContentfulStatusCode);
 };

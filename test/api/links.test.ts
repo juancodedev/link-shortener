@@ -27,7 +27,7 @@ vi.mock("../../src/utils/short-code", () => ({
 import { withClient } from "../../src/db/client";
 import { setCachedUrl } from "../../src/cache/shortcode";
 import { generateShortCode } from "../../src/utils/short-code";
-import { createLink } from "../../src/api/links";
+import { createLink, linkClicks } from "../../src/api/links";
 
 // ---------------------------------------------------------------------------
 // Helper: mock Hono context
@@ -37,6 +37,7 @@ function mockContext(overrides: {
   tenant?: { tenantSlug: string; schemaName: string; tenantId: string };
   body?: object;
   jsonParseError?: boolean;
+  params?: Record<string, string>;
 } = {}) {
   const waitUntilFn = vi.fn();
   const jsonFn = vi.fn().mockImplementation(
@@ -52,6 +53,9 @@ function mockContext(overrides: {
       json: overrides.jsonParseError
         ? vi.fn().mockRejectedValue(new Error("Invalid JSON"))
         : vi.fn().mockResolvedValue(overrides.body ?? {}),
+      param: vi.fn().mockImplementation(
+        (key: string) => overrides.params?.[key] ?? "",
+      ),
     },
     env: {
       SHORT_URL_DOMAIN: "short.link",
@@ -331,5 +335,220 @@ describe("createLink handler", () => {
     await createLink(c as any);
 
     expect(jsonFn).toHaveBeenCalledWith(expect.any(Object), 201);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// linkClicks handler tests (GET /api/links/:id/clicks)
+// ---------------------------------------------------------------------------
+
+interface ClickRow {
+  country_code: string | null;
+  device_type: string | null;
+  referrer: string | null;
+  referrer_source: string | null;
+  created_at: string;
+}
+
+/**
+ * Mocks the analytics query surface for linkClicks.
+ *
+ * `grouped` stands in for the unbounded GROUP BY aggregate (all rows for the
+ * link); `recent` stands in for the recent-N projection. Each SQL text selects
+ * which one is returned, so the handler's query shape drives the mock rather
+ * than a brittle call-order sequence.
+ */
+function mockClicksDb(opts: {
+  grouped: unknown[];
+  recent: unknown[];
+  linkExists?: boolean;
+  aggregateThrows?: boolean;
+}) {
+  const calls: string[] = [];
+
+  vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) =>
+    fn({
+      query: vi.fn().mockImplementation(async (sql: string) => {
+        calls.push(sql);
+        if (sql.includes("SELECT id FROM")) {
+          return { rows: opts.linkExists === false ? [] : [{ id: "link-uuid" }] };
+        }
+        if (sql.includes("GROUP BY")) {
+          // Only the referrer_source variant fails; the fallback shape still works
+          if (opts.aggregateThrows && sql.includes("referrer_source")) {
+            throw new Error('column "referrer_source" does not exist');
+          }
+          return { rows: opts.grouped };
+        }
+        return { rows: opts.recent };
+      }),
+    }),
+  );
+
+  return { calls };
+}
+
+/** Builds one recent-click row with sensible defaults. */
+function recentClick(over: Partial<ClickRow> = {}): ClickRow {
+  return {
+    country_code: "US",
+    device_type: "desktop",
+    referrer: "https://news.example",
+    referrer_source: "News",
+    created_at: "2026-01-01T00:00:00Z",
+    ...over,
+  };
+}
+
+describe("linkClicks handler", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(setCachedUrl).mockResolvedValue(undefined);
+  });
+
+  it("reports the true total and aggregates every row when clicks exceed 50", async () => {
+    // Aggregate view of 137 clicks — far beyond any single fetch window.
+    mockClicksDb({
+      grouped: [
+        { country_code: "US", device_type: "mobile", referrer_source: "News", count: 120 },
+        { country_code: "AR", device_type: "desktop", referrer_source: null, count: 17 },
+      ],
+      recent: Array.from({ length: 10 }, (_, i) =>
+        recentClick({ created_at: `2026-02-0${i + 1}T00:00:00Z` }),
+      ),
+    });
+
+    const { c, jsonFn } = mockContext({ params: { id: "link-uuid" } });
+
+    await linkClicks(c as any);
+
+    expect(jsonFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        total: 137,
+        by_country: { US: 120, AR: 17 },
+        by_device: { mobile: 120, desktop: 17 },
+        // null referrer_source falls back to "Direct"
+        by_source: { News: 120, Direct: 17 },
+      }),
+    );
+  });
+
+  it("never issues a bounded SELECT over analytics.link_clicks for the breakdowns", async () => {
+    const { calls } = mockClicksDb({
+      grouped: [{ country_code: "US", device_type: "mobile", referrer_source: "News", count: 2 }],
+      recent: [recentClick()],
+    });
+
+    const { c } = mockContext({ params: { id: "link-uuid" } });
+    await linkClicks(c as any);
+
+    const clickQueries = calls.filter((q) => q.includes("analytics.link_clicks"));
+    expect(clickQueries.length).toBeGreaterThan(0);
+    for (const q of clickQueries) {
+      // The old defect capped breakdowns at 50 rows via `LIMIT 50`
+      expect(q).not.toContain("LIMIT 50");
+    }
+  });
+
+  it("returns only the recent-N window in the recent array", async () => {
+    mockClicksDb({
+      grouped: [
+        { country_code: "US", device_type: "mobile", referrer_source: "News", count: 100 },
+      ],
+      recent: Array.from({ length: 3 }, (_, i) =>
+        recentClick({ created_at: `2026-03-0${i + 1}T00:00:00Z` }),
+      ),
+    });
+
+    const { c, jsonFn } = mockContext({ params: { id: "link-uuid" } });
+    await linkClicks(c as any);
+
+    expect(jsonFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        total: 100,
+        recent: [
+          { country: "US", device: "desktop", referrer: "https://news.example", time: "2026-03-01T00:00:00Z" },
+          { country: "US", device: "desktop", referrer: "https://news.example", time: "2026-03-02T00:00:00Z" },
+          { country: "US", device: "desktop", referrer: "https://news.example", time: "2026-03-03T00:00:00Z" },
+        ],
+      }),
+    );
+  });
+
+  it("applies Unknown fallbacks for null country and device on the aggregate", async () => {
+    mockClicksDb({
+      grouped: [
+        { country_code: null, device_type: null, referrer_source: "Social", count: 5 },
+      ],
+      recent: [recentClick({ country_code: null, device_type: null, referrer: null })],
+    });
+
+    const { c, jsonFn } = mockContext({ params: { id: "link-uuid" } });
+    await linkClicks(c as any);
+
+    expect(jsonFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        total: 5,
+        by_country: { Unknown: 5 },
+        by_device: { Unknown: 5 },
+        by_source: { Social: 5 },
+        recent: [
+          { country: "Unknown", device: "Unknown", referrer: "Direct", time: "2026-01-01T00:00:00Z" },
+        ],
+      }),
+    );
+  });
+
+  it("coerces the aggregate count to a number regardless of driver string encoding", async () => {
+    // The pg driver returns COUNT(*) as a string unless explicitly cast
+    mockClicksDb({
+      grouped: [
+        { country_code: "US", device_type: "mobile", referrer_source: "News", count: "3" },
+      ],
+      recent: [],
+    });
+
+    const { c, jsonFn } = mockContext({ params: { id: "link-uuid" } });
+    await linkClicks(c as any);
+
+    expect(jsonFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        total: 3,
+        by_country: { US: 3 },
+        by_device: { mobile: 3 },
+        by_source: { News: 3 },
+      }),
+    );
+  });
+
+  it("falls back to an aggregate without referrer_source when the column is missing", async () => {
+    mockClicksDb({
+      aggregateThrows: true,
+      grouped: [
+        { country_code: "US", device_type: "mobile", count: 9 },
+      ],
+      recent: [recentClick()],
+    });
+
+    const { c, jsonFn } = mockContext({ params: { id: "link-uuid" } });
+    await linkClicks(c as any);
+
+    expect(jsonFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        total: 9,
+        by_country: { US: 9 },
+        by_device: { mobile: 9 },
+        // every row degrades to "Direct" when the column is unavailable
+        by_source: { Direct: 9 },
+      }),
+    );
+  });
+
+  it("throws NotFound when the link does not exist", async () => {
+    mockClicksDb({ linkExists: false, grouped: [], recent: [] });
+
+    const { c } = mockContext({ params: { id: "missing-link" } });
+
+    await expect(linkClicks(c as any)).rejects.toThrow("not found");
   });
 });

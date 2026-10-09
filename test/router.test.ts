@@ -9,13 +9,20 @@ vi.mock("../src/db/client", () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// Mock cache modules (both exports used by the router-mounted handlers)
+// Mock cache modules (every export used by the router-mounted handlers)
+//
+// The factories must mirror what src/handlers/redirect.ts and src/api/links.ts
+// actually import. A missing export resolves to undefined, so the first call
+// site that reaches it throws and the handler turns it into a 503.
 // ---------------------------------------------------------------------------
 
 vi.mock("../src/cache/shortcode", () => ({
   setCachedUrl: vi.fn().mockResolvedValue(undefined),
   invalidateCachedUrl: vi.fn().mockResolvedValue(undefined),
   getCachedUrl: vi.fn().mockResolvedValue(null),
+  getCachedRegistryEntry: vi.fn().mockResolvedValue(null),
+  setCachedRegistryEntry: vi.fn().mockResolvedValue(undefined),
+  invalidateCachedRegistryEntry: vi.fn().mockResolvedValue(undefined),
 }));
 
 // ---------------------------------------------------------------------------
@@ -79,7 +86,45 @@ function mockClientThrows(err: unknown) {
   return vi.mocked(withClient).mockRejectedValue(err);
 }
 
-/** app.request() needs an executionCtx because deleteLink uses waitUntil. */
+/**
+ * Mocks the two-statement cold path behind `GET /:code`: the registry join, then
+ * the link row in whatever tenant schema the registry named. Routing by SQL shape
+ * keeps the tests readable when a statement is added.
+ */
+function mockFlatShortLinkDb(opts: { links?: unknown[] } = {}) {
+  const sql: string[] = [];
+
+  vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) =>
+    fn({
+      query: vi.fn().mockImplementation(async (text: string) => {
+        sql.push(text);
+        if (text.includes("short_code_registry")) {
+          return {
+            rows: [
+              {
+                short_code: "VHvuSpP",
+                link_id: "link-uuid",
+                tenant_id: "tenant-uuid",
+                schema_name: "tenant_a7f3",
+                salt: "salt-abc",
+                subdomain: "acme",
+              },
+            ],
+            rowCount: 1,
+          };
+        }
+        const links = opts.links ?? [
+          { id: "link-uuid", original_url: "https://example.com", is_active: true, expires_at: null },
+        ];
+        return { rows: links, rowCount: links.length };
+      }),
+    }),
+  );
+
+  return { sql };
+}
+
+/** app.request() needs an executionCtx because several handlers use waitUntil. */
 const executionCtx = { waitUntil: vi.fn(), passThroughOnException: vi.fn() };
 
 /** Minimal Hono context for calling deleteLink directly. */
@@ -97,6 +142,102 @@ function mockDeleteContext() {
   };
   return { c, waitUntilFn };
 }
+
+// ---------------------------------------------------------------------------
+// Flat short links (T3.3, T3.4)
+//
+// Public links are now `/:code`. That makes Hono's precedence rule load-bearing:
+// a static single-segment route must win over the catch-all, or /dashboard would
+// be read as a short code and 404. These tests assert the routing outcome, not
+// the registration order, because outcome is the contract.
+// ---------------------------------------------------------------------------
+
+describe("flat short link routing", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("registers the catch-all short-code route", () => {
+    const app = createApp(testEnv());
+
+    expect(app.routes.some((r) => r.path === "/:code")).toBe(true);
+  });
+
+  it("registers the catch-all after every static route it must not shadow", () => {
+    const app = createApp(testEnv());
+    const paths = app.routes.map((r) => r.path);
+    const catchAll = paths.indexOf("/:code");
+
+    for (const path of ["/signup", "/login", "/reset-password", "/auth/callback", "/dashboard", "/"]) {
+      expect(paths.indexOf(path)).toBeGreaterThanOrEqual(0);
+      expect(paths.indexOf(path)).toBeLessThan(catchAll);
+    }
+  });
+
+  it("no longer registers the tenant-scoped /r/:tenant/:code route", async () => {
+    const app = createApp(testEnv());
+
+    expect(app.routes.some((r) => r.path === "/r/:tenant/:code")).toBe(false);
+
+    // And nothing answers it: a removed route is a 404, not a redirect.
+    const res = await app.request(
+      "/r/links/VHvuSpP",
+      { method: "GET" },
+      testEnv(),
+      executionCtx,
+    );
+
+    expect(res.status).toBe(404);
+  });
+
+  it.each([
+    ["/dashboard", "Dashboard"],
+    ["/login", "Log In"],
+    ["/signup", "Sign Up"],
+    ["/reset-password", "Reset Password"],
+  ])("%s still reaches its own handler instead of /:code", async (path, marker) => {
+    // These handlers render HTML and touch no database, so an unmocked env is
+    // enough: if /:code had won, the request would have gone to the registry.
+    const app = createApp(testEnv());
+    const res = await app.request(path, { method: "GET" }, testEnv(), executionCtx);
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain(marker);
+    expect(withClient).not.toHaveBeenCalled();
+  });
+
+  it("routes an unregistered single-segment path to /:code", async () => {
+    mockFlatShortLinkDb();
+
+    const app = createApp(testEnv());
+    const res = await app.request(
+      "/VHvuSpP",
+      { method: "GET" },
+      testEnv(),
+      executionCtx,
+    );
+
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("https://example.com");
+  });
+
+  it("404s an unknown single-segment path without querying a tenant schema", async () => {
+    const { sql } = mockFlatShortLinkDb({ links: [] });
+
+    const app = createApp(testEnv());
+    const res = await app.request(
+      "/nosuchcod",
+      { method: "GET" },
+      testEnv(),
+      executionCtx,
+    );
+
+    expect(res.status).toBe(404);
+    // Resolution went through the registry and stopped there.
+    expect(sql[0]).toContain("public.short_code_registry");
+    expect(sql.some((s) => s.includes(".links"))).toBe(false);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Router route-registration tests

@@ -1,10 +1,16 @@
 import type { Handler } from "hono";
 import type { AppEnv, HonoVars } from "../types/env";
 import { withClient } from "../db/client";
-import { qualifyTable } from "../db/schema";
+import { qualifyTable, validateSchemaName } from "../db/schema";
 import { validateUrl } from "../utils/validation";
 import { generateShortCode } from "../utils/short-code";
-import { setCachedUrl, invalidateCachedUrl } from "../cache/shortcode";
+import {
+  setCachedUrl,
+  invalidateCachedUrl,
+  getCachedRegistryEntry,
+  setCachedRegistryEntry,
+  invalidateCachedRegistryEntry,
+} from "../cache/shortcode";
 import { LimitError, ValidationError, NotFoundError } from "../middleware/error";
 
 // ---------------------------------------------------------------------------
@@ -58,6 +64,118 @@ const MAX_CLIENT_REF_LENGTH = 200;
 const MAX_RETRIES = 3;
 
 // ---------------------------------------------------------------------------
+// Short-code registry (public.short_code_registry)
+//
+// Public links are flat: `https://<domain>/<code>`. The tenant slug that used to
+// sit in the path WAS the isolation boundary — it selected the schema, and the
+// link query ran inside it. With the slug gone, nothing maps a bare code back to
+// a tenant, so the registry is the resolution step that replaces it.
+//
+// Consequence worth stating plainly: no tenant schema may be read before this
+// table has answered. A registry miss is a 404, not a "try every schema".
+//
+// The read and the writes both live here rather than in the redirect handler so
+// there is one module that owns the table's shape. See
+// `supabase/migrations/00005_short_code_registry.sql`.
+// ---------------------------------------------------------------------------
+
+/** Everything a redirect needs after resolving a short code to its tenant. */
+export interface ResolvedRegistryEntry {
+  tenantId: string;
+  schemaName: string;
+  tenantSalt: string;
+  subdomain: string;
+  linkId: string | null;
+}
+
+/**
+ * Turns a bare short code into the tenant that owns it.
+ *
+ * Order: KV cache → registry join → warm cache.
+ *
+ * The join is against `public.tenants` rather than reading the registry alone
+ * because the caller needs `schema_name`, `salt`, and `subdomain`, and all three
+ * come from the tenant row. The `is_active` predicate means a deactivated tenant
+ * resolves to a miss rather than to a schema that should no longer serve.
+ *
+ * @returns The resolved entry, or null when the code is unknown or its tenant
+ *          is not active.
+ * @throws On database failure, or on a registry row whose schema_name fails
+ *         validateSchemaName — the caller turns both into a 503.
+ */
+export async function resolveRegistryEntry(
+  env: AppEnv,
+  shortCode: string,
+): Promise<ResolvedRegistryEntry | null> {
+  const cached = await getCachedRegistryEntry(env, shortCode);
+  if (cached !== null) {
+    // Throws on a poisoned cache value, same as on a poisoned row.
+    validateSchemaName(cached.schemaName);
+    return cached;
+  }
+
+  const rows = await withClient(env, async (client) => {
+    const res = await client.query<{
+      short_code: string;
+      link_id: string | null;
+      tenant_id: string;
+      schema_name: string;
+      salt: string;
+      subdomain: string;
+    }>(
+      `SELECT r.short_code,
+              r.link_id,
+              t.id       AS tenant_id,
+              t.schema_name,
+              t.salt,
+              t.subdomain
+         FROM public.short_code_registry r
+         JOIN public.tenants t ON t.id = r.tenant_id
+        WHERE r.short_code = $1
+          AND t.is_active = true
+        LIMIT 1`,
+      [shortCode],
+    );
+    return res.rows;
+  });
+
+  if (rows.length === 0) return null;
+
+  const row = rows[0]!;
+  // schema_name is interpolated into SQL downstream, so it is validated here at
+  // the boundary rather than at each use.
+  validateSchemaName(row.schema_name);
+
+  const entry: ResolvedRegistryEntry = {
+    tenantId: row.tenant_id,
+    schemaName: row.schema_name,
+    tenantSalt: row.salt,
+    subdomain: row.subdomain,
+    linkId: row.link_id,
+  };
+
+  await setCachedRegistryEntry(env, shortCode, entry);
+
+  return entry;
+}
+
+/**
+ * Removes a short code from the registry.
+ *
+ * Called from deleteLink. Tenant removal does NOT come through here — that is
+ * covered by `ON DELETE CASCADE` and handled in `deprovision.ts`, where the
+ * removed codes are also returned for KV invalidation.
+ */
+async function deleteRegistryRow(env: AppEnv, shortCode: string): Promise<void> {
+  await withClient(env, async (client) => {
+    await client.query(
+      `DELETE FROM public.short_code_registry WHERE short_code = $1`,
+      [shortCode],
+    );
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
 
@@ -69,8 +187,9 @@ const MAX_RETRIES = 3;
  * 2. Read tenant schema from context (tenant middleware — user-profile-based)
  * 3. Validate `original_url` body param against open-redirect rules
  * 4. Count active links for the tenant; reject if at free-tier limit (30)
- * 5. Generate a 7-char short code via nanoid
- * 6. INSERT with ON CONFLICT DO NOTHING; retry up to 3x on collision
+ * 5. Generate a 7-char short code, rejecting reserved app routes
+ * 6. INSERT the link with ON CONFLICT DO NOTHING, then claim the code in
+ *    `public.short_code_registry`; retry up to 3x on either collision
  * 7. Warm KV cache via ctx.waitUntil
  * 8. Return 201 with the created link resource
  *
@@ -151,37 +270,77 @@ export const createLink: Handler<{
     );
   }
 
-  // --- 4. Generate short code with collision retry ---
+  // --- 4. Create the link and claim its short code globally ---
+  //
+  // Two different uniqueness rules apply and both must hold:
+  //
+  //   `{tenant}.links.short_code` UNIQUE — per-tenant. It rejects a code this
+  //     tenant already uses, but says nothing about other tenants. Two tenants
+  //     CAN both hold 'abc1234'.
+  //   `short_code_registry.short_code` PRIMARY KEY — global. Under the flat URL
+  //     there is no slug to disambiguate with, so this is the constraint that
+  //     actually makes a code resolvable.
+  //
+  // The registry insert therefore runs immediately after the link insert, and
+  // its result is checked rather than assumed. If the claim loses, the link row
+  // we just wrote is deleted again — returning it would hand the user a code
+  // that resolves to somebody else's link — and the attempt is retried.
   const now = new Date().toISOString();
   let linkRow: LinkRow | null = null;
+  let claimedShortCode: string | null = null;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     const shortCode = generateShortCode();
 
-    const rows = await withClient(env, async (client) => {
+    const created = await withClient(env, async (client) => {
       const table = qualifyTable(tenant.schemaName, "links");
-      const res = await client.query<LinkRow>(
+
+      const inserted = await client.query<LinkRow>(
         `INSERT INTO ${table} (original_url, short_code, title, expires_at, client_ref)
          VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (short_code) DO NOTHING
          RETURNING id, short_code, original_url, title, client_ref, created_at`,
         [original_url, shortCode, title ?? null, expires_at ?? null, client_ref ?? null],
       );
-      return res.rows;
+
+      // No rows → this tenant already uses the code. Retry with a new one.
+      if (inserted.rows.length === 0) return null;
+
+      const link = inserted.rows[0]!;
+
+      // Claim the code globally. ON CONFLICT DO NOTHING rather than an upsert:
+      // overwriting would silently steal another tenant's code and repoint
+      // their live short link at this URL.
+      const claim = await client.query<{ short_code: string }>(
+        `INSERT INTO public.short_code_registry (short_code, tenant_id, link_id)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (short_code) DO NOTHING
+         RETURNING short_code`,
+        [shortCode, tenant.tenantId, link.id],
+      );
+
+      if (claim.rows.length === 0) {
+        // Taken by another tenant. Undo our own row — best effort, and a failure
+        // here is surfaced by the caller's error mapping rather than swallowed.
+        await client.query(`DELETE FROM ${table} WHERE id = $1`, [link.id]);
+        return null;
+      }
+
+      return link;
     });
 
-    if (rows.length > 0) {
-      linkRow = rows[0]!;
+    if (created !== null) {
+      linkRow = created;
+      claimedShortCode = shortCode;
       break;
     }
-    // rowCount 0 → collision; retry
   }
 
   if (!linkRow) {
     throw new Error("link_creation_failed");
   }
 
-  // --- 5. Warm KV cache (fire-and-forget via waitUntil) ---
+  // --- 5. Warm KV caches (fire-and-forget via waitUntil) ---
   const cachePayload = JSON.stringify({
     url: linkRow.original_url,
     isActive: true,
@@ -205,8 +364,21 @@ export const createLink: Handler<{
     ),
   );
 
+  // The registry entry is warmed too: it is the first lookup every redirect
+  // performs, so leaving it cold would put the join on the critical path of the
+  // link's very first hit.
+  c.executionCtx.waitUntil(
+    setCachedRegistryEntry(env, claimedShortCode ?? linkRow.short_code, {
+      tenantId: tenant.tenantId,
+      schemaName: tenant.schemaName,
+      tenantSalt: tenant.tenantSalt ?? "",
+      subdomain: tenant.tenantSlug,
+      linkId: linkRow.id,
+    }).catch(() => {}),
+  );
+
   // --- 6. Build response ---
-  const shortUrl = `https://${env.SHORT_URL_DOMAIN}/r/${tenant.tenantSlug}/${linkRow.short_code}`;
+  const shortUrl = `https://${env.SHORT_URL_DOMAIN}/${linkRow.short_code}`;
 
   return c.json(
     {
@@ -244,7 +416,7 @@ export const listLinks: Handler<{
     return res.rows;
   });
 
-  const domain = `https://${c.env.SHORT_URL_DOMAIN}/r/${tenant.tenantSlug}`;
+  const domain = `https://${c.env.SHORT_URL_DOMAIN}`;
 
   return c.json(
     rows.map((r) => ({
@@ -372,9 +544,37 @@ export const deleteLink: Handler<{
 
   if (rows.length === 0) throw new NotFoundError("Link not found", "not_found");
 
-  // Invalidate KV cache
+  const { short_code: shortCode } = rows[0]!;
+
+  // Remove the registry row. A failure here is logged rather than propagated:
+  // the destructive step has already committed, and what is left behind is a
+  // registry row pointing at a tenant whose links table no longer holds the
+  // code. That resolves to a 404 — which is the correct user-visible outcome —
+  // so failing the whole request would trade a correct 200 for a misleading 500
+  // over a leaked row that no longer affects anyone.
+  try {
+    await deleteRegistryRow(c.env, shortCode);
+  } catch (err) {
+    console.error(
+      JSON.stringify({
+        event: "error",
+        type: "registry_delete_failed",
+        message: err instanceof Error ? err.message : String(err),
+        tenant: tenant.tenantSlug,
+        code: shortCode,
+      }),
+    );
+  }
+
+  // Both KV entries are invalidated regardless: the registry entry (the code no
+  // longer resolves) and the short-URL entry (its destination is gone). The
+  // second one matters most — it is what would keep serving a deleted link for
+  // up to 24h.
   c.executionCtx.waitUntil(
-    invalidateCachedUrl(c.env, tenant.tenantSlug, rows[0]!.short_code).catch(() => {}),
+    Promise.all([
+      invalidateCachedRegistryEntry(c.env, shortCode),
+      invalidateCachedUrl(c.env, tenant.tenantSlug, shortCode),
+    ]).catch(() => {}),
   );
 
   return c.json({ ok: true });

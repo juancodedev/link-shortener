@@ -1,9 +1,9 @@
 import type { Handler } from "hono";
 import type { AppEnv, HonoVars } from "../types/env";
 import { withClient } from "../db/client";
-import { validateSchemaName, qualifyTable } from "../db/schema";
-import { getCachedUrl } from "../cache/shortcode";
-import { getCachedTenant, setCachedTenant } from "../cache/tenant";
+import { qualifyTable } from "../db/schema";
+import { setCachedUrl, getCachedUrl } from "../cache/shortcode";
+import { resolveRegistryEntry } from "../api/links";
 import { trackClick } from "../analytics/tracker";
 
 // ---------------------------------------------------------------------------
@@ -19,72 +19,26 @@ interface CachedLink {
 }
 
 // ---------------------------------------------------------------------------
-// Tenant resolution (inline, not via middleware)
-// ---------------------------------------------------------------------------
-
-interface ResolvedTenant {
-  tenantId: string;
-  schemaName: string;
-  tenantSalt: string;
-}
-
-/**
- * Resolves a tenant slug to its database schema name.
- * Checks KV cache first; on miss, queries `public.tenants` via Hyperdrive
- * and populates the cache asynchronously.
- *
- * @returns Resolved tenant info, or null if the tenant is not found.
- * @throws On database connection failures.
- */
-async function resolveTenant(
-  env: AppEnv,
-  slug: string,
-): Promise<ResolvedTenant | null> {
-  // 1. Try KV cache (now stores JSON with tenantId + schemaName + tenantSalt)
-  const cached = await getCachedTenant(env, slug);
-  if (cached !== null && cached.tenantId) {
-    try {
-      validateSchemaName(cached.schemaName);
-      return { tenantId: cached.tenantId, schemaName: cached.schemaName, tenantSalt: cached.tenantSalt };
-    } catch {
-      // Invalid cached value — fall through to DB
-    }
-  }
-
-  // 2. Cache miss or incomplete — query public.tenants via Hyperdrive
-  const rows = await withClient(env, async (client) => {
-    const res = await client.query<{ id: string; schema_name: string; salt: string }>(
-      `SELECT id, schema_name, salt FROM public.tenants WHERE subdomain = $1 AND is_active = true LIMIT 1`,
-      [slug],
-    );
-    return res.rows;
-  });
-
-  if (rows.length === 0) return null;
-
-  const { id: tenantId, schema_name: schemaName, salt: tenantSalt } = rows[0]!;
-  validateSchemaName(schemaName);
-
-  // 3. Populate KV cache with full tenant info
-  await setCachedTenant(env, slug, { schemaName, tenantId, tenantSalt }).catch(() => {});
-
-  return { tenantId, schemaName, tenantSalt };
-}
-
-// ---------------------------------------------------------------------------
 // Redirect handler
 // ---------------------------------------------------------------------------
 
 /**
- * Handles `GET /r/:tenant/:code`.
+ * Handles `GET /:code` — the flat public short link.
  *
  * Flow:
- * 1. Extract tenant slug + short code from URL path params
- * 2. Resolve tenant → schema name (KV → Hyperdrive fallback)
- * 3. Look up short code in KV cache (24h TTL)
- * 4. KV hit → validate isActive/expiresAt from JSON blob → 302 or 410
- * 5. KV miss → query `{schema}.links` via Hyperdrive → 302 (cache) or 404/410
- * 6. On 302 → fire-and-forget click tracking via ctx.waitUntil
+ * 1. Read the short code from the single path parameter
+ * 2. Resolve the owning tenant through `public.short_code_registry`
+ *    (registry KV → registry join → warm cache)
+ * 3. A registry miss is a 404 — no tenant schema is touched, and no other
+ *    schema is tried
+ * 4. Look up the link in the short-URL KV cache (24h TTL)
+ * 5. KV hit → validate isActive/expiresAt from JSON blob → 302 or 410
+ * 6. KV miss → query `{schema}.links` → 302 (cache) or 404/410
+ * 7. On 302 → fire-and-forget click tracking via ctx.waitUntil
+ *
+ * The tenant used to come from the URL (`/r/:tenant/:code`) and was the
+ * isolation boundary. It now comes from the registry, which is why step 2 must
+ * happen before step 6 can build a schema-qualified table name.
  *
  * Never destructures `ctx` — uses `c.executionCtx.waitUntil()` directly.
  */
@@ -94,43 +48,43 @@ export const redirectHandler: Handler<{
 }> = async (c) => {
   const startTime = Date.now();
 
-  // Extract params
-  const slug = c.req.param("tenant") ?? "";
   const code = c.req.param("code") ?? "";
 
-  if (!slug || !code) {
+  if (!code) {
     return c.json({ error: "not_found" }, 404);
   }
 
   const env = c.env;
 
-  // --- 1. Resolve tenant ---
-  let tenant: ResolvedTenant | null;
+  // --- 1. Resolve the tenant that owns this short code ---
+  let entry: Awaited<ReturnType<typeof resolveRegistryEntry>> = null;
   try {
-    tenant = await resolveTenant(env, slug);
+    entry = await resolveRegistryEntry(env, code);
   } catch (err) {
     console.error(
       JSON.stringify({
         event: "error",
-        type: "db_query_failed",
+        type: "registry_query_failed",
         message: err instanceof Error ? err.message : String(err),
-        tenant: slug,
         code,
       }),
     );
     return c.json({ error: "service_unavailable" }, 503);
   }
 
-  if (!tenant) {
-    return c.json({ error: "tenant_not_found" }, 404);
+  if (!entry) {
+    return c.json({ error: "not_found" }, 404);
   }
 
-  const { schemaName, tenantId, tenantSalt } = tenant;
+  const { schemaName, tenantId, tenantSalt, subdomain } = entry;
+  const slug = subdomain;
 
   // --- 2. KV cache lookup ---
   let cacheHit = false;
   let redirectUrl: string | null = null;
-  let linkId = "";
+  // Prefer the registry's link id: it is the value the registry was written with
+  // and it saves a round trip when the short-URL entry is cold.
+  let linkId = entry.linkId ?? "";
 
   try {
     const cached = await getCachedUrl(env, slug, code);
@@ -206,23 +160,7 @@ export const redirectHandler: Handler<{
       };
 
       c.executionCtx.waitUntil(
-        (async () => {
-          try {
-            await env.SHORT_URL_CACHE.put(`${slug}:${code}`, JSON.stringify(cacheValue), {
-              expirationTtl: 86400,
-            });
-          } catch (err) {
-            console.error(
-              JSON.stringify({
-                event: "error",
-                type: "kv_write_failed",
-                message: err instanceof Error ? err.message : String(err),
-                tenant: slug,
-                code,
-              }),
-            );
-          }
-        })(),
+        setCachedUrl(env, slug, code, JSON.stringify(cacheValue)),
       );
     } catch (err) {
       console.error(

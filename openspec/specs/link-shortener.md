@@ -197,17 +197,24 @@ The system MUST default `is_active` to `true` on creation, MUST honor an optiona
 
 #### REQ-R001: Path-Based Redirect with Caching
 **Priority**: P0
-The system MUST handle `GET /r/{tenant}/{code}` by extracting the tenant slug, resolving the schema name via KV cache (1h TTL), looking up the short code in KV cache (24h TTL) for the original URL, and returning HTTP 301. On cache miss it MUST query the database via Hyperdrive and populate both caches.
+The system MUST handle `GET /r/{tenant}/{code}` by extracting the tenant slug, resolving the schema name via KV cache (1h TTL), looking up the short code in KV cache (24h TTL) for the original URL, and returning HTTP 302. On cache miss it MUST query the database via Hyperdrive and populate both caches.
+
+The redirect status MUST be 302, not 301. A 301 is a permanent redirect that clients and CDNs cache with no TTL and no revocation mechanism, which would make two other requirements unsatisfiable: the 24h short-code KV TTL above, and REQ-L003's requirement to prevent redirects for inactive or expired links. Under 301, any client that had already cached the redirect would keep following it after the link was deactivated or expired, permanently. Under 302 the client re-requests, the Worker re-reads KV, and lifecycle changes take effect within the 24h TTL window. This matters most for the NFC-tag use case, where the tag publisher cannot control the scanning client's cache. Request volume does not meaningfully increase, since KV already absorbs traffic for 24h and the database is consulted only on a cache miss. The usual SEO rationale for 301 does not apply here: destinations are Google Maps review links and affiliate links, which are not indexed pages and carry no authority to consolidate.
 
 ##### Scenario: Full cache hit
 - **GIVEN** tenant slug "acme" maps to schema "tenant_a7f3" in KV, and code "abc123" maps to a URL in KV
 - **WHEN** `GET /r/acme/abc123` is requested
-- **THEN** the system returns HTTP 301 to the original URL and fires `ctx.waitUntil(trackClick)`
+- **THEN** the system returns HTTP 302 to the original URL and fires `ctx.waitUntil(trackClick)`
 
 ##### Scenario: KV miss, database hit
 - **GIVEN** short code "abc123" is not in KV but exists in the tenant schema
 - **WHEN** `GET /r/acme/abc123` is requested
-- **THEN** the system queries Hyperdrive, returns HTTP 301, populates KV, and fires click tracking
+- **THEN** the system queries Hyperdrive, returns HTTP 302, populates KV, and fires click tracking
+
+##### Scenario: Deactivation takes effect despite a prior redirect
+- **GIVEN** a client previously followed a 302 redirect for an active link, and the link is later set to `is_active = false`
+- **WHEN** the client requests the short URL again
+- **THEN** the system returns HTTP 410 Gone rather than redirecting, because the response was cacheable rather than permanent
 
 ##### Scenario: Code not found
 - **GIVEN** short code "xyz999" does not exist in KV or the tenant schema
@@ -273,7 +280,7 @@ The system MUST record click events asynchronously via `ctx.waitUntil()`. It MUS
 ##### Scenario: Analytics failure does not block redirect
 - **GIVEN** the analytics database is unreachable
 - **WHEN** `trackClick` throws an error
-- **THEN** the error is logged as structured JSON and the redirect response is sent with HTTP 301 regardless
+- **THEN** the error is logged as structured JSON and the redirect response is sent with HTTP 302 regardless
 
 ##### Scenario: Referrer query params stripped
 - **GIVEN** the request has `Referer: https://google.com/search?q=test`
@@ -385,7 +392,7 @@ The system MUST emit structured JSON log entries for every request. Redirect log
 ##### Scenario: Redirect log on cache hit
 - **GIVEN** a redirect at 3ms with a KV cache hit
 - **WHEN** the response is sent
-- **THEN** the log contains `{ "event": "redirect", "code": "abc123", "tenant": "acme", "cacheHit": true, "durationMs": 3, "status": 301 }`
+- **THEN** the log contains `{ "event": "redirect", "code": "abc123", "tenant": "acme", "cacheHit": true, "durationMs": 3, "status": 302 }`
 
 ##### Scenario: Error log on database failure
 - **GIVEN** a Hyperdrive query fails with "connection refused"
@@ -413,7 +420,7 @@ The system MUST degrade gracefully: analytics failures MUST NOT block redirects,
 ##### Scenario: Analytics swallows errors
 - **GIVEN** the analytics database is unreachable
 - **WHEN** `ctx.waitUntil(trackClick)` fails
-- **THEN** the redirect still returns HTTP 301; the error is logged; the user is unaffected
+- **THEN** the redirect still returns HTTP 302; the error is logged; the user is unaffected
 
 ##### Scenario: KV unavailable
 - **GIVEN** the KV namespace returns an error

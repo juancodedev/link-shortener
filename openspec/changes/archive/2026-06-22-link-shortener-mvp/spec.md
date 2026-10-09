@@ -1,5 +1,37 @@
 # Spec: Link Shortener MVP
 
+> ## AMENDMENT — redirect status changed from 301 to 302 (post-archive)
+>
+> The body of this document is preserved exactly as written for the June 2026
+> MVP and still says **HTTP 301** in the redirect requirements (REQ-R001,
+> REQ-A001, REQ-O001, REQ-O002). That text is left untouched on purpose: it is
+> the historical record of what was decided and shipped at the time.
+>
+> **The operative requirement is now HTTP 302**, corrected in the live spec at
+> `openspec/specs/link-shortener.md` (REQ-R001 and its scenarios). This
+> amendment note is not itself normative — read the live spec for the
+> requirement that applies.
+>
+> **Why the original 301 decision was wrong:**
+>
+> 1. **It contradicts this document's own 24h KV TTL** for the short-code
+>    cache. A 301 is cached permanently by browsers and CDNs with no TTL
+>    mechanism, so the cache can never be brought back in sync with the
+>    database.
+> 2. **It contradicts REQ-L003**, which requires that inactive or expired links
+>    stop redirecting. Under 301, a client that already cached the redirect
+>    would keep following it after the link was deactivated or expired —
+>    permanently, with no way to revoke it. Under 302 the client re-requests
+>    and the lifecycle change takes effect within the 24h TTL window.
+> 3. **The NFC-tag use case is the worst case for 301**, because the tag
+>    publisher cannot control the scanning client's cache.
+>
+> The usual SEO rationale for 301 does not apply: destinations are Google Maps
+> review links and affiliate links, which are not indexed pages and carry no
+> authority to consolidate. Request volume does not meaningfully change under
+> 302, since KV already absorbs traffic for 24h and the database is queried
+> only on a cache miss.
+
 ## ADDED: Tenant Provisioning
 **Status**: proposed
 **Priority**: P0

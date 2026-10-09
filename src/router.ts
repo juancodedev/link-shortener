@@ -35,8 +35,10 @@ const userProfileTenantMiddleware = createUserProfileTenantMiddleware();
 export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: HonoVars }> {
   const app = new Hono<{ Bindings: AppEnv; Variables: HonoVars }>();
 
-  // Outermost error handler wraps all routes
-  app.use("*", errorHandler);
+  // Outermost error handler. Registered via `onError` (not `app.use("*")`):
+  // Hono catches a handler's throw on that handler's own frame, so an
+  // `await next()` middleware never sees it.
+  app.onError(errorHandler);
 
   // -----------------------------------------------------------------------
   // Public routes
@@ -65,6 +67,7 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
   app.post("/api/links", auth, userProfileTenantMiddleware, createLink);
   app.get("/api/links", auth, userProfileTenantMiddleware, listLinks);
   app.patch("/api/links/:id", auth, userProfileTenantMiddleware, updateLink);
+  app.delete("/api/links/:id", auth, userProfileTenantMiddleware, deleteLink);
   app.get("/api/links/:id/clicks", auth, userProfileTenantMiddleware, linkClicks);
 
   // Tenant provisioning: auth required, no tenant middleware (tenant doesn't exist yet)

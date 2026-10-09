@@ -2,9 +2,9 @@
 
 A multi-tenant URL shortener with per-link click analytics, deployed on Cloudflare Workers.
 
-Short links are tenant-scoped (`/r/{tenant}/{code}`), redirect with a 302, and record every
-click — country, device type, and referrer source — into a dedicated analytics schema. Each
-tenant lives in its own PostgreSQL schema so link data is physically isolated.
+Short links are flat (`/{code}`), redirect with a 302, and record every click — country, device
+type, and referrer source — into a dedicated analytics schema. Each tenant lives in its own
+PostgreSQL schema so link data is physically isolated.
 
 ---
 
@@ -60,17 +60,47 @@ Set with `wrangler secret put`; declared in `.dev.vars.example`.
 A tenant is a namespace, not a login. Each one owns a dedicated PostgreSQL schema named by its
 `schema_name`, and every link row lives inside it.
 
-Tenant resolution on a redirect is a two-step lookup:
+Because a short link carries no tenant slug, the tenant is resolved from
+`public.short_code_registry` — one row per short code, mapping it to a `tenant_id`. Resolution
+is a KV lookup first, then this join:
 
-1. Read `slug` from the KV `TENANT_CACHE` namespace.
-2. On a miss, `SELECT ... FROM public.tenants WHERE subdomain = $1 AND is_active = true`,
-   then warm the cache.
+```sql
+SELECT r.short_code, r.link_id, t.schema_name, t.salt, t.subdomain
+  FROM public.short_code_registry r
+  JOIN public.tenants t ON t.id = r.tenant_id
+ WHERE r.short_code = $1 AND t.is_active = true
+```
 
-`TenantResolutionStrategy` (`src/middleware/tenant.ts`) exists as a seam, but
-`PathBasedStrategy` is currently the only implementation — there is no subdomain DNS routing
-and no API-key auth.
+That registry is the isolation boundary now. **No tenant schema is read before it answers**, and
+a miss is a 404 — the handler never falls back to trying another schema. `short_code` is the
+table's PRIMARY KEY, which is what makes a code globally unique: `{tenant}.links.short_code` is
+only UNIQUE within one schema, so two tenants could each hold `abc1234` and the flat URL would
+have nothing to disambiguate them. Link creation claims the code with
+`ON CONFLICT DO NOTHING` and retries with a fresh one when the claim is lost.
+
+`TenantResolutionStrategy` (`src/middleware/tenant.ts`) exists as a seam for the API side, but
+`PathBasedStrategy` is its only implementation — there is no subdomain DNS routing and no
+API-key auth. The redirect path does not use it.
 
 To create a tenant, register a Supabase Auth user first, then `POST /api/tenants`.
+
+### Reserved routes
+
+Short codes occupy the whole first path segment, so a generated code must never equal a
+registered single-segment app route:
+
+```
+signup
+login
+dashboard
+reset-password
+```
+
+The list lives in `src/utils/short-code.ts` and `generateShortCode()` regenerates rather than
+return one of them. A test derives the single-segment routes from `createApp(...).routes` and
+fails if the two disagree, so adding an app route without reserving it breaks the build rather
+than silently shadowing every future link with that code. `/` and multi-segment routes need no
+entry — `/:code` cannot match them.
 
 ## Routes
 
@@ -78,14 +108,21 @@ To create a tenant, register a Supabase Auth user first, then `POST /api/tenants
 | --- | --- | --- | --- |
 | `GET` | `/` | public | Landing page |
 | `GET` | `/signup`, `/login`, `/reset-password`, `/auth/callback` | public | Auth pages |
-| `GET` | `/r/:tenant/:code` | public | Redirect + click tracking |
 | `GET` | `/dashboard` | client-side only | Dashboard HTML |
+| `GET` | `/:code` | public | Redirect + click tracking (registered last) |
 | `POST` | `/api/links` | JWT + tenant | Create link |
 | `GET` | `/api/links` | JWT + tenant | List links |
 | `PATCH` | `/api/links/:id` | JWT + tenant | Update link |
+| `DELETE` | `/api/links/:id` | JWT + tenant | Delete link |
 | `GET` | `/api/links/:id/clicks` | JWT + tenant | Per-link analytics |
 | `POST` | `/api/tenants` | JWT | Create tenant |
 | `DELETE` | `/api/tenants/:id` | JWT (owner) | Delete tenant |
+
+`/:code` is registered last and is a genuine catch-all: Hono resolves a registered static route
+ahead of a single-segment parameter, which is what keeps the auth pages and `/dashboard`
+reachable. The old `/r/:tenant/:code` form was removed — it had no remaining dependents, and
+keeping it would have left two live link formats and the slug-based resolution path in place.
+Links in the old format no longer resolve; print new ones.
 
 The `/dashboard` route ships fully rendered HTML to any caller and defers authentication to
 client-side Supabase session checks in the browser.
@@ -117,13 +154,18 @@ rendered as expandable panels in the dashboard.
 ## Data model
 
 ```
-public.tenants        id, schema_name, display_name, subdomain, owner_id, salt, is_active
-public.profiles       id → auth.users, tenant_id, role (owner | admin | member)
-analytics.link_clicks id, tenant_id, link_id, ip_hash, user_agent_summary,
-                      device_type, country_code, referrer, referrer_source, created_at
-{tenant}.links        id, original_url, short_code, title, clicks_count,
-                      is_active, expires_at, created_at, updated_at
+public.tenants           id, schema_name, display_name, subdomain, owner_id, salt, is_active
+public.profiles          id → auth.users, tenant_id, role (owner | admin | member)
+public.short_code_registry short_code (PK) → tenants.id (CASCADE), link_id, created_at
+analytics.link_clicks    id, tenant_id, link_id, ip_hash, user_agent_summary,
+                         device_type, country_code, referrer, referrer_source, created_at
+{tenant}.links           id, original_url, short_code, title, clicks_count,
+                         is_active, expires_at, created_at, updated_at
 ```
+
+`public.short_code_registry` has RLS enabled with **no** policy for `anon`/`authenticated`, so a
+browser holding the publishable key cannot enumerate every tenant's short codes in one query.
+The Worker connects as the service role and bypasses RLS.
 
 The `{tenant}.links` DDL lives in two places that must stay in sync:
 `supabase/migrations/tenant/001_create_links.sql` and the inline template in
@@ -131,14 +173,18 @@ The `{tenant}.links` DDL lives in two places that must stay in sync:
 
 Active links are capped at **30 per tenant** (`MAX_ACTIVE_LINKS` in `src/api/links.ts`).
 
-Short codes are random (`nanoid`), not caller-supplied.
+Short codes are random (`nanoid`), not caller-supplied, and never equal a reserved app route.
 
 ## Caching
 
 | Namespace | Key | Value | TTL |
 | --- | --- | --- | --- |
 | `SHORT_URL_CACHE` | `{slug}:{code}` | `{url, isActive, expiresAt, linkId}` | 24 h |
+| `SHORT_URL_CACHE` | `reg:{code}` | `{tenantId, schemaName, tenantSalt, subdomain, linkId}` | 24 h |
 | `TENANT_CACHE` | `{slug}` | `{schemaName, tenantId, tenantSalt}` | 1 h |
+
+The `reg:` prefix keeps the registry entry from ever colliding with a `{slug}:{code}` short-URL
+entry; a slug cannot contain `:`.
 
 A redirect served from `SHORT_URL_CACHE` skips the link query but still records the click.
 Cache entries are invalidated on link update/delete and tenant deprovision — but **not** when
@@ -169,9 +215,10 @@ openspec/         archived MVP spec, design, and verification report
 npm test
 ```
 
-Vitest runs against the Workers pool. Redirect lifecycle (cache hit and miss), tenant
-resolution, and tracker error handling are covered. Device-type detection, referrer-source
-categorization, click-count consistency across cache paths, and the dashboard handler are not.
+Vitest runs against the Workers pool. Redirect lifecycle (cache hit and miss), short-code
+registry resolution, the reserved-route/router consistency guard, and tracker error handling are
+covered. Device-type detection, referrer-source categorization, click-count consistency across
+cache paths, and the dashboard handler are not.
 
 There is no CI workflow — `.github/` does not exist. Typecheck and tests run locally only.
 

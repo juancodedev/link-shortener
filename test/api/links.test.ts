@@ -12,10 +12,32 @@ vi.mock("../../src/db/client", () => ({
 // Mock cache modules
 // ---------------------------------------------------------------------------
 
+// Every export src/api/links.ts imports. A missing one resolves to undefined,
+// so the first call site that reaches it throws a TypeError that has nothing to
+// do with what the test is about.
 vi.mock("../../src/cache/shortcode", () => ({
   setCachedUrl: vi.fn().mockResolvedValue(undefined),
   invalidateCachedUrl: vi.fn().mockResolvedValue(undefined),
+  getCachedUrl: vi.fn().mockResolvedValue(null),
+  getCachedRegistryEntry: vi.fn().mockResolvedValue(null),
+  setCachedRegistryEntry: vi.fn().mockResolvedValue(undefined),
+  invalidateCachedRegistryEntry: vi.fn().mockResolvedValue(undefined),
 }));
+
+/**
+ * Re-applies the cache mock implementations after `vi.resetAllMocks()`.
+ *
+ * resetAllMocks strips implementations, not just recorded calls, so every
+ * `beforeEach` that resets has to put them back — otherwise the handler calls
+ * `.catch()` on undefined and fails for reasons unrelated to the assertion.
+ */
+function mockCacheDefaults() {
+  vi.mocked(setCachedUrl).mockResolvedValue(undefined);
+  vi.mocked(invalidateCachedUrl).mockResolvedValue(undefined);
+  vi.mocked(getCachedRegistryEntry).mockResolvedValue(null);
+  vi.mocked(setCachedRegistryEntry).mockResolvedValue(undefined);
+  vi.mocked(invalidateCachedRegistryEntry).mockResolvedValue(undefined);
+}
 
 // ---------------------------------------------------------------------------
 // Mock short-code generator
@@ -26,9 +48,15 @@ vi.mock("../../src/utils/short-code", () => ({
 }));
 
 import { withClient } from "../../src/db/client";
-import { setCachedUrl, invalidateCachedUrl } from "../../src/cache/shortcode";
+import {
+  setCachedUrl,
+  invalidateCachedUrl,
+  getCachedRegistryEntry,
+  setCachedRegistryEntry,
+  invalidateCachedRegistryEntry,
+} from "../../src/cache/shortcode";
 import { generateShortCode } from "../../src/utils/short-code";
-import { createLink, linkClicks, listLinks, updateLink } from "../../src/api/links";
+import { createLink, deleteLink, linkClicks, listLinks, updateLink } from "../../src/api/links";
 import { ValidationError } from "../../src/middleware/error";
 
 // ---------------------------------------------------------------------------
@@ -105,7 +133,7 @@ describe("createLink handler", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(generateShortCode).mockReturnValue("abc1234");
-    vi.mocked(setCachedUrl).mockResolvedValue(undefined);
+    mockCacheDefaults();
   });
 
   it("returns 201 with the created link resource (happy path)", async () => {
@@ -118,20 +146,23 @@ describe("createLink handler", () => {
           query: vi.fn().mockResolvedValueOnce({ rows: [{ count: "5" }], rowCount: 1 }),
         });
       }
-      // INSERT query: success
+      // INSERT query (success), then the registry claim on the same client.
+      // Both statements share one mock, so the results are queued in order.
       return fn({
-        query: vi.fn().mockResolvedValueOnce({
-          rows: [
-            {
-              id: "link-uuid",
-              short_code: "abc1234",
-              original_url: "https://example.com",
-              title: null,
-              created_at: "2026-01-01T00:00:00Z",
-            },
-          ],
-          rowCount: 1,
-        }),
+        query: vi.fn()
+          .mockResolvedValueOnce({
+            rows: [
+              {
+                id: "link-uuid",
+                short_code: "abc1234",
+                original_url: "https://example.com",
+                title: null,
+                created_at: "2026-01-01T00:00:00Z",
+              },
+            ],
+            rowCount: 1,
+          })
+          .mockResolvedValueOnce({ rows: [{ short_code: "abc1234" }], rowCount: 1 }),
       });
     });
 
@@ -146,7 +177,8 @@ describe("createLink handler", () => {
         id: "link-uuid",
         short_code: "abc1234",
         original_url: "https://example.com",
-        short_url: "https://short.link/r/acme/abc1234",
+        // Flat: no /r/ prefix and no tenant slug in the public URL
+        short_url: "https://short.link/abc1234",
         title: null,
         expires_at: null,
       }),
@@ -200,20 +232,22 @@ describe("createLink handler", () => {
           query: vi.fn().mockResolvedValueOnce({ rows: [], rowCount: 0 }),
         });
       }
-      // callCount === 3: Second INSERT: success
+      // Second attempt: link INSERT succeeds, then the registry claim succeeds
       return fn({
-        query: vi.fn().mockResolvedValueOnce({
-          rows: [
-            {
-              id: "link-uuid",
-              short_code: "xyz5678",
-              original_url: "https://example.com",
-              title: null,
-              created_at: "2026-01-01T00:00:00Z",
-            },
-          ],
-          rowCount: 1,
-        }),
+        query: vi.fn()
+          .mockResolvedValueOnce({
+            rows: [
+              {
+                id: "link-uuid",
+                short_code: "xyz5678",
+                original_url: "https://example.com",
+                title: null,
+                created_at: "2026-01-01T00:00:00Z",
+              },
+            ],
+            rowCount: 1,
+          })
+          .mockResolvedValueOnce({ rows: [{ short_code: "xyz5678" }], rowCount: 1 }),
       });
     });
 
@@ -269,19 +303,22 @@ describe("createLink handler", () => {
           query: vi.fn().mockResolvedValueOnce({ rows: [{ count: "0" }], rowCount: 1 }),
         });
       }
+      // Link INSERT succeeds, then the registry claim succeeds
       return fn({
-        query: vi.fn().mockResolvedValueOnce({
-          rows: [
-            {
-              id: "link-uuid",
-              short_code: "abc1234",
-              original_url: "https://example.com",
-              title: "My Link",
-              created_at: "2026-01-01T00:00:00Z",
-            },
-          ],
-          rowCount: 1,
-        }),
+        query: vi.fn()
+          .mockResolvedValueOnce({
+            rows: [
+              {
+                id: "link-uuid",
+                short_code: "abc1234",
+                original_url: "https://example.com",
+                title: "My Link",
+                created_at: "2026-01-01T00:00:00Z",
+              },
+            ],
+            rowCount: 1,
+          })
+          .mockResolvedValueOnce({ rows: [{ short_code: "abc1234" }], rowCount: 1 }),
       });
     });
 
@@ -314,19 +351,22 @@ describe("createLink handler", () => {
           query: vi.fn().mockResolvedValueOnce({ rows: [{ count: "29" }], rowCount: 1 }),
         });
       }
+      // Link INSERT succeeds, then the registry claim succeeds
       return fn({
-        query: vi.fn().mockResolvedValueOnce({
-          rows: [
-            {
-              id: "link-uuid",
-              short_code: "abc1234",
-              original_url: "https://example.com",
-              title: null,
-              created_at: "2026-01-01T00:00:00Z",
-            },
-          ],
-          rowCount: 1,
-        }),
+        query: vi.fn()
+          .mockResolvedValueOnce({
+            rows: [
+              {
+                id: "link-uuid",
+                short_code: "abc1234",
+                original_url: "https://example.com",
+                title: null,
+                created_at: "2026-01-01T00:00:00Z",
+              },
+            ],
+            rowCount: 1,
+          })
+          .mockResolvedValueOnce({ rows: [{ short_code: "abc1234" }], rowCount: 1 }),
       });
     });
 
@@ -405,7 +445,7 @@ function recentClick(over: Partial<ClickRow> = {}): ClickRow {
 describe("linkClicks handler", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    vi.mocked(setCachedUrl).mockResolvedValue(undefined);
+    mockCacheDefaults();
   });
 
   it("reports the true total and aggregates every row when clicks exceed 50", async () => {
@@ -591,7 +631,7 @@ describe("client_ref on createLink", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(generateShortCode).mockReturnValue("abc1234");
-    vi.mocked(setCachedUrl).mockResolvedValue(undefined);
+    mockCacheDefaults();
   });
 
   it("persists and returns client_ref when supplied", async () => {
@@ -607,6 +647,7 @@ describe("client_ref on createLink", () => {
           created_at: "2026-01-01T00:00:00Z",
         },
       ],
+      [{ short_code: "abc1234" }], // registry claim
     ]);
 
     const { c, jsonFn } = mockContext({
@@ -639,6 +680,7 @@ describe("client_ref on createLink", () => {
           created_at: "2026-01-01T00:00:00Z",
         },
       ],
+      [{ short_code: "abc1234" }], // registry claim
     ]);
 
     const { c, jsonFn } = mockContext({
@@ -680,8 +722,7 @@ describe("client_ref on updateLink", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(generateShortCode).mockReturnValue("abc1234");
-    vi.mocked(setCachedUrl).mockResolvedValue(undefined);
-    vi.mocked(invalidateCachedUrl).mockResolvedValue(undefined);
+    mockCacheDefaults();
   });
 
   it("updates client_ref on an existing link via the existing PATCH path", async () => {
@@ -815,5 +856,261 @@ describe("client_ref in listLinks", () => {
     expect(jsonFn).toHaveBeenCalledWith([
       expect.objectContaining({ client_ref: null }),
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Flat short URLs (T5.1)
+//
+// The link format is now `https://<domain>/<code>`. The tenant slug is gone
+// from the URL, so a slug in `short_url` would advertise a dead route.
+// ---------------------------------------------------------------------------
+
+/** A created-link row as the INSERT ... RETURNING returns it. */
+function createdLink(over: Record<string, unknown> = {}) {
+  return {
+    id: "link-uuid",
+    short_code: "abc1234",
+    original_url: "https://example.com",
+    title: null,
+    client_ref: null,
+    created_at: "2026-01-01T00:00:00Z",
+    ...over,
+  };
+}
+
+describe("flat short_url output (T5.1)", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(generateShortCode).mockReturnValue("abc1234");
+    vi.mocked(setCachedUrl).mockResolvedValue(undefined);
+    mockCacheDefaults();
+  });
+
+  it("createLink returns the flat short_url with no path prefix or tenant slug", async () => {
+    mockRecordingDb([[{ count: "2" }], [createdLink()], [{ short_code: "abc1234" }]]);
+
+    const { c, jsonFn } = mockContext({ body: { original_url: "https://example.com" } });
+
+    await createLink(c as any);
+
+    expect(jsonFn).toHaveBeenCalledWith(
+      expect.objectContaining({ short_url: "https://short.link/abc1234" }),
+      201,
+    );
+  });
+
+  it("listLinks returns a flat short_url for every row", async () => {
+    mockRecordingDb([
+      [createdLink({ id: "link-1", short_code: "aaa1111" }), createdLink({ id: "link-2", short_code: "bbb2222" })],
+    ]);
+
+    const { c, jsonFn } = mockContext();
+
+    await listLinks(c as any);
+
+    expect(jsonFn).toHaveBeenCalledWith([
+      expect.objectContaining({ short_url: "https://short.link/aaa1111" }),
+      expect.objectContaining({ short_url: "https://short.link/bbb2222" }),
+    ]);
+
+    // The tenant slug is not part of the URL any more.
+    const body = jsonFn.mock.calls[0]![0] as { short_url: string }[];
+    for (const link of body) expect(link.short_url).not.toContain("/r/");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Registry maintenance (T4.1 — T4.3)
+//
+// Under flat links the registry IS the routing table. A link that exists in a
+// tenant schema but not in `public.short_code_registry` is unreachable, and a
+// registry row for a deleted link is a 404 that survives until the KV entry
+// expires. So both directions are asserted here, not assumed.
+// ---------------------------------------------------------------------------
+
+describe("registry insert on createLink (T4.1)", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(generateShortCode).mockReturnValue("abc1234");
+    vi.mocked(setCachedUrl).mockResolvedValue(undefined);
+    mockCacheDefaults();
+  });
+
+  it("inserts a registry row binding the short code to the tenant and link", async () => {
+    const calls = mockRecordingDb([[{ count: "0" }], [createdLink()], [{ short_code: "abc1234" }]]);
+
+    const { c } = mockContext({ body: { original_url: "https://example.com" } });
+
+    await createLink(c as any);
+
+    const claim = calls.find((q) => /INSERT INTO public\.short_code_registry/i.test(q.sql))!;
+    expect(claim).toBeDefined();
+    expect(claim.params).toEqual(["abc1234", "tenant-uuid", "link-uuid"]);
+  });
+
+  it("claims the code with ON CONFLICT DO NOTHING so the primary key arbitrates", async () => {
+    const calls = mockRecordingDb([[{ count: "0" }], [createdLink()], [{ short_code: "abc1234" }]]);
+
+    const { c } = mockContext({ body: { original_url: "https://example.com" } });
+
+    await createLink(c as any);
+
+    const claim = calls.find((q) => /INSERT INTO public\.short_code_registry/i.test(q.sql))!;
+    expect(claim.sql).toMatch(/ON CONFLICT \(short_code\) DO NOTHING/i);
+  });
+
+  it("writes the registry row before reporting the link as created", async () => {
+    // Ordering is the invariant: a 201 whose code is not yet resolvable is a
+    // broken link handed to the user.
+    const calls = mockRecordingDb([[{ count: "0" }], [createdLink()], [{ short_code: "abc1234" }]]);
+
+    const { c } = mockContext({ body: { original_url: "https://example.com" } });
+
+    await createLink(c as any);
+
+    const insertLink = calls.findIndex((q) => /INSERT INTO "tenant/i.test(q.sql));
+    const insertRegistry = calls.findIndex((q) => /INSERT INTO public\.short_code_registry/i.test(q.sql));
+    expect(insertLink).toBeGreaterThanOrEqual(0);
+    expect(insertRegistry).toBeGreaterThan(insertLink);
+  });
+
+  it("warms the registry KV cache so the first redirect skips the join", async () => {
+    mockRecordingDb([[{ count: "0" }], [createdLink()], [{ short_code: "abc1234" }]]);
+
+    const { c, waitUntilFn } = mockContext({ body: { original_url: "https://example.com" } });
+
+    await createLink(c as any);
+
+    await Promise.all(waitUntilFn.mock.calls.map((p: Promise<unknown>) => p));
+    // Registry entry cache + short URL cache
+    expect(waitUntilFn.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("cross-tenant short-code collision (T4.1)", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(setCachedUrl).mockResolvedValue(undefined);
+    mockCacheDefaults();
+  });
+
+  it("rolls back its own link and retries when another tenant already claims the code", async () => {
+    // The failure mode this covers: `{tenant}.links.short_code` is only UNIQUE
+    // within a schema, so a second tenant CAN insert 'abc1234'. With no slug in
+    // the URL the registry primary key is the only thing that can reject it, and
+    // rejecting it must not leave an orphaned link behind.
+    const calls = mockRecordingDb([
+      [{ count: "1" }], // active-link count
+      [createdLink({ id: "link-1" })], // link INSERT succeeds
+      [], // registry claim loses to tenant B
+      [], // compensating DELETE of link-1
+      [createdLink({ id: "link-2", short_code: "xyz5678" })], // retry link INSERT
+      [{ short_code: "xyz5678" }], // registry claim wins
+    ]);
+
+    vi.mocked(generateShortCode)
+      .mockReturnValueOnce("abc1234")
+      .mockReturnValueOnce("xyz5678");
+
+    const { c, jsonFn } = mockContext({ body: { original_url: "https://example.com" } });
+
+    await createLink(c as any);
+
+    expect(jsonFn).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "link-2", short_code: "xyz5678" }),
+      201,
+    );
+
+    // The orphaned row was removed rather than left pointing nowhere.
+    const compensating = calls.find((q) => /DELETE FROM "tenant/i.test(q.sql))!;
+    expect(compensating).toBeDefined();
+    expect(compensating.params).toEqual(["link-1"]);
+  });
+
+  it("fails after exhausting retries when every code is globally taken", async () => {
+    mockRecordingDb([
+      [{ count: "1" }],
+      [createdLink({ id: "link-1" })], [], [],
+      [createdLink({ id: "link-2" })], [], [],
+      [createdLink({ id: "link-3" })], [], [],
+    ]);
+
+    vi.mocked(generateShortCode)
+      .mockReturnValueOnce("aaa1111")
+      .mockReturnValueOnce("bbb2222")
+      .mockReturnValueOnce("ccc3333");
+
+    const { c } = mockContext({ body: { original_url: "https://example.com" } });
+
+    await expect(createLink(c as any)).rejects.toThrow("link_creation_failed");
+  });
+});
+
+describe("registry removal on deleteLink (T4.2, T4.3)", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockCacheDefaults();
+  });
+
+  it("deletes the registry row for the deleted link", async () => {
+    const calls = mockRecordingDb([[{ short_code: "abc1234" }], []]);
+
+    const { c } = mockContext({ params: { id: "link-uuid" } });
+
+    await deleteLink(c as any);
+
+    const removal = calls.find((q) => /DELETE FROM public\.short_code_registry/i.test(q.sql))!;
+    expect(removal).toBeDefined();
+    expect(removal.params).toEqual(["abc1234"]);
+  });
+
+  it("invalidates both the registry and the short URL KV entries", async () => {
+    mockRecordingDb([[{ short_code: "abc1234" }], []]);
+
+    const { c, waitUntilFn } = mockContext({ params: { id: "link-uuid" } });
+
+    await deleteLink(c as any);
+
+    await Promise.all(waitUntilFn.mock.calls.map((p: Promise<unknown>) => p));
+
+    expect(invalidateCachedRegistryEntry).toHaveBeenCalledWith(expect.anything(), "abc1234");
+    expect(invalidateCachedUrl).toHaveBeenCalledWith(expect.anything(), "acme", "abc1234");
+  });
+
+  it("still invalidates the caches when the registry delete fails", async () => {
+    // The link row is already gone by this point. A registry-delete failure
+    // leaves a row that resolves to a 404 — the correct outcome — so it must
+    // not turn a successful delete into a 500, and the short-URL entry still
+    // has to be dropped or the deleted destination keeps being served.
+    vi.mocked(withClient)
+      .mockImplementationOnce(async (_env: any, fn: any) =>
+        fn({ query: vi.fn().mockResolvedValueOnce({ rows: [{ short_code: "abc1234" }], rowCount: 1 }) }),
+      )
+      .mockImplementationOnce(async () => {
+        throw new Error("registry unavailable");
+      });
+
+    const { c, jsonFn, waitUntilFn } = mockContext({ params: { id: "link-uuid" } });
+
+    await deleteLink(c as any);
+
+    expect(jsonFn).toHaveBeenCalledWith({ ok: true });
+
+    await Promise.all(waitUntilFn.mock.calls.map((p: Promise<unknown>) => p));
+    expect(invalidateCachedRegistryEntry).toHaveBeenCalledWith(expect.anything(), "abc1234");
+    expect(invalidateCachedUrl).toHaveBeenCalledWith(expect.anything(), "acme", "abc1234");
+  });
+
+  it("does not touch the registry when no link matched", async () => {
+    const calls = mockRecordingDb([[]]);
+
+    const { c, waitUntilFn } = mockContext({ params: { id: "missing-link" } });
+
+    await expect(deleteLink(c as any)).rejects.toThrow("not found");
+
+    expect(calls.some((q) => /short_code_registry/i.test(q.sql))).toBe(false);
+    expect(invalidateCachedRegistryEntry).not.toHaveBeenCalled();
+    expect(waitUntilFn).not.toHaveBeenCalled();
   });
 });

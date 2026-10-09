@@ -53,9 +53,6 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
   app.get("/reset-password", resetPasswordHandler);
   app.get("/auth/callback", authCallbackHandler);
 
-  // Redirect — tenant resolved inline inside handler
-  app.get("/r/:tenant/:code", redirectHandler);
-
   // Dashboard (authenticated via client-side Supabase session)
   app.get("/dashboard", dashboardHandler);
 
@@ -75,6 +72,22 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
 
   // Tenant deletion: auth required, ownership verified inside handler
   app.delete("/api/tenants/:id", auth, deleteTenant);
+
+  // -----------------------------------------------------------------------
+  // Catch-all short link — registered LAST, deliberately.
+  //
+  // `/:code` matches every single-segment path that no earlier route claimed,
+  // so its position is part of its contract: Hono resolves a registered static
+  // route ahead of a single-segment parameter, which is what keeps /dashboard
+  // and the auth pages working. Moving this registration above them would not
+  // change that precedence, but it would make the router read as though the
+  // catch-all could win, and it would break the ordering the test in
+  // test/router.test.ts asserts.
+  //
+  // The tenant is resolved inside the handler through
+  // public.short_code_registry, not from the path — see src/handlers/redirect.ts.
+  // -----------------------------------------------------------------------
+  app.get("/:code", redirectHandler);
 
   return app;
 }

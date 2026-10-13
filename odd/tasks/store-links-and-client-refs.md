@@ -643,3 +643,279 @@ Two things to confirm before relying on this in production:
 - **PostgreSQL version.** The epoch-division bucket works on every version, so nothing to verify
   — noted only because `date_bin()` was the obvious alternative and was rejected on exactly this
   ground.
+
+---
+
+# Phase 3 — Links at physical scale (appended 2026-10-09)
+
+## Status
+
+Approved and started. This supersedes the Phase 3 section above; read this first.
+
+## The requirement
+
+One NFC tag or QR sticker per physical location, pre-printed, each pointing at its own link. The
+tag is printed **once** and lives in the world for months. Nothing about that URL can change
+afterwards without re-printing every sticker.
+
+That constraint drives every decision below.
+
+## Design decisions
+
+### D1 — A caller-supplied slug must never be silently substituted
+
+`createLink` currently loops `for (attempt < MAX_RETRIES)` calling `generateShortCode()` on each
+collision. That is correct for a generated code and **wrong** for a caller-supplied one.
+
+If the user asks for `cafe-central` and it is taken, silently returning a link with a random code
+would mean stickers printed as `.../cafe-central` that resolve to something else. The tag is
+already in the world; there is no fixing it later.
+
+**So: with a caller-supplied slug, a collision is a `ConflictError` (409) and no retry.** The
+retry loop applies only to generated codes.
+
+### D2 — Caller-supplied slugs are rejected, not regenerated, when reserved
+
+`generateShortCode` regenerates on a reserved code because the user did not choose it. A
+caller-supplied slug that equals an app route (`dashboard`, `login`, `signup`, `reset-password`)
+would produce an unreachable link: Hono resolves the registered static route first, so the link
+silently 404s while still consuming a registry row and a quota slot.
+
+**Reject with `ValidationError`**, naming the reserved route. The existing `RESERVED_ROUTES` set is
+the single source of truth and is already importable.
+
+### D3 — The cap becomes configuration
+
+`MAX_ACTIVE_LINKS = 30` is a hardcoded "free tier" constant and blocks one link per store.
+
+Make it an environment variable with a generous default rather than deleting it: the guard against
+runaway creation has value, and a hardcoded 30 has none once real locations are involved. A tenant
+already paying should not be capped by a constant nobody can change.
+
+### D4 — Batch creation reports per item
+
+Onboarding a chain means many links in one request. A single invalid URL must not roll back the
+other nineteen — that is the whole point of batching for a CRM import.
+
+`POST /api/links/batch` returns one result per input item, each with its own status and either the
+created link or the error code. Partial success is explicit, never silent.
+
+## Validation for caller-supplied slugs
+
+| Rule | Rationale |
+|---|---|
+| 3–32 characters | 3 matches the existing slug minimum; 32 keeps QR modules small |
+| `[A-Za-z0-9_-]` only | No `/` (breaks the route), no percent-encoding surprises |
+| No leading or trailing hyphen | Avoids `/-foo` and `-` looking like a flag |
+| Not in `RESERVED_ROUTES` | D2 — would be unreachable |
+| Case-sensitive against reserved | Hono matches paths case-sensitively; `Dashboard` is free |
+
+Length matters more than it looks: every character in the slug is a character in every printed
+sticker. `cafe-central` is 12; `x7f3b2q` is 6. Both are valid, and the user picks.
+
+## Scope
+
+### In scope
+
+- T3.1 — configurable active-link cap with a generous default
+- T3.2 — caller-supplied slug, validated, with collision as 409 and reserved as 400
+- T3.3 — `POST /api/links/batch` with per-item results
+
+### Out of scope
+
+- Editing a slug after creation. A printed tag's URL is immutable by definition; a rename would
+  break stickers already in the world.
+- Bulk delete or bulk update.
+- QR image generation. The dashboard has a QR modal; generating print-ready artwork is a separate
+  piece of work.
+- Auto-generating slugs from `client_ref` or title.
+
+## Tasks
+
+- [x] **T3.1** Replace the constant with an env-var read plus a named default constant. Reject the
+      `LimitError` message's hardcoded number.
+- [x] **T3.2** Accept optional `slug` in the create body. Validate per the table above. Skip the
+      retry loop when supplied; return `ConflictError` on registry or per-tenant collision, and
+      `ValidationError` on a reserved route. `updateLink` must **not** accept `slug`.
+- [x] **T3.3** `POST /api/links/batch` in `src/router.ts` alongside the other tenant-scoped routes,
+      same middleware chain. Per-item results, partial success.
+- [x] **T3.4** Dashboard: an optional slug field on the create form, plus a copyable "print sheet"
+      entry point if that is not already reachable.
+
+## Progress
+
+Phase 3 delivered, uncommitted, for review. `pnpm run typecheck` clean. `pnpm test` →
+**430 passed / 0 failed** (baseline 383; +47 new, zero pre-existing failures reintroduced).
+
+### D1 — how the retry loop is skipped for supplied slugs only
+
+`createLink` was split into `createLinkCore` (validation, cap, insert, cache warm) plus a thin
+handler, so `POST /api/links/batch` creates items through the **same** code path and the two
+endpoints cannot drift on what a valid slug or URL is.
+
+The whole of D1 is one line:
+
+```ts
+const attempts = suppliedSlug !== null ? 1 : MAX_RETRIES;
+const shortCode = suppliedSlug ?? generateShortCode();   // inside the loop
+```
+
+Two consequences worth stating, because each was its own test:
+
+- With a supplied slug, `generateShortCode()` is **never called**, so no substitute code exists in
+  memory to be returned by accident. Asserted directly, not inferred.
+- Running out of attempts throws `ConflictError` (409) naming the slug when one was supplied, and
+  the old generic `link_creation_failed` otherwise.
+
+The counterpart test asserts a **generated** code still retries and still succeeds on a later
+draw. Without it, "skip the retry loop" could be satisfied by "delete the retry loop" — the two
+would be indistinguishable, and the generated path would silently degrade to one shot.
+
+### D2 — reserved slugs rejected, and the message names the route
+
+`validateCustomSlug` lives in `src/utils/short-code.ts` beside `RESERVED_ROUTES`, returns a pure
+result object rather than throwing, and is checked **before any SQL runs** — so a reserved slug
+consumes no registry row and no quota slot.
+
+It returns a result rather than throwing so the rule set stays pure and directly unit-testable,
+and so the HTTP handler owns turning a failure into a `ValidationError`. A mutation that replaced
+the message with `"Invalid slug"` was applied and reverted; three tests caught it, including the
+per-item batch assertion.
+
+Checks run most-specific-first (type → length → charset → hyphen → reserved), so a value that is
+both too short and contains a slash reports the charset fault — the one the user must fix anyway.
+
+### D3 — the cap is configuration
+
+`resolveMaxActiveLinks(env)` reads `MAX_ACTIVE_LINKS`, declared optional in a new `AppVars`
+interface in `src/types/env.ts`. Default is `DEFAULT_MAX_ACTIVE_LINKS = 1000`, exported and
+asserted to be `> 30` so the old free-tier number cannot quietly return.
+
+Every malformed value falls back to the default rather than being coerced: a typo in a wrangler var
+must never read as `0` and lock every tenant out of creating anything. Only a bare non-negative
+integer string is honoured; `12abc`, `-5`, `0` and `""` all take the default. There is a test for
+each.
+
+The `LimitError` message now interpolates the cap **actually in force**, so an operator who raised
+the limit does not read "30" in the error while a thousand links exist.
+
+The dashboard's `Your Links (0/30)` counter reads the same resolver, rather than keeping a second
+hardcoded copy that could promise a quota the server does not honour.
+
+### D4 — partial success is explicit
+
+`POST /api/links/batch` returns:
+
+```json
+{ "results": [ { "index": 0, "status": 201, "link": { … } },
+               { "index": 1, "status": 400, "error": "Invalid URL: …", "code": "invalid_url" } ],
+  "created": 1, "failed": 1 }
+```
+
+`results` is positionally aligned with the request, so an import script maps result → spreadsheet
+row without matching on values. Each item carries its own status plus **either** the created link
+**or** an error code — the code, not only the message, because an import has to branch on it.
+
+Top-level status is `201` when every item succeeded and `207 Multi-Status` otherwise, so a caller
+can notice partial failure without diffing the array.
+
+Body-shape faults (`links` not an array, empty, longer than `MAX_BATCH_SIZE = 100`) reject the
+whole request with a 400 rather than producing a vacuous success. Per-item faults do not.
+
+**Known trade-off, recorded rather than hidden:** each item issues its own active-link COUNT, so a
+batch of 100 costs 100 count queries. That is deliberate. A count taken once at the start and
+decremented locally would be one query cheaper per batch and would drift from the enforced value
+exactly where it matters — at the cap boundary, mid-batch. Correct-at-the-boundary is worth the
+round trip here, and the item cap bounds the waste.
+
+### T3.4 — dashboard
+
+Optional `slug` field on the create form (blank ⇒ random code, exactly as before; the value is
+sent as `undefined`, not `""`, so the optional field stays optional). The `pattern` attribute is
+advisory only; the rules are enforced server-side.
+
+The print-sheet entry point is a **Copy URL for print sheet** button in the existing QR modal. The
+modal already displayed the URL, but a `<p>` is not something a user can usefully copy — selecting
+it by hand, with a `word-break` to dodge, is exactly the friction that ends with a mistyped code on
+a sticker. It reads `#qr-url`'s `textContent` rather than rebuilding the URL, so what lands on the
+sticker is byte-for-byte what the QR image encodes.
+
+Wired with `addEventListener`, **not** `onclick`. No inline handler was added anywhere in that
+file: the pre-existing inline handlers on the modal chrome are static and carry no record data,
+which is a different situation from the links table, where inline handlers were removed precisely
+because record data was being interpolated into them.
+
+### Route registration and the middleware chain
+
+```ts
+app.post("/api/links/batch", auth, userProfileTenantMiddleware, createLinksBatch);
+```
+
+Identical to the other tenant-scoped routes. The chain is load-bearing: the handler qualifies every
+query against `c.get("tenant").schemaName`. Without it the request does not return wrong numbers —
+it throws on an undefined tenant — and any later edit that made it tolerate that would read across
+tenants.
+
+Mutation-checked two ways:
+
+| Mutation | Caught by |
+| --- | --- |
+| `userProfileTenantMiddleware` dropped from the batch route | `carries the SAME number of middleware handlers as POST /api/links` + `runs auth and the tenant middleware on a real request through the app` |
+| Batch made all-or-nothing (`throw err` instead of recording the item) | 6 tests, including `a batch with one invalid item still creates the valid ones` |
+| Supplied-slug path given the retry loop again | 3 tests, including `returns 409 and creates NOTHING…` |
+| `slug` silently ignored by `updateLink` instead of rejected | 2 tests |
+| Cap hardcoded back to 30 | 3 tests |
+| Reserved-slug message replaced with `"Invalid slug"` | 3 tests |
+
+The all-or-nothing mutation is the one that matters most: it was applied against a **working**
+endpoint, so the partial-success test is known to detect the rollback behaviour rather than merely
+the absence of a module.
+
+**A Hono 4.13 finding worth recording:** `app.routes` records one entry **per handler**, not one
+entry holding the chain. `post(path, auth, tenantMw, handler)` therefore appears three times. That
+is what makes the chain length observable, and the test asserts the batch route appears as many
+times as `POST /api/links` rather than counting handlers on a route object.
+
+Also: `app.request(path, init)` binds an **empty** env and no executionCtx, so a test claiming to
+exercise a real Worker invocation must use `app.fetch(request, env, executionCtx)`. The first
+version of the routing test used `app.request` and failed with an opaque per-item 500 that looked
+like a handler bug. Worth knowing before anyone debugs the wrong thing.
+
+## Verification
+
+`pnpm run typecheck` clean. `pnpm test` → **430 passed / 0 failed** across 20 files.
+
+Test-first throughout. The API layer (T3.1–T3.3) was written before any implementation and
+observed failing: 27 failures, including the 409-collision case failing with
+`expected Error: link_creation_failed to match object { name: 'ConflictError', status: 409 }` — which
+is precisely the current behaviour, a generic failure after burning all three retry draws.
+
+T3.4's dashboard markup was written before its tests were drafted, so its guards rest on review and
+on the two facts already asserted for this file (no inline handler carries record data; every
+interpolated record field goes through `esc()`) rather than on a fresh mutation table. That
+ordering gap is recorded rather than papered over.
+
+## Acceptance criteria
+
+- [x] A caller-supplied slug survives creation unchanged when free.
+- [x] A taken slug returns 409 and **never** a different code.
+- [x] A reserved slug returns 400 naming the reserved route.
+- [x] Batch creation creates the valid items and reports the invalid ones per item.
+- [x] `updateLink` cannot change a slug.
+- [x] `pnpm run typecheck` and `pnpm test` stay green (383 → 430, zero failures).
+
+## Next step
+
+Phase 3 is complete. Nothing further is required for links at physical scale: slugs are
+caller-supplied and validated, collisions are loud, the cap is operator configuration, and batch
+import is partial-success.
+
+Two follow-ups this phase deliberately leaves open:
+
+- **QR image generation.** Out of scope here by the plan. The modal shows a QR served by a
+  third-party endpoint; generating print-ready artwork at a chosen DPI is separate work, and it is
+  the natural companion to the copy-print-sheet button added in T3.4.
+- **`APP_ENV` vs `MAX_ACTIVE_LINKS` as a documented var.** `MAX_ACTIVE_LINKS` is read from the
+  environment but is not yet in `wrangler.jsonc`'s `vars`, so it takes the default in every
+  deployment until an operator adds it. That is the intended behaviour and is tested — but it means
+  "configurable" is currently true in code and not yet true in any deployed config.

@@ -43,9 +43,13 @@ function mockCacheDefaults() {
 // Mock short-code generator
 // ---------------------------------------------------------------------------
 
-vi.mock("../../src/utils/short-code", () => ({
-  generateShortCode: vi.fn(),
-}));
+// Only the RANDOM generator is mocked. `validateCustomSlug` must stay real:
+// slug validation is a pure rule set, and testing it against a mock would assert
+// only that the mock was called.
+vi.mock("../../src/utils/short-code", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/utils/short-code")>();
+  return { ...actual, generateShortCode: vi.fn() };
+});
 
 import { withClient } from "../../src/db/client";
 import {
@@ -56,7 +60,7 @@ import {
   invalidateCachedRegistryEntry,
 } from "../../src/cache/shortcode";
 import { generateShortCode } from "../../src/utils/short-code";
-import { createLink, deleteLink, linkClicks, listLinks, updateLink } from "../../src/api/links";
+import { createLink, deleteLink, linkClicks, listLinks, updateLink, DEFAULT_MAX_ACTIVE_LINKS } from "../../src/api/links";
 import { UNIQUE_WINDOW, SESSION_WINDOW } from "../../src/analytics/metrics";
 import { ValidationError } from "../../src/middleware/error";
 
@@ -69,6 +73,8 @@ function mockContext(overrides: {
   body?: object;
   jsonParseError?: boolean;
   params?: Record<string, string>;
+  /** Extra bindings merged over the default env — e.g. MAX_ACTIVE_LINKS. */
+  env?: Record<string, string>;
 } = {}) {
   const waitUntilFn = vi.fn();
   const jsonFn = vi.fn().mockImplementation(
@@ -95,6 +101,7 @@ function mockContext(overrides: {
       SUPABASE_ANON_KEY: "test-anon-key",
       SUPABASE_SERVICE_ROLE_KEY: "test-service-key",
       SHORT_URL_CACHE: {} as any,
+      ...overrides.env,
     },
     json: jsonFn,
     redirect: redirectFn,
@@ -202,7 +209,7 @@ describe("createLink handler", () => {
     expect(withClient).not.toHaveBeenCalled();
   });
 
-  it("returns 429 when at 30 active links limit", async () => {
+  it("returns 429 when at the configured active links limit", async () => {
     vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) => {
       return fn({
         query: vi.fn().mockResolvedValueOnce({ rows: [{ count: "30" }], rowCount: 1 }),
@@ -210,6 +217,10 @@ describe("createLink handler", () => {
     });
 
     const { c } = mockContext({
+      // T3.1: 30 is no longer the built-in cap. Pinning it here as an
+      // operator-configured value keeps the original scenario intact while
+      // exercising the env read rather than a constant.
+      env: { MAX_ACTIVE_LINKS: "30" },
       body: { original_url: "https://example.com" },
     });
 
@@ -1608,5 +1619,427 @@ describe("registry removal on deleteLink (T4.2, T4.3)", () => {
     expect(calls.some((q) => /short_code_registry/i.test(q.sql))).toBe(false);
     expect(invalidateCachedRegistryEntry).not.toHaveBeenCalled();
     expect(waitUntilFn).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T3.2 — CALLER-SUPPLIED SLUG
+//
+// THE REQUIREMENT THAT DRIVES THIS ENTIRE BLOCK:
+//
+// One NFC tag or QR sticker per physical location, PRE-PRINTED, living in the
+// world for months. The URL on a printed sticker cannot change afterwards
+// without re-printing every sticker.
+//
+// So for a caller-supplied slug there is exactly one acceptable outcome when
+// the slug is free — create it under that literal string — and exactly one
+// acceptable outcome when it is taken — say so. Silently substituting a
+// different code is the one thing that must never happen: it would produce
+// stickers reading `.../cafe-central` that resolve to something else entirely,
+// with no way to fix them later.
+//
+// The generated-code retry loop exists for the opposite case. There the user
+// did not choose the code, so a second draw is free. Both behaviours coexist,
+// and the guard below is what keeps them from bleeding into each other.
+// ---------------------------------------------------------------------------
+
+describe("caller-supplied slug (T3.2)", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(generateShortCode).mockReturnValue("abc1234");
+    mockCacheDefaults();
+  });
+
+  it("persists a free caller-supplied slug unchanged", async () => {
+    const calls = mockRecordingDb([
+      [{ count: "0" }],
+      [createdLink({ id: "link-uuid", short_code: "cafe-central" })],
+      [{ short_code: "cafe-central" }],
+    ]);
+
+    const { c, jsonFn } = mockContext({
+      body: { original_url: "https://example.com", slug: "cafe-central" },
+    });
+
+    await createLink(c as any);
+
+    // The literal string reaches the INSERT and comes back out — not normalised,
+    // not case-folded, not trimmed.
+    const insert = calls.find((q) => /INSERT INTO "tenant/i.test(q.sql))!;
+    expect(insert.params[1]).toBe("cafe-central");
+
+    const claim = calls.find((q) => /INSERT INTO public\.short_code_registry/i.test(q.sql))!;
+    expect(claim.params[0]).toBe("cafe-central");
+
+    expect(jsonFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        short_code: "cafe-central",
+        short_url: "https://short.link/cafe-central",
+      }),
+      201,
+    );
+  });
+
+  /**
+   * THE DECISIVE GUARD.
+   *
+   * A test that only checks the happy path passes while the system still
+   * silently substitutes a random code — which is precisely the defect that
+   * destroys printed tags. This asserts the two halves of the contract
+   * together: a 409, and NO second code offered in its place.
+   */
+  it("returns 409 and creates NOTHING when the supplied slug is already taken", async () => {
+    const calls = mockRecordingDb([
+      [{ count: "0" }], // active-link count — well under the cap
+      [], // link INSERT → this tenant already uses the code
+    ]);
+
+    const { c } = mockContext({
+      body: { original_url: "https://example.com", slug: "cafe-central" },
+    });
+
+    await expect(createLink(c as any)).rejects.toMatchObject({
+      name: "ConflictError",
+      status: 409,
+    });
+
+    // Nothing was created, and — the half that actually protects a printed tag
+    // — the code generator was never consulted, so there is no substitute ready
+    // to be returned by accident.
+    expect(generateShortCode).not.toHaveBeenCalled();
+    expect(calls.some((q) => /^INSERT/i.test(q.sql.trim()) && /short_code_registry/i.test(q.sql))).toBe(false);
+    expect(calls.filter((q) => /^INSERT INTO "tenant/i.test(q.sql)).length).toBe(1);
+  });
+
+  it("returns 409 when another tenant already claims the slug globally", async () => {
+    // The registry primary key is the constraint that can reject a code this
+    // tenant does not itself hold — `short_code` is only UNIQUE per schema.
+    const calls = mockRecordingDb([
+      [{ count: "0" }],
+      [createdLink({ id: "link-1", short_code: "cafe-central" })],
+      [], // registry claim loses to tenant B
+    ]);
+
+    const { c } = mockContext({
+      body: { original_url: "https://example.com", slug: "cafe-central" },
+    });
+
+    await expect(createLink(c as any)).rejects.toMatchObject({ status: 409 });
+
+    // The link row written before the losing claim must be rolled back, exactly
+    // as the generated-code path does. Leaving it would be an orphan consuming a
+    // quota slot for a link that was reported as never created.
+    const compensating = calls.find((q) => /DELETE FROM "tenant/i.test(q.sql))!;
+    expect(compensating).toBeDefined();
+    expect(compensating.params).toEqual(["link-1"]);
+
+    expect(generateShortCode).not.toHaveBeenCalled();
+  });
+
+  it("makes exactly ONE insert attempt for a supplied slug — the retry loop is skipped", async () => {
+    // The mechanism behind D1, stated structurally rather than inferred from
+    // the 409: the attempt budget is 1 when the caller named the code, so there
+    // is no second draw sitting there ready to be substituted.
+    const calls = mockRecordingDb([
+      [{ count: "0" }],
+      [], // collide
+    ]);
+
+    const { c } = mockContext({
+      body: { original_url: "https://example.com", slug: "cafe-central" },
+    });
+
+    await expect(createLink(c as any)).rejects.toMatchObject({ status: 409 });
+
+    const linkInserts = calls.filter((q) => /^INSERT INTO "tenant/i.test(q.sql));
+    expect(linkInserts).toHaveLength(1);
+    // A generated path would have drawn MAX_RETRIES codes before giving up.
+    expect(generateShortCode).not.toHaveBeenCalled();
+  });
+
+  it("still retries a GENERATED code — the two paths must not be confused", async () => {
+    // The counterpart guard. If "skip the retry loop" were implemented as
+    // "remove the retry loop", this test fails and the generated path silently
+    // degrades to one shot with a random code.
+    let callCount = 0;
+    vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) => {
+      callCount++;
+      if (callCount === 1) {
+        return fn({ query: vi.fn().mockResolvedValueOnce({ rows: [{ count: "0" }], rowCount: 1 }) });
+      }
+      if (callCount === 2) {
+        return fn({ query: vi.fn().mockResolvedValueOnce({ rows: [], rowCount: 0 }) });
+      }
+      return fn({
+        query: vi.fn()
+          .mockResolvedValueOnce({ rows: [createdLink({ id: "link-2", short_code: "xyz5678" })], rowCount: 1 })
+          .mockResolvedValueOnce({ rows: [{ short_code: "xyz5678" }], rowCount: 1 }),
+      });
+    });
+
+    vi.mocked(generateShortCode)
+      .mockReturnValueOnce("aaa1111")
+      .mockReturnValueOnce("xyz5678");
+
+    const { c, jsonFn } = mockContext({ body: { original_url: "https://example.com" } });
+
+    await createLink(c as any);
+
+    expect(jsonFn).toHaveBeenCalledWith(
+      expect.objectContaining({ short_code: "xyz5678" }),
+      201,
+    );
+    expect(callCount).toBe(3); // COUNT + 2 insert attempts
+  });
+
+  it("rejects a reserved slug with a 400 naming the route, before touching the DB", async () => {
+    // D2: a reserved slug is an unreachable link, not an unlucky draw. Rejected
+    // up front so no registry row is consumed and the user is told at creation
+    // time, while the stickers are still unmade.
+    const { c } = mockContext({
+      body: { original_url: "https://example.com", slug: "dashboard" },
+    });
+
+    await expect(createLink(c as any)).rejects.toMatchObject({
+      name: "ValidationError",
+      status: 400,
+      message: expect.stringContaining("dashboard"),
+    });
+    expect(withClient).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed slug with a 400, before touching the DB", async () => {
+    for (const bad of ["ab", "a".repeat(33), "cafe/central", "-cafe", "cafe-", "cafe central"]) {
+      const { c } = mockContext({
+        body: { original_url: "https://example.com", slug: bad },
+      });
+      await expect(createLink(c as any)).rejects.toMatchObject({
+        name: "ValidationError",
+        status: 400,
+      });
+    }
+    expect(withClient).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-string slug with a 400 rather than coercing it", async () => {
+    const { c } = mockContext({
+      body: { original_url: "https://example.com", slug: 12345 },
+    });
+
+    await expect(createLink(c as any)).rejects.toMatchObject({ status: 400 });
+    expect(withClient).not.toHaveBeenCalled();
+  });
+
+  it("treats an explicitly empty slug as absent, not as an invalid one", async () => {
+    // The dashboard form sends `slug: ""` when the field is left blank. Treating
+    // that as a validation failure would make the optional field mandatory.
+    mockRecordingDb([[{ count: "0" }], [createdLink()], [{ short_code: "abc1234" }]]);
+
+    const { c, jsonFn } = mockContext({
+      body: { original_url: "https://example.com", slug: "" },
+    });
+
+    await createLink(c as any);
+
+    expect(jsonFn).toHaveBeenCalledWith(
+      expect.objectContaining({ short_code: "abc1234" }),
+      201,
+    );
+  });
+
+  it("warm-warms nothing special: a supplied slug still warms both KV caches", async () => {
+    mockRecordingDb([
+      [{ count: "0" }],
+      [createdLink({ short_code: "cafe-central" })],
+      [{ short_code: "cafe-central" }],
+    ]);
+
+    const { c, waitUntilFn } = mockContext({
+      body: { original_url: "https://example.com", slug: "cafe-central" },
+    });
+
+    await createLink(c as any);
+    await Promise.all(waitUntilFn.mock.calls.map((p: Promise<unknown>) => p));
+
+    // A tag's first scan must not hit a cold cache; the supplied path has no
+    // excuse for skipping the warm-up the generated path performs.
+    expect(setCachedRegistryEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      "cafe-central",
+      expect.objectContaining({ linkId: "link-uuid" }),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T3.1 — the active-link cap is CONFIGURATION, not a hardcoded free-tier number
+//
+// `MAX_ACTIVE_LINKS = 30` was written for a free tier and blocks one link per
+// store outright: a 40-location chain cannot onboard. The guard itself is
+// kept — a runaway-creation backstop has value — but the number becomes
+// something an operator can set, with a named default that is not 30.
+// ---------------------------------------------------------------------------
+
+describe("configurable active-link cap (T3.1)", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(generateShortCode).mockReturnValue("abc1234");
+    mockCacheDefaults();
+  });
+
+  it("honours the cap when the environment variable is set", async () => {
+    vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) =>
+      fn({ query: vi.fn().mockResolvedValueOnce({ rows: [{ count: "7" }], rowCount: 1 }) }),
+    );
+
+    const { c, jsonFn } = mockContext({
+      env: { MAX_ACTIVE_LINKS: "7" },
+      body: { original_url: "https://example.com" },
+    });
+
+    await expect(createLink(c as any)).rejects.toMatchObject({ status: 429 });
+    expect(jsonFn).not.toHaveBeenCalled();
+  });
+
+  it("allows creation below a configured cap", async () => {
+    mockRecordingDb([[{ count: "6" }], [createdLink()], [{ short_code: "abc1234" }]]);
+
+    const { c, jsonFn } = mockContext({
+      env: { MAX_ACTIVE_LINKS: "7" },
+      body: { original_url: "https://example.com" },
+    });
+
+    await createLink(c as any);
+
+    expect(jsonFn).toHaveBeenCalledWith(expect.any(Object), 201);
+  });
+
+  it("falls back to a named default when the variable is unset, and that default is NOT 30", async () => {
+    // 30 is the value this task exists to retire. Pinning the default by
+    // asserting it is greater than 30 keeps the old number from creeping back
+    // in, without hardcoding a second arbitrary figure the test would have to
+    // be edited alongside.
+    expect(DEFAULT_MAX_ACTIVE_LINKS).toBeGreaterThan(30);
+
+    mockRecordingDb([[{ count: "30" }], [createdLink()], [{ short_code: "abc1234" }]]);
+
+    const { c, jsonFn } = mockContext({ body: { original_url: "https://example.com" } });
+
+    // 30 links used, no env var set: the create must SUCCEED.
+    await createLink(c as any);
+
+    expect(jsonFn).toHaveBeenCalledWith(expect.any(Object), 201);
+  });
+
+  it("still rejects at the default cap when it is genuinely reached", async () => {
+    vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) =>
+      fn({
+        query: vi.fn().mockResolvedValueOnce({
+          rows: [{ count: String(DEFAULT_MAX_ACTIVE_LINKS) }],
+          rowCount: 1,
+        }),
+      }),
+    );
+
+    const { c } = mockContext({ body: { original_url: "https://example.com" } });
+
+    await expect(createLink(c as any)).rejects.toMatchObject({ status: 429 });
+  });
+
+  it("ignores a non-numeric or non-positive env value rather than locking every tenant out", async () => {
+    // A typo in a wrangler var must not read as 0 and reject every creation.
+    for (const bad of ["", "many", "-5", "0", "12abc"]) {
+      mockRecordingDb([[{ count: "30" }], [createdLink()], [{ short_code: "abc1234" }]]);
+      const { c, jsonFn } = mockContext({
+        env: { MAX_ACTIVE_LINKS: bad },
+        body: { original_url: "https://example.com" },
+      });
+      await createLink(c as any);
+      expect(jsonFn).toHaveBeenCalledWith(expect.any(Object), 201);
+    }
+  });
+
+  it("reports the CONFIGURED cap in the limit message, not a hardcoded number", async () => {
+    vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) =>
+      fn({ query: vi.fn().mockResolvedValueOnce({ rows: [{ count: "7" }], rowCount: 1 }) }),
+    );
+
+    const { c } = mockContext({
+      env: { MAX_ACTIVE_LINKS: "7" },
+      body: { original_url: "https://example.com" },
+    });
+
+    await expect(createLink(c as any)).rejects.toThrow(/7/);
+    // And it does not report the default while enforcing the configured value.
+    await expect(createLink(c as any)).rejects.not.toThrow(
+      new RegExp(String(DEFAULT_MAX_ACTIVE_LINKS)),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T3.2 — a slug can NEVER be changed after creation
+//
+// Not "not implemented yet". Not "not exposed in the UI". A printed tag's URL
+// is immutable by definition: renaming a link breaks every sticker already in
+// the world, and there is no way to recall them. updateLink therefore REJECTS
+// the field rather than ignoring it, because a silently-ignored field leaves
+// the caller believing a rename succeeded.
+// ---------------------------------------------------------------------------
+
+describe("updateLink cannot change a slug", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockCacheDefaults();
+  });
+
+  it("rejects a PATCH body carrying slug", async () => {
+    const { c } = mockContext({
+      params: { id: "link-uuid" },
+      body: { slug: "renamed-tag" },
+    });
+
+    await expect(updateLink(c as any)).rejects.toMatchObject({
+      name: "ValidationError",
+      status: 400,
+    });
+    expect(withClient).not.toHaveBeenCalled();
+  });
+
+  it("rejects slug even when combined with fields it does accept", async () => {
+    // A caller renaming a tag while also toggling it must get the same refusal;
+    // letting the toggle through would half-apply a request the caller believes
+    // was rejected.
+    const { c } = mockContext({
+      params: { id: "link-uuid" },
+      body: { slug: "renamed-tag", is_active: false },
+    });
+
+    await expect(updateLink(c as any)).rejects.toMatchObject({ status: 400 });
+    expect(withClient).not.toHaveBeenCalled();
+  });
+
+  it("never writes short_code, whatever the body contains", async () => {
+    const calls = mockRecordingDb([[{ short_code: "abc1234", is_active: true }]]);
+
+    await updateLink(
+      mockContext({ params: { id: "link-uuid" }, body: { title: "Renamed" } }).c as any,
+    );
+
+    const update = calls.find((q) => /^UPDATE/i.test(q.sql.trim()))!;
+    expect(update.sql).not.toMatch(/short_code\s*=/);
+  });
+
+  it("still accepts the fields it always did", async () => {
+    mockRecordingDb([[{ short_code: "abc1234", is_active: true }]]);
+
+    const { c, jsonFn } = mockContext({
+      params: { id: "link-uuid" },
+      body: { is_active: false, title: "Renamed", client_ref: "ACME-0042" },
+    });
+
+    await updateLink(c as any);
+
+    expect(jsonFn).toHaveBeenCalledWith({ ok: true });
   });
 });

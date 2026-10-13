@@ -20,13 +20,13 @@
     "pg": "^8.14.1"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.16.18",
+    "@cloudflare/vitest-pool-workers": "^0.18.8",
     "@cloudflare/workers-types": "^4.20250622.0",
     "@types/node": "^26.0.0",
     "@types/pg": "^8.20.0",
     "typescript": "^5.6.3",
 "vite": "^6.4.3",
 "vitest": "^4.1.0",
-    "wrangler": "^4.15.2"
+    "wrangler": "^4.114.0"
   }
 }

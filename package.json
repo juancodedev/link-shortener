@@ -21,7 +21,7 @@
     "pg": "^8.14.1"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.18.8",
+    "@cloudflare/vitest-plugin": "^1.4.1",
     "@cloudflare/workers-types": "^5.20260722.1",
     "@types/node": "^26.0.0",
     "@types/pg": "^8.20.0",

@@ -1,9 +1,9 @@
 import type { Handler } from "hono";
-import type { AppEnv, HonoVars } from "../types/env";
+import type { AppEnv, HonoVars, TenantContext } from "../types/env";
 import { withClient } from "../db/client";
 import { qualifyTable, validateSchemaName } from "../db/schema";
 import { validateUrl } from "../utils/validation";
-import { generateShortCode } from "../utils/short-code";
+import { generateShortCode, validateCustomSlug } from "../utils/short-code";
 import {
   UNIQUE_WINDOW,
   SESSION_WINDOW,
@@ -18,7 +18,7 @@ import {
   setCachedRegistryEntry,
   invalidateCachedRegistryEntry,
 } from "../cache/shortcode";
-import { LimitError, ValidationError, NotFoundError } from "../middleware/error";
+import { LimitError, ValidationError, NotFoundError, ConflictError } from "../middleware/error";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -52,8 +52,50 @@ interface RecentClickRow {
 /** How many recent clicks the dashboard activity list shows. */
 const RECENT_CLICK_LIMIT = 10;
 
-/** Maximum number of active links per tenant on the free tier. */
-const MAX_ACTIVE_LINKS = 30;
+/**
+ * Fallback active-link cap when `MAX_ACTIVE_LINKS` is not configured (T3.1).
+ *
+ * This was `30`, a hardcoded free-tier number that blocked the actual
+ * deployment: one NFC tag or QR sticker per physical location. A chain of forty
+ * locations could not onboard at all, and a tenant paying for the service could
+ * not change a constant buried inside a handler.
+ *
+ * The guard itself is kept — a runaway-creation backstop is worth having — but
+ * the number is now operator configuration, and this is only what a deployment
+ * that has not configured one gets.
+ *
+ * Generous on purpose. There is one link per store in the target deployment, and
+ * a chain can be hundreds of locations; a cap that trips in normal use is a cap
+ * that gets raised under pressure, by whoever is under pressure.
+ */
+export const DEFAULT_MAX_ACTIVE_LINKS = 1000;
+
+/**
+ * Resolves the active-link cap from the environment (T3.1).
+ *
+ * Every malformed value falls back to the default rather than being coerced. A
+ * typo in a wrangler var must never read as `0` and lock every tenant out of
+ * creating anything — a silent denial of service that looks like a working
+ * guard. `12abc` is not "12", `-5` is not a cap, and `0` blocks all creation.
+ *
+ * Accepts only a bare non-negative integer string. Anything else is a
+ * configuration mistake, and the safe response to a configuration mistake is
+ * the documented default, not a guess.
+ */
+export function resolveMaxActiveLinks(
+  env: Pick<AppEnv, "MAX_ACTIVE_LINKS">,
+): number {
+  const raw = env.MAX_ACTIVE_LINKS;
+  if (typeof raw !== "string") return DEFAULT_MAX_ACTIVE_LINKS;
+
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return DEFAULT_MAX_ACTIVE_LINKS;
+
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_MAX_ACTIVE_LINKS;
+
+  return parsed;
+}
 
 /**
  * Maximum length of `client_ref`.
@@ -67,7 +109,15 @@ const MAX_ACTIVE_LINKS = 30;
  */
 const MAX_CLIENT_REF_LENGTH = 200;
 
-/** Maximum retries for short code collision handling. */
+/**
+ * Maximum retries when GENERATING a short code (D1).
+ *
+ * Applies to generated codes ONLY. A caller-supplied slug gets exactly one
+ * attempt — see `createLinkCore`. This bound is deliberately not shared with the
+ * supplied-slug path, and the two must never be unified: retrying a supplied
+ * slug means drawing a DIFFERENT code, which is precisely the silent
+ * substitution that would break stickers already printed and in the world.
+ */
 const MAX_RETRIES = 3;
 
 // ---------------------------------------------------------------------------
@@ -187,48 +237,73 @@ async function deleteRegistryRow(env: AppEnv, shortCode: string): Promise<void> 
 // ---------------------------------------------------------------------------
 
 /**
- * Handles `POST /api/links` — authenticated link creation.
+ * The created-link resource, exactly as `POST /api/links` returns it.
  *
- * Flow:
- * 1. Read authenticated user from context (auth middleware)
- * 2. Read tenant schema from context (tenant middleware — user-profile-based)
- * 3. Validate `original_url` body param against open-redirect rules
- * 4. Count active links for the tenant; reject if at free-tier limit (30)
- * 5. Generate a 7-char short code, rejecting reserved app routes
- * 6. INSERT the link with ON CONFLICT DO NOTHING, then claim the code in
- *    `public.short_code_registry`; retry up to 3x on either collision
- * 7. Warm KV cache via ctx.waitUntil
- * 8. Return 201 with the created link resource
- *
- * Error middleware wraps this handler — errors thrown here are caught and
- * mapped to appropriate HTTP status codes by the outermost errorHandler.
+ * Named and exported because `POST /api/links/batch` returns the SAME shape per
+ * item. Batch items are not a second dialect of "a link" — a caller comparing a
+ * batch result with a single-create result must find them identical.
  */
-export const createLink: Handler<{
-  Bindings: AppEnv;
-  Variables: HonoVars;
-}> = async (c) => {
-  const env = c.env;
-  const tenant = c.get("tenant");
+export interface CreatedLinkResource {
+  id: string;
+  short_code: string;
+  original_url: string;
+  short_url: string;
+  title: string | null;
+  expires_at: string | null;
+  client_ref: string | null;
+  created_at: string;
+}
 
-  // --- 1. Parse and validate request body ---
-  let body: {
-    original_url?: string;
-    title?: string;
-    expires_at?: string;
-    client_ref?: string;
-  };
-  try {
-    body = await c.req.json<{
-      original_url?: string;
-      title?: string;
-      expires_at?: string;
-      client_ref?: string;
-    }>();
-  } catch {
-    throw new ValidationError("Invalid JSON body", "invalid_request");
-  }
+/** A validated request to create one link. */
+export interface CreateLinkInput {
+  original_url: string;
+  title?: string;
+  expires_at?: string;
+  client_ref?: string;
+  /** Optional caller-chosen slug — for pre-printed tags. See D1/D2. */
+  slug?: string;
+}
 
-  if (!body.original_url || typeof body.original_url !== "string") {
+/** Everything `createLinkCore` needs that a Hono context would otherwise supply. */
+export interface CreateLinkCoreArgs {
+  env: AppEnv;
+  tenant: TenantContext;
+  /**
+   * Fire-and-forget sink for cache warming.
+   *
+   * Passed in rather than reaching for `c.executionCtx` so the batch handler can
+   * reuse this function without fabricating a Hono context per item.
+   */
+  waitUntil: (promise: Promise<unknown>) => void;
+  input: CreateLinkInput;
+}
+
+/**
+ * Validates and creates one link, or throws an `AppError`.
+ *
+ * Extracted from the `POST /api/links` handler so `POST /api/links/batch`
+ * creates items through the EXACT same path. Batching that re-implemented
+ * validation would be free to drift from single creation — the two would then
+ * disagree about what a valid slug or URL is, and a link creatable one way but
+ * not the other is a bug nobody would think to look for.
+ *
+ * Errors thrown here are `AppError` subclasses, so a caller can either let the
+ * global `errorHandler` map them (single create) or map them per item
+ * (batch). Both consume the same values.
+ *
+ * @throws ValidationError | LimitError | ConflictError — all 4xx, all safe to
+ *         show a user. Anything else is a genuine fault and propagates.
+ */
+export async function createLinkCore({
+  env,
+  tenant,
+  waitUntil,
+  input,
+}: CreateLinkCoreArgs): Promise<CreatedLinkResource> {
+  const { title, expires_at, client_ref } = input;
+
+  // --- 1. original_url is required ---
+  if (!input.original_url || typeof input.original_url !== "string") {
     throw new ValidationError("original_url is required", "invalid_request");
   }
 
@@ -236,20 +311,37 @@ export const createLink: Handler<{
   // an external CRM record. It is NOT validated against anything — there is no
   // local client entity. Present-but-wrong-type is an error; absent is not, so
   // links created before this column existed keep working.
-  if (body.client_ref !== undefined && typeof body.client_ref !== "string") {
+  if (client_ref !== undefined && typeof client_ref !== "string") {
     throw new ValidationError("client_ref must be a string", "invalid_request");
   }
-  if (typeof body.client_ref === "string" && body.client_ref.length > MAX_CLIENT_REF_LENGTH) {
+  if (typeof client_ref === "string" && client_ref.length > MAX_CLIENT_REF_LENGTH) {
     throw new ValidationError(
       `client_ref must be at most ${MAX_CLIENT_REF_LENGTH} characters`,
       "invalid_request",
     );
   }
 
-  const { title, expires_at, client_ref } = body;
-  let original_url = body.original_url!;
+  // --- 2. Caller-supplied slug (D2), validated before any SQL runs ---
+  //
+  // Resolved to `null` rather than a boolean because `null` is what the insert
+  // loop below branches on. An empty string counts as ABSENT, not invalid: the
+  // dashboard form posts `slug: ""` when the field is left blank, and treating
+  // that as a validation failure would make an optional field mandatory.
+  //
+  // A non-string is NOT treated as absent — that would silently ignore a bug in
+  // the caller's payload, and `12345` is exactly the kind of value that would
+  // otherwise quietly become a printable slug nobody typed.
+  let suppliedSlug: string | null = null;
+  if (input.slug !== undefined && input.slug !== null && input.slug !== "") {
+    const check = validateCustomSlug(input.slug);
+    if (!check.valid) {
+      throw new ValidationError(check.message, check.code);
+    }
+    suppliedSlug = input.slug;
+  }
 
-  // --- 2. Validate URL (open-redirect protection) ---
+  // --- 3. Validate URL (open-redirect protection) ---
+  let original_url = input.original_url;
   const urlResult = validateUrl(original_url);
   if (!urlResult.valid) {
     throw new ValidationError(
@@ -260,7 +352,7 @@ export const createLink: Handler<{
   // Use normalized URL (with https:// prepended if missing)
   original_url = urlResult.normalized ?? original_url;
 
-  // --- 3. Count active links (free-tier enforcement) ---
+  // --- 4. Count active links (configured cap, T3.1) ---
   const countRow = await withClient(env, async (client) => {
     const table = qualifyTable(tenant.schemaName, "links");
     const res = await client.query<{ count: string }>(
@@ -270,14 +362,18 @@ export const createLink: Handler<{
   });
 
   const activeCount = countRow ? parseInt(countRow.count, 10) : 0;
-  if (activeCount >= MAX_ACTIVE_LINKS) {
+  const maxActiveLinks = resolveMaxActiveLinks(env);
+  if (activeCount >= maxActiveLinks) {
+    // The message reports the cap ACTUALLY IN FORCE. Interpolating a constant
+    // here would state one number while enforcing another, so an operator who
+    // raised the limit still reads "30" in the error.
     throw new LimitError(
-      `Link limit reached (${MAX_ACTIVE_LINKS} active links)`,
+      `Link limit reached (${maxActiveLinks} active links)`,
       "link_limit_reached",
     );
   }
 
-  // --- 4. Create the link and claim its short code globally ---
+  // --- 5. Create the link and claim its short code globally ---
   //
   // Two different uniqueness rules apply and both must hold:
   //
@@ -291,13 +387,28 @@ export const createLink: Handler<{
   // The registry insert therefore runs immediately after the link insert, and
   // its result is checked rather than assumed. If the claim loses, the link row
   // we just wrote is deleted again — returning it would hand the user a code
-  // that resolves to somebody else's link — and the attempt is retried.
-  const now = new Date().toISOString();
+  // that resolves to somebody else's link.
+  //
+  // D1 — THE ATTEMPT BUDGET IS THE WHOLE POINT:
+  //
+  //   supplied slug → ONE attempt. A collision becomes a 409 naming the slug.
+  //   generated code → MAX_RETRIES, drawing a fresh code each time.
+  //
+  // A retry here means a DIFFERENT short code. That is free when the code was
+  // random, and catastrophic when the code is about to be printed on a sticker
+  // that already exists in the world: `.../cafe-central` would resolve to
+  // something else, permanently, with no way to recall the tags. So the two
+  // paths share the insert logic and differ ONLY in how many attempts they get
+  // and what they throw when they run out.
+  const attempts = suppliedSlug !== null ? 1 : MAX_RETRIES;
   let linkRow: LinkRow | null = null;
   let claimedShortCode: string | null = null;
 
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const shortCode = generateShortCode();
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    // `??` rather than a ternary: with a supplied slug the generator is never
+    // called at all, so there is no substitute code sitting in memory waiting
+    // to be returned by accident.
+    const shortCode = suppliedSlug ?? generateShortCode();
 
     const created = await withClient(env, async (client) => {
       const table = qualifyTable(tenant.schemaName, "links");
@@ -310,7 +421,7 @@ export const createLink: Handler<{
         [original_url, shortCode, title ?? null, expires_at ?? null, client_ref ?? null],
       );
 
-      // No rows → this tenant already uses the code. Retry with a new one.
+      // No rows → this tenant already uses the code.
       if (inserted.rows.length === 0) return null;
 
       const link = inserted.rows[0]!;
@@ -344,10 +455,20 @@ export const createLink: Handler<{
   }
 
   if (!linkRow) {
+    if (suppliedSlug !== null) {
+      // D1: report the conflict. Never substitute a generated code — a 201 here
+      // with a different short_code is the single worst outcome this endpoint
+      // could produce, because it would look like success while every printed
+      // sticker pointing at the requested slug resolves elsewhere.
+      throw new ConflictError(
+        `slug "${suppliedSlug}" is already taken`,
+        "slug_taken",
+      );
+    }
     throw new Error("link_creation_failed");
   }
 
-  // --- 5. Warm KV caches (fire-and-forget via waitUntil) ---
+  // --- 6. Warm KV caches (fire-and-forget via waitUntil) ---
   const cachePayload = JSON.stringify({
     url: linkRow.original_url,
     isActive: true,
@@ -355,7 +476,7 @@ export const createLink: Handler<{
     linkId: linkRow.id,
   });
 
-  c.executionCtx.waitUntil(
+  waitUntil(
     setCachedUrl(env, tenant.tenantSlug, linkRow.short_code, cachePayload).catch(
       (err) => {
         console.error(
@@ -374,7 +495,7 @@ export const createLink: Handler<{
   // The registry entry is warmed too: it is the first lookup every redirect
   // performs, so leaving it cold would put the join on the critical path of the
   // link's very first hit.
-  c.executionCtx.waitUntil(
+  waitUntil(
     setCachedRegistryEntry(env, claimedShortCode ?? linkRow.short_code, {
       tenantId: tenant.tenantId,
       schemaName: tenant.schemaName,
@@ -384,22 +505,55 @@ export const createLink: Handler<{
     }).catch(() => {}),
   );
 
-  // --- 6. Build response ---
-  const shortUrl = `https://${env.SHORT_URL_DOMAIN}/${linkRow.short_code}`;
+  // --- 7. Build response ---
+  return {
+    id: linkRow.id,
+    short_code: linkRow.short_code,
+    original_url: linkRow.original_url,
+    short_url: `https://${env.SHORT_URL_DOMAIN}/${linkRow.short_code}`,
+    title: linkRow.title,
+    expires_at: expires_at ?? null,
+    client_ref: linkRow.client_ref ?? null,
+    created_at: linkRow.created_at,
+  };
+}
 
-  return c.json(
-    {
-      id: linkRow.id,
-      short_code: linkRow.short_code,
-      original_url: linkRow.original_url,
-      short_url: shortUrl,
-      title: linkRow.title,
-      expires_at: expires_at ?? null,
-      client_ref: linkRow.client_ref ?? null,
-      created_at: linkRow.created_at,
-    },
-    201,
-  );
+/**
+ * Handles `POST /api/links` — authenticated link creation.
+ *
+ * Flow:
+ * 1. Read authenticated user from context (auth middleware)
+ * 2. Read tenant schema from context (tenant middleware — user-profile-based)
+ * 3. Parse the JSON body
+ * 4. Delegate to `createLinkCore`, which validates the URL and slug, enforces
+ *    the configured active-link cap, claims the short code, and warms KV
+ * 5. Return 201 with the created link resource
+ *
+ * This handler is deliberately thin. `POST /api/links/batch` calls the same core
+ * function, so the two endpoints cannot disagree about what a valid link is.
+ *
+ * Error middleware wraps this handler — errors thrown here are caught and
+ * mapped to appropriate HTTP status codes by the outermost errorHandler.
+ */
+export const createLink: Handler<{
+  Bindings: AppEnv;
+  Variables: HonoVars;
+}> = async (c) => {
+  let body: CreateLinkInput;
+  try {
+    body = await c.req.json<CreateLinkInput>();
+  } catch {
+    throw new ValidationError("Invalid JSON body", "invalid_request");
+  }
+
+  const link = await createLinkCore({
+    env: c.env,
+    tenant: c.get("tenant"),
+    waitUntil: (p) => c.executionCtx.waitUntil(p),
+    input: body ?? {},
+  });
+
+  return c.json(link, 201);
 };
 
 // ---------------------------------------------------------------------------
@@ -460,6 +614,17 @@ export const listLinks: Handler<{
 
 // ---------------------------------------------------------------------------
 // PATCH /api/links/:id — update link (toggle active, change title, set client_ref)
+//
+// A SLUG IS NOT AMONG THE UPDATABLE FIELDS, and that is a decision rather than
+// an omission. One NFC tag or QR sticker per physical location is printed once
+// and lives in the world for months; renaming a link breaks every sticker
+// already out there, and there is no way to recall them. `short_code` is
+// immutable by definition.
+//
+// So the field is REJECTED, not ignored. A silently-dropped `slug` would return
+// `ok: true` and leave a caller believing a rename had landed while the printed
+// tags quietly point at the old URL — the most expensive possible kind of
+// "it said it worked".
 // ---------------------------------------------------------------------------
 
 export const updateLink: Handler<{
@@ -469,11 +634,25 @@ export const updateLink: Handler<{
   const tenant = c.get("tenant");
   const linkId = c.req.param("id")!;
 
-  let body: { is_active?: boolean; title?: string; client_ref?: string };
+  let body: {
+    is_active?: boolean;
+    title?: string;
+    client_ref?: string;
+    slug?: unknown;
+  };
   try {
     body = await c.req.json();
   } catch {
     throw new ValidationError("Invalid JSON body", "invalid_request");
+  }
+
+  // Checked before anything else, and before the DB is touched, so a rename
+  // attempt cannot half-apply alongside a toggle or a client_ref write.
+  if (body.slug !== undefined) {
+    throw new ValidationError(
+      "slug cannot be changed: a link's URL is immutable once printed",
+      "slug_immutable",
+    );
   }
 
   // Reject a wrong-typed client_ref up front rather than silently ignoring it:

@@ -1,6 +1,7 @@
 import type { Handler } from "hono";
 import type { AppEnv, HonoVars } from "../types/env";
 import { VISITOR_ESTIMATE_CAVEAT } from "../analytics/metrics";
+import { resolveMaxActiveLinks } from "../api/links";
 
 // ---------------------------------------------------------------------------
 // Shared shell
@@ -303,12 +304,31 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
 // ---------------------------------------------------------------------------
 
 export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }> = (c) => {
+  // The cap is configuration now (T3.1), so the counter reads it from the same
+  // source the API enforces it from. Hardcoding a second copy here would let the
+  // UI promise a quota the server does not honour — the user would create links
+  // until the dashboard stopped counting and never learn why.
+  const activeLinkLimit = resolveMaxActiveLinks(c.env);
+
   const body = `
     <div class="card">
       <h3>Create Short Link</h3>
       <form id="create-form">
         <label for="url">Destination URL</label>
         <input type="text" id="url" placeholder="example.com or https://..." required>
+        <label for="slug">Custom short code (optional)</label>
+        <!--
+          Pre-printed tags. A sticker is printed ONCE and lives in the world for
+          months, so the code on it must be one the user chose deliberately —
+          \`cafe-central\` is meaningful to a store owner in a way \`x7f3b2q\` is not.
+          Leaving this blank falls back to a random code, exactly as before.
+
+          The rules (3-32 chars, letters/digits/-/_ only, no leading or trailing
+          hyphen, not an app route) are enforced server-side in
+          src/utils/short-code.ts; this pattern only helps the user see the shape
+          before they hit the error.
+        -->
+        <input type="text" id="slug" placeholder="cafe-central" maxlength="32" pattern="[A-Za-z0-9_-]+">
         <label for="title">Title (optional)</label>
         <input type="text" id="title" placeholder="My awesome link" maxlength="200">
         <button type="submit">Shorten</button>
@@ -321,7 +341,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
     </div>
 
     <div class="card">
-      <h3>Your Links (<span id="link-count">0</span>/30)</h3>
+      <h3>Your Links (<span id="link-count">0</span>/${activeLinkLimit})</h3>
       <div id="links-loading" class="loading">Loading...</div>
       <div class="table-wrap">
       <table id="links-table" style="display:none;">
@@ -379,6 +399,25 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         <h3 style="margin-bottom:0.5rem;">QR Code</h3>
         <img id="qr-img" src="" alt="QR Code" style="max-width:200px;">
         <p id="qr-url" style="font-size:0.75rem;color:#64748b;margin-top:0.5rem;word-break:break-all;"></p>
+        <!--
+          PRINT-SHEET ENTRY POINT (T3.4).
+
+          The whole point of this phase is a URL that goes on a sticker. The modal
+          already DISPLAYS that URL, but a <p> is not something a user can
+          usefully copy: selecting it by hand, with a word-break to dodge, is
+          exactly the friction that ends with a mistyped code on a sticker.
+
+          So the one action the user came here for is a real control. It copies
+          the URL from the DOM — never from a re-derived string — so what lands
+          on the sticker is byte-for-byte what the QR image encodes.
+
+          Wired with addEventListener, NOT onclick="...". No inline handler is
+          added anywhere in this file: an attribute body is handed to the JS
+          engine, where the HTML entities esc() emits are ordinary characters
+          that terminate nothing. The pre-existing inline handlers on the modal
+          chrome are static and carry no record data; this one is not that.
+        -->
+        <button id="copy-print-sheet" class="btn-sm btn-outline" style="margin-top:0.5rem;">Copy URL for print sheet</button>
         <button class="btn-sm" style="margin-top:0.5rem;" onclick="document.getElementById('qr-modal').classList.add('hidden')">Close</button>
       </div>
     </div>
@@ -405,6 +444,31 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
        */
       window.__apiReady = new Promise((resolve) => { window.__apiReadyResolve = resolve; });
 
+      /**
+       * Copies the QR modal's URL to the clipboard — the print-sheet handoff.
+       *
+       * Reads #qr-url's textContent rather than rebuilding the URL, so the
+       * copied string cannot drift from the one the QR image encodes. showQR
+       * writes that element with textContent (never innerHTML), so what is read
+       * back here is the plain URL and not markup.
+       */
+      document.getElementById("copy-print-sheet").addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        const url = document.getElementById("qr-url").textContent;
+        if (!url) return;
+        try {
+          await navigator.clipboard.writeText(url);
+          const original = btn.textContent;
+          btn.textContent = "Copied!";
+          setTimeout(() => { btn.textContent = original; }, 1500);
+        } catch {
+          // Clipboard access can be refused; surfacing the text beats a silent
+          // no-op, because the user's next move is to hand-write the code on a
+          // sticker and a typo there is unrecoverable.
+          alert("Copy failed — select the URL above and copy it manually.");
+        }
+      });
+
       document.getElementById("create-form").addEventListener("submit", async (e) => {
         e.preventDefault();
         const btn = e.target.querySelector("button");
@@ -416,9 +480,16 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         result.style.display = "none";
 
         try {
+          // A blank slug field means "generate one for me" and must stay
+          // optional, so it is sent as undefined rather than as "". The server
+          // treats an explicit empty string as absent too, but a client should
+          // not lean on that when it can simply omit the key.
+          const slugValue = document.getElementById("slug").value.trim();
+
           const res = await window.__api("POST", "/api/links", {
             original_url: document.getElementById("url").value,
             title: document.getElementById("title").value || undefined,
+            slug: slugValue || undefined,
           });
 
           if (!res.ok) {
@@ -431,6 +502,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           result.style.display = "";
           document.getElementById("url").value = "";
           document.getElementById("title").value = "";
+          document.getElementById("slug").value = "";
           msg.className = "message success";
           msg.textContent = "Link created! Copied to clipboard.";
           navigator.clipboard.writeText(data.short_url);

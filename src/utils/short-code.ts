@@ -44,6 +44,127 @@ export function isReservedShortCode(code: string): boolean {
   return RESERVED_ROUTE_SET.has(code);
 }
 
+// ---------------------------------------------------------------------------
+// Caller-supplied slugs (T3.2)
+//
+// WHY THIS EXISTS SEPARATELY FROM generateShortCode
+//
+// The requirement is one NFC tag or QR sticker per physical location,
+// PRE-PRINTED, living in the world for months. The URL on a sticker cannot
+// change afterwards without re-printing every sticker.
+//
+// That inverts the usual generator contract. `generateShortCode` REGENERATES on
+// an unusable draw, and that is correct — the user did not choose the code, so
+// a second draw costs nothing. A slug the caller typed is the opposite: it is
+// the literal string that will be embossed on a tag. Substituting anything for
+// it produces stickers that point somewhere else, permanently, with no way to
+// fix them.
+//
+// So this is a VALIDATOR, not a generator. It accepts or rejects; it never
+// rewrites.
+//
+// It returns a result rather than throwing so the rule set stays pure and
+// directly unit-testable, and so the caller (an HTTP handler) owns the decision
+// to turn a failure into a ValidationError with an HTTP status.
+// ---------------------------------------------------------------------------
+
+/**
+ * Shortest accepted slug.
+ *
+ * 3 matches the existing short-code minimum, so the two kinds of slug are not
+ * governed by different lower bounds.
+ */
+export const MIN_CUSTOM_SLUG_LENGTH = 3;
+
+/**
+ * Longest accepted slug.
+ *
+ * Every character here is a character on every printed sticker, and it is a QR
+ * module too. 32 keeps the artwork scannable at a comfortable physical size;
+ * `cafe-central` is 12 and `x7f3b2q` is 6, and the user picks.
+ */
+export const MAX_CUSTOM_SLUG_LENGTH = 32;
+
+/** Characters a slug may contain: letters, digits, underscore, hyphen. */
+const SLUG_CHARSET = /^[A-Za-z0-9_-]+$/;
+
+/** Outcome of checking a caller-supplied slug. */
+export type CustomSlugCheck =
+  | { valid: true }
+  | { valid: false; code: string; message: string };
+
+/**
+ * Validates a caller-supplied slug against the printable-slug rules.
+ *
+ * | Rule | Rationale |
+ * |---|---|
+ * | 3–32 characters | 3 matches the code minimum; 32 keeps QR modules small |
+ * | `[A-Za-z0-9_-]` only | No `/` — it breaks the single-segment route |
+ * | No leading/trailing hyphen | `-foo` reads like a flag |
+ * | Not in `RESERVED_ROUTES` | Would be unreachable; see below |
+ * | Case-sensitive vs reserved | Hono matches paths case-sensitively |
+ *
+ * A non-string is rejected rather than coerced. `12345` stringifies to a
+ * perfectly valid slug, and handing back a value the caller never typed as the
+ * literal for a printed tag is exactly the failure this whole mechanism exists
+ * to prevent.
+ *
+ * The reserved check is D2. A caller-supplied slug equal to an app route is not
+ * an unlucky draw — it is an UNREACHABLE link: Hono resolves the static route
+ * ahead of `/:code`, so the link 404s forever while still consuming a registry
+ * row and a quota slot. Rejecting it is the only honest outcome, and it has to
+ * happen at creation time, while the stickers are still unmade. The message
+ * names the offending route so the user does not have to guess which word was
+ * unavailable.
+ *
+ * Checks run most-specific-first: a value that is both too short AND contains a
+ * slash reports the charset fault, because that is the one the user must fix
+ * either way.
+ */
+export function validateCustomSlug(slug: unknown): CustomSlugCheck {
+  if (typeof slug !== "string") {
+    return {
+      valid: false,
+      code: "invalid_slug",
+      message: "slug must be a string",
+    };
+  }
+
+  if (slug.length < MIN_CUSTOM_SLUG_LENGTH || slug.length > MAX_CUSTOM_SLUG_LENGTH) {
+    return {
+      valid: false,
+      code: "invalid_slug_length",
+      message: `slug must be between ${MIN_CUSTOM_SLUG_LENGTH} and ${MAX_CUSTOM_SLUG_LENGTH} characters`,
+    };
+  }
+
+  if (!SLUG_CHARSET.test(slug)) {
+    return {
+      valid: false,
+      code: "invalid_slug_charset",
+      message: "slug may only contain letters, numbers, hyphens and underscores",
+    };
+  }
+
+  if (slug.startsWith("-") || slug.endsWith("-")) {
+    return {
+      valid: false,
+      code: "invalid_slug_hyphen",
+      message: "slug must not begin or end with a hyphen",
+    };
+  }
+
+  if (isReservedShortCode(slug)) {
+    return {
+      valid: false,
+      code: "reserved_slug",
+      message: `slug "${slug}" is a reserved application route and would be unreachable`,
+    };
+  }
+
+  return { valid: true };
+}
+
 /**
  * Upper bound on regeneration attempts before giving up.
  *

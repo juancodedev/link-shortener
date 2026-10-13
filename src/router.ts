@@ -12,6 +12,7 @@ import { redirectHandler } from "./handlers/redirect";
 import { signupHandler, loginHandler, resetPasswordHandler, authCallbackHandler } from "./handlers/auth";
 import { dashboardHandler } from "./handlers/dashboard";
 import { createLink, listLinks, updateLink, deleteLink, linkClicks } from "./api/links";
+import { createLinksBatch } from "./api/batch";
 import { listClientRefMetrics } from "./api/clients";
 import { createTenant, deleteTenant } from "./api/tenants";
 
@@ -67,6 +68,16 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
   app.patch("/api/links/:id", auth, userProfileTenantMiddleware, updateLink);
   app.delete("/api/links/:id", auth, userProfileTenantMiddleware, deleteLink);
   app.get("/api/links/:id/clicks", auth, userProfileTenantMiddleware, linkClicks);
+
+  // Batch creation: auth → resolve tenant from user profile → handler.
+  //
+  // THE MIDDLEWARE CHAIN IS LOAD-BEARING, NOT DECORATIVE. The handler qualifies
+  // every query against `c.get("tenant").schemaName`. Registering this route
+  // with `auth` alone would not merely return the wrong numbers — it would throw
+  // on an undefined tenant, and any later edit that made it tolerate that would
+  // read across tenants. It is identical to the routes above for exactly that
+  // reason, not for tidiness.
+  app.post("/api/links/batch", auth, userProfileTenantMiddleware, createLinksBatch);
 
   // Per-client_ref visitor rollup: auth → resolve tenant from user profile →
   // handler. The same chain as every other tenant-scoped route above, and for

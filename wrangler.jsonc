@@ -37,6 +37,7 @@
 
   "vars": {
     "SHORT_URL_DOMAIN": "shorter.juancode.dev",
-    "ENVIRONMENT": "development"
+    "ENVIRONMENT": "development",
+    "MAX_ACTIVE_LINKS": "500"
   }
 }

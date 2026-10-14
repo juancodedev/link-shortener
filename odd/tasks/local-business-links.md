@@ -307,14 +307,14 @@ Every phase obeys these. They are not aspirations; they are the acceptance gate 
 No behaviour change. Safe to land first, and T0.1 alone removes a network hop from every
 authenticated request.
 
-- [ ] **T0.1** Verify the JWT locally with `jose` HS256 against `SUPABASE_JWT_SECRET`, replacing
+- [x] **T0.1** Verify the JWT locally with `jose` HS256 against `SUPABASE_JWT_SECRET`, replacing
       the per-request `fetch` in `src/middleware/auth.ts:28`. Keep the HTTP call as a fallback
       until the local path is verified against a real token, then remove `jose`-unused dead
       weight. A verification failure must still produce the same 401 shape as today.
-- [ ] **T0.2** Wrap `provisionTenant` in an explicit `BEGIN` / `COMMIT` / `ROLLBACK` so a DDL
+- [x] **T0.2** Wrap `provisionTenant` in an explicit `BEGIN` / `COMMIT` / `ROLLBACK` so a DDL
       failure cannot leave a tenant row without its schema. Prefer the real transaction over
       correcting the comment.
-- [ ] **T0.3** Rewrite the README: `SUPABASE_JWT_SECRET` not `JWT_SECRET`, no `jose` claim, the
+- [x] **T0.3** Rewrite the README: `SUPABASE_JWT_SECRET` not `JWT_SECRET`, no `jose` claim, the
       real analytics limits, and the printable-slug rules. Documentation drift is what makes the
       next engineer trust the wrong thing.
 
@@ -324,10 +324,10 @@ Deliberately **not** the RBAC rework. This phase only adds the table and the col
 action screen in Phase 2 can carry a real `location_id` foreign key. The multi-site access model
 waits for Phase 4.
 
-- [ ] **T1.1** `supabase/migrations/00006_locations.sql` — `public.locations(id, tenant_id →
+- [x] **T1.1** `supabase/migrations/00006_locations.sql` — `public.locations(id, tenant_id →
       public.tenants ON DELETE CASCADE, name, slug, is_active, created_at)`, index on `tenant_id`.
-- [ ] **T1.2** Backfill: create one location per existing tenant so no tenant is left without one.
-- [ ] **T1.3** Add `location_id UUID` to the tenant `links` DDL in **both**
+- [x] **T1.2** Backfill: create one location per existing tenant so no tenant is left without one.
+- [x] **T1.3** Add `location_id UUID` to the tenant `links` DDL in **both**
       `src/tenants/provision.ts:22` and `supabase/migrations/tenant/001_create_links.sql`, plus
       a `00007` ALTER migration for tenants that already exist, following the `00004` pattern.
       **Nullable, no default, existing rows left null** — that is what keeps the change additive.
@@ -339,7 +339,7 @@ waits for Phase 4.
       `ALTER TABLE ... ADD CONSTRAINT` has no `IF NOT EXISTS` form in PostgreSQL and would
       break the re-runnable ALTER pattern. The FK belongs on `analytics.tag_ratings` in
       Phase 2, which outlives any tenant schema.
-- [ ] **T1.4** `GET /api/links` returns `location_id` and `location_name` so the dashboard can
+- [x] **T1.4** `GET /api/links` returns `location_id` and `location_name` so the dashboard can
       label rows without a second round trip.
 
 **Not in this phase:** `tenant_memberships`, the `profiles` rework, or the context switcher.
@@ -348,55 +348,60 @@ system behaves today.
 
 ### Phase 2 — Action screen (the product)
 
-- [ ] **T2.1** `is_gated BOOLEAN DEFAULT false` on the link DDL (both copies). Default `false`
+- [x] **T2.1** `is_gated BOOLEAN DEFAULT false` on the link DDL (both copies). Default `false`
       keeps every existing link on the plain 302 path.
-- [ ] **T2.2** `analytics.tag_ratings(id, tenant_id, link_id, location_id, rating NULLABLE,
+- [x] **T2.2** `analytics.tag_ratings(id, tenant_id, link_id, location_id, rating NULLABLE,
       action_taken CHECK IN ('google_redirect','internal_feedback') NOT NULL, scanned_at)` with
       indexes on `(tenant_id, scanned_at)` and `(link_id, scanned_at)`. It lives in `analytics.*`,
       not the tenant schema, so the dashboard never touches N schemas.
-- [ ] **T2.3** `analytics.tag_feedback(id, tenant_id, link_id, location_id, rating, comment,
+- [x] **T2.3** `analytics.tag_feedback(id, tenant_id, link_id, location_id, rating, comment,
       customer_contact, scanned_at)`.
-- [ ] **T2.4** In `redirectHandler`, when `is_gated` is true, return the action screen instead of
+- [x] **T2.4** In `redirectHandler`, when `is_gated` is true, return the action screen instead of
       a 302. One round trip, both actions visible from first paint, usable on a phone with no
       build step. **Wrap in try/catch and fall back to the plain 302** — see the always-functional
       contract.
-- [ ] **T2.5** `POST /api/gate` — records `action_taken` plus an optional rating, returns the next
+- [x] **T2.5** `POST /api/gate` — records `action_taken` plus an optional rating, returns the next
       view. The Google URL is returned verbatim and never withheld.
-- [ ] **T2.6** Record inside `waitUntil` alongside the existing click tracking, so a slow insert
+- [x] **T2.6** Record inside `waitUntil` alongside the existing click tracking, so a slow insert
       cannot delay the customer's redirect.
-- [ ] **T2.7** The private branch renders an inline feedback form reusing the T2.3 table.
-- [ ] **T2.8** Decide where the HTML lives. The spec proposes `src/ui/satisfaction.ts`, a
+- [x] **T2.7** The private branch renders an inline feedback form reusing the T2.3 table.
+- [x] **T2.8** Decide where the HTML lives. The spec proposes `src/ui/satisfaction.ts`, a
       directory the repo does not have — every other HTML string lives in `src/handlers/`.
       Either is defensible; pick one and do not mix.
 
 ### Phase 3 — Metrics
 
-- [ ] **T3.1** Action distribution and derivation rate from `tag_ratings.action_taken`.
-- [ ] **T3.2** Satisfaction split by action, plus the gap between the two. **Always render the
+- [x] **T3.1** Action distribution and derivation rate from `tag_ratings.action_taken`.
+- [x] **T3.2** Satisfaction split by action, plus the gap between the two. **Always render the
       sample size next to the mean** — stars are optional, so this is computed from a
       self-selected minority and the error bars are wide on a small tenant.
-- [ ] **T3.3** Per-location table, reusing the `client_ref` rollup pattern in
+- [x] **T3.3** Per-location table, reusing the `client_ref` rollup pattern in
       `src/analytics/metrics.ts`.
-- [ ] **T3.4** Hourly and daily peaks from `created_at` bucketing.
-- [ ] **T3.5** Dashboard layout presentable as a screenshot — it is the email report.
+- [x] **T3.4** Hourly and daily peaks from `created_at` bucketing.
+- [x] **T3.5** Dashboard layout presentable as a screenshot — it is the email report.
 
 ### Phase 4 — Multi-site RBAC
 
 The expensive phase, and the reason it sits here: it delivers nothing a single-site customer can
 see, so it must not compete with the product for the first days of delivery.
 
-- [ ] **T4.1** Add `public.tenant_memberships(id, profile_id → public.profiles.id ON DELETE
+- [x] **T4.1** Add `public.tenant_memberships(id, profile_id → public.profiles.id ON DELETE
       CASCADE, tenant_id → public.tenants.id ON DELETE CASCADE, role, created_at, UNIQUE
       (profile_id, tenant_id))`.
-- [ ] **T4.2** Decide what `public.profiles` becomes. `tenant_id` is `NOT NULL` today, so the join
+- [x] **T4.2** Decide what `public.profiles` becomes. `tenant_id` is `NOT NULL` today, so the join
       table is inert until that changes. Migrate the column out, expand first and drop later.
-- [ ] **T4.3** Reconcile the role vocabulary. `public.profiles.role` is
+- [x] **T4.3** Reconcile the role vocabulary. `public.profiles.role` is
       `CHECK (role IN ('owner','admin','member'))`; memberships introduce
       `('owner','admin','viewer')`. Two vocabularies mean a membership can never be compared to
       a profile role.
-- [ ] **T4.4** Context switcher: `GET /api/tenants` returns every tenant the user can reach, and
-      an explicit context selects one per request.
-- [ ] **T4.5** Enforce per-store isolation: a membership in tenant A grants nothing in tenant B.
+- [x] **T4.4 (backend)** `GET /api/tenants` (`listTenants`) + `createTenantMembershipMiddleware`
+      selecting via `X-Tenant-Slug` or `?tenant=`. One membership resolves with no header, so
+      single-store users need no client change.
+- [ ] **T4.4 (UI) — NOT DONE, and it breaks a real user.** The dashboard does not handle
+      **409 `tenant_required`**. Anyone in two locations gets an error instead of their panel.
+      The switcher must call `GET /api/tenants`, render the choice, and send the header on
+      every subsequent API call. **This is the only known broken path in the product.**
+- [x] **T4.5** Enforce per-store isolation: a membership in tenant A grants nothing in tenant B.
 
 ### Phase 5 — Subscriptions
 
@@ -711,11 +716,54 @@ Nothing on the Phases 0–3 critical path is blocked. Work can start today.
   harder-to-scan symbol. Viable only for digital signage, which is a different
   product. Worth revisiting if digital-menu customers ask for it.
 
-- [ ] Phase 4 — multi-site RBAC
-- [ ] Phase 5 — subscriptions
+- [x] Phase 4 — multi-site RBAC — schema, resolver and operator surface shipped. **UI switcher
+      pending**, see T4.4 above.
+- [x] Phase 5 — subscriptions — T5.1–T5.5 complete, including the operator surface (#51) and
+      the pause page's way out (#53).
 
 ## Next step
 
 Phase 1. `public.locations` plus a nullable `location_id` on the tenant `links` DDL — additive
 only, with existing rows left null. Nothing in Phase 1 depends on an open decision, and Phase 2
 needs the table to exist so `tag_ratings.location_id` can be a real foreign key.
+
+
+---
+
+## Open items, as of the end of this session
+
+Everything below was verified against the code, not carried over from memory.
+
+### The one thing that is broken
+
+**T4.4 (UI) — the dashboard does not handle 409 `tenant_required`.** A user who belongs to
+two locations gets an API error instead of their panel. The backend correctly returns 409 and
+correctly refuses to guess which location was meant; the client was never taught to choose.
+Everything else in Phases 0–5 works.
+
+### Deferred on purpose, with the reason
+
+**The derivation rate is not tamper-proof.** `review-gate.ts` computes it from
+`analytics.tag_ratings`, and that is the table the public `POST /api/gate` writes. Rate limiting
+bounds volume; it does not make the metric trustworthy, and a patient attacker under the limit is
+never slowed down. Chosen deliberately when the owner decided volume control was sufficient.
+Closing it means anchoring the denominator to `analytics.link_clicks` (written on the redirect,
+not the POST) and/or minting a per-visit HMAC nonce when the `no-store` action screen renders.
+
+**Reactivation is slower than pausing.** Pausing takes effect in about two seconds; reactivation
+waits on Cloudflare KV's eventual-consistent delete. Not fixable in code. The costly direction —
+a tenant that stops paying still serving — is the fast one, which is the ordering that matters.
+
+**vitest stays pinned to 4.1.11.** vitest 5 cannot load the CommonJS `pg` dependency inside the
+Cloudflare workers pool. Pinned exactly rather than with a caret so the next bump fails loudly
+instead of silently reddening main. Worth retrying with a real fix, not by reverting and hoping.
+
+### Configuration that is a placeholder
+
+`BILLING_CONTACT` is set to `mailto:hola@juancode.dev`. If that is not a real support address,
+the pause page sends customers somewhere wrong — verify before any paying customer sees it.
+
+### Housekeeping
+
+Dependabot PRs #14, #16 and #18 are stale and will keep resurrecting `package-lock.json`. Close
+them. A Dependabot advisory on `main` was still open at the time of writing.

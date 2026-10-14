@@ -43,6 +43,7 @@ import m00009 from "../../supabase/migrations/00009_review_gate_schema.sql?raw";
 import m00010 from "../../supabase/migrations/00010_backfill_tenant_migration_version_2.sql?raw";
 import m00011 from "../../supabase/migrations/00011_tenant_memberships.sql?raw";
 import m00012 from "../../supabase/migrations/00012_owner_delete_restrict.sql?raw";
+import m00013 from "../../supabase/migrations/00013_subscription_status.sql?raw";
 
 interface Migration {
   version: number;
@@ -64,6 +65,7 @@ const MIGRATIONS: Migration[] = [
   { version: 10, name: "00010_backfill_tenant_migration_version_2", sql: m00010 },
   { version: 11, name: "00011_tenant_memberships", sql: m00011 },
   { version: 12, name: "00012_owner_delete_restrict", sql: m00012 },
+  { version: 13, name: "00013_subscription_status", sql: m00013 },
 ];
 
 /** Strips `--` comments so a prose version number is never read as a claim. */
@@ -304,5 +306,38 @@ describe("00012 owner_id delete rule", () => {
   it("is written for the registry, not for the links table", () => {
     expect(sql).toContain("short_code_registry");
     expect(sql).toContain("resolveRegistryEntry");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 00013 — subscription status
+// ---------------------------------------------------------------------------
+
+describe("00013 subscription_status", () => {
+  const sql = m00013;
+
+  // The whole migration is safe or unsafe on this one line. Anything else would
+  // 404 every printed sticker of every existing customer the moment it runs.
+  it("defaults to active so no live tenant starts failing", () => {
+    expect(sql).toMatch(/subscription_status\s+TEXT\s+DEFAULT\s+'active'\s+NOT\s+NULL/i);
+  });
+
+  // is_active means "removed". subscription_status means "exists, unpaid".
+  // Reporting a non-payment as a deletion is how a customer learns their
+  // business was shut down when the truth is an invoice.
+  it("is a separate column from is_active, not a replacement", () => {
+    expect(sql).not.toMatch(/DROP\s+COLUMN[^;]*is_active/i);
+    expect(sql).not.toMatch(/ALTER\s+COLUMN\s+is_active/i);
+  });
+
+  it("constrains the vocabulary so a typo cannot pause a tenant silently", () => {
+    expect(sql).toContain("subscription_status IN ('active', 'past_due', 'canceled')");
+  });
+
+  it("is re-runnable", () => {
+    expect(sql).toContain("ADD COLUMN IF NOT EXISTS");
+    // ADD CONSTRAINT has no IF NOT EXISTS form, so the CHECK must be guarded.
+    expect(sql).toContain("tenants_subscription_status_check");
+    expect(sql).toContain("IF NOT EXISTS");
   });
 });

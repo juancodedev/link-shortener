@@ -151,6 +151,19 @@ export interface ResolvedRegistryEntry {
    * blank title.
    */
   displayName?: string;
+  /**
+   * Billing state of the owning tenant, as of when this entry was written.
+   *
+   * This is a MIRROR of `public.tenants.subscription_status`, not the truth. The
+   * registry cache has a 24 h TTL, so this value goes stale: when it expires the
+   * JOIN re-reads the real status and the entry is rewritten. That is the
+   * property that keeps a paused tenant from resurrecting itself.
+   *
+   * Optional because a cache entry written before this field existed has no such
+   * key. A missing value means "assume active" — the pre-subscription behaviour,
+   * and the safe direction only for as long as it stays true.
+   */
+  subscriptionStatus?: string;
 }
 
 /**
@@ -188,6 +201,7 @@ export async function resolveRegistryEntry(
       salt: string;
       subdomain: string;
       display_name: string;
+      subscription_status: string;
     }>(
       `SELECT r.short_code,
               r.link_id,
@@ -195,7 +209,8 @@ export async function resolveRegistryEntry(
               t.schema_name,
               t.salt,
               t.subdomain,
-              t.display_name
+              t.display_name,
+              t.subscription_status
          FROM public.short_code_registry r
          JOIN public.tenants t ON t.id = r.tenant_id
         WHERE r.short_code = $1
@@ -220,6 +235,7 @@ export async function resolveRegistryEntry(
     subdomain: row.subdomain,
     linkId: row.link_id,
     displayName: row.display_name,
+    subscriptionStatus: row.subscription_status,
   };
 
   await setCachedRegistryEntry(env, shortCode, entry);

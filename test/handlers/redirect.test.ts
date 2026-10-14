@@ -564,3 +564,191 @@ describe("redirectHandler action screen (T2.4)", () => {
     expect(res.headers.get("Content-Type")).toMatch(/text\/html/i);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Subscription pause
+//
+// is_active = false  → 404, the business was removed (existing behaviour)
+// subscription_status → 402, the business exists and has not paid
+//
+// Conflating the two tells a customer their business was deleted when the
+// truth is an invoice. That distinction is what these tests hold.
+// ---------------------------------------------------------------------------
+
+vi.mock("../../src/handlers/action-screen", () => ({
+  renderActionScreen: vi.fn(),
+  // redirect.ts imports escapeHtml from here too; without it the module mock
+  // hands the handler an undefined binding and the pause page throws.
+  escapeHtml: (raw: string) =>
+    raw.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"),
+}));
+
+describe("subscription pause", () => {
+  /** Runs the handler with a registry entry whose status is `status`. */
+  async function run(status: string | undefined, cachedUrl?: string) {
+    vi.resetAllMocks();
+    vi.mocked(renderActionScreen).mockReturnValue(new Response("screen"));
+    // resetAllMocks clears this module-level mockResolvedValue, and the handler
+    // chains .catch() onto trackClick's result. Without restoring it every test
+    // dies on the mock rather than on the code.
+    const { trackClick: tc } = await import("../../src/analytics/tracker");
+    vi.mocked(tc).mockResolvedValue(undefined);
+
+    const { withClient: wc } = await import("../../src/db/client");
+    vi.mocked(wc).mockImplementation(async (_e: any, fn: any) =>
+      fn({
+        query: vi
+          .fn()
+          .mockResolvedValue({
+            // is_active and expires_at are read from this row; a link with an
+            // undefined is_active reads as inactive and the handler returns 410,
+            // which is the correct answer for the fixture and the wrong one for
+            // the test.
+            rows: [{ original_url: GOOGLE_URL, is_active: true, expires_at: null, is_gated: false }],
+          }),
+      }),
+    );
+    const { getCachedUrl } = await import("../../src/cache/shortcode");
+    vi.mocked(getCachedUrl).mockResolvedValue(cachedUrl ?? null);
+
+    const jsonFn = vi.fn().mockImplementation(
+      (b: unknown, s: number) => new Response(JSON.stringify(b), { status: s }),
+    );
+    const redirectFn = vi.fn(
+      (url: string, status: number) =>
+        new Response(null, { status, headers: { Location: url } }),
+    );
+    const c = {
+      req: {
+        param: vi.fn().mockReturnValue("abc123"),
+        raw: new Request("https://short.link/abc123"),
+      },
+      env: { SHORT_URL_DOMAIN: "short.link", SHORT_URL_CACHE: {} as any },
+      json: jsonFn,
+      redirect: redirectFn,
+      get: vi.fn(),
+      executionCtx: { waitUntil: vi.fn() },
+      var: {},
+    } as any;
+
+    // The registry entry is what the handler reads; stub it at the source.
+    const links = await import("../../src/api/links");
+    vi.spyOn(links, "resolveRegistryEntry").mockResolvedValue({
+      tenantId: "t1",
+      schemaName: "tenant_ab",
+      tenantSalt: "s1",
+      subdomain: "mesa",
+      linkId: "l1",
+      displayName: "Mesa Dorada",
+      ...(status === undefined ? {} : { subscriptionStatus: status }),
+    } as any);
+
+    const res = (await redirectHandler(c, vi.fn() as any)) as Response;
+    return { res, jsonFn, redirectFn };
+  }
+
+  it("redirects normally when the subscription is active", async () => {
+    const { res, redirectFn } = await run("active");
+
+    expect(res.status).toBe(302);
+    expect(redirectFn).toHaveBeenCalled();
+  });
+
+  it("pauses a past_due tenant with 402, not 404", async () => {
+    const { res, redirectFn } = await run("past_due");
+
+    // 404 is what a REMOVED business returns. An unpaid invoice must not be
+    // reported as a deletion.
+    expect(res.status).toBe(402);
+    expect(redirectFn).not.toHaveBeenCalled();
+  });
+
+  it("pauses a canceled tenant the same way", async () => {
+    const { res } = await run("canceled");
+
+    expect(res.status).toBe(402);
+  });
+
+  // The critical one. A printed sticker hits a warm cache almost every time,
+  // and the Google URL lives in that cache — not in the registry entry. Gating
+  // after the cache lookup would let a warm cache serve a paused tenant.
+  it("pauses even when the short-URL cache is warm", async () => {
+    const warm = JSON.stringify({ url: GOOGLE_URL, isActive: true, linkId: "l1" });
+    const { res, redirectFn } = await run("past_due", warm);
+
+    expect(res.status).toBe(402);
+    expect(redirectFn).not.toHaveBeenCalled();
+  });
+
+  // A registry entry written before the field existed has no such key. Failing
+  // closed there would 404 a live business over an absent JSON property.
+  it("treats a missing status as active", async () => {
+    const { res, redirectFn } = await run(undefined);
+
+    expect(res.status).toBe(302);
+    expect(redirectFn).toHaveBeenCalled();
+  });
+
+  it("does not cache the pause page anywhere in between", async () => {
+    const { res } = await run("past_due");
+
+    expect(res.headers.get("Cache-Control")).toContain("no-store");
+    expect(res.headers.get("Content-Type")).toContain("text/html");
+  });
+
+  // The diner at the table did nothing wrong. Most often this is an invoice the
+  // owner has not seen.
+  it("does not accuse the customer or imply the business is closed", async () => {
+    const { res } = await run("past_due");
+    const body = (await res.text()).toLowerCase();
+
+    expect(body).toContain("pausado");
+    expect(body).toContain("abierto");
+    for (const blame of ["impago", "deuda", "moroso", "cerrado", "suspendido"]) {
+      expect(body).not.toContain(blame);
+    }
+  });
+
+  it("escapes a business name that contains markup", async () => {
+    vi.resetAllMocks();
+    vi.mocked(renderActionScreen).mockReturnValue(new Response("screen"));
+    const { trackClick: tc } = await import("../../src/analytics/tracker");
+    vi.mocked(tc).mockResolvedValue(undefined);
+    const { withClient: wc } = await import("../../src/db/client");
+    vi.mocked(wc).mockImplementation(async (_e: any, fn: any) =>
+      fn({ query: vi.fn().mockResolvedValue({ rows: [] }) }),
+    );
+    const { getCachedUrl } = await import("../../src/cache/shortcode");
+    vi.mocked(getCachedUrl).mockResolvedValue(null);
+
+    const c = {
+      req: {
+        param: vi.fn().mockReturnValue("abc123"),
+        raw: new Request("https://short.link/abc123"),
+      },
+      env: { SHORT_URL_DOMAIN: "short.link", SHORT_URL_CACHE: {} as any },
+      json: vi.fn(),
+      redirect: vi.fn(),
+      get: vi.fn(),
+      executionCtx: { waitUntil: vi.fn() },
+      var: {},
+    } as any;
+
+    const links = await import("../../src/api/links");
+    vi.spyOn(links, "resolveRegistryEntry").mockResolvedValue({
+      tenantId: "t1",
+      schemaName: "tenant_ab",
+      tenantSalt: "s1",
+      subdomain: "mesa",
+      linkId: "l1",
+      displayName: "<script>alert(1)</script>",
+      subscriptionStatus: "past_due",
+    } as any);
+
+    const res = (await redirectHandler(c, vi.fn() as any)) as Response;
+    const body = await res.text();
+
+    expect(body).not.toContain("<script>");
+    expect(body).toContain("&lt;script&gt;");
+  });
+});

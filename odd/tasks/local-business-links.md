@@ -423,9 +423,13 @@ see, so it must not compete with the product for the first days of delivery.
     `tenantMembershipMiddleware`). A chain ordering tags across 40 sites issues
     40 calls with a different `X-Tenant-Slug` each. A cross-tenant batch does
     not exist and is not needed yet.
-- [ ] **T5.2** `subscription_status` on `public.tenants`, with webhook handling. **This column is
-      the source of truth** — see the kill-switch design below.
-- [ ] **T5.3** Enforce on the redirect path. `is_active` and `subscription_status` mean different
+- [x] **T5.2** `00013_subscription_status.sql` — `subscription_status TEXT DEFAULT 'active'
+      NOT NULL CHECK (IN ('active','past_due','canceled'))` on `public.tenants`, plus the
+      registry JOIN and `ResolvedRegistryEntry.subscriptionStatus` so the cache mirrors it.
+      Enforced in `redirectHandler` **before** the short-URL cache is consulted → **402** with a
+      readable page. **The default is load-bearing**: anything else would 404 every printed
+      sticker of every existing customer the moment the migration ran.
+- [x] **T5.3** Enforce on the redirect path. `is_active` and `subscription_status` mean different
       things and must not be conflated:
 
 | Condition | Meaning | Result |
@@ -433,8 +437,7 @@ see, so it must not compete with the product for the first days of delivery.
 | `is_active = false` | tenant removed / deprovisioned | 404, as today |
 | `subscription_status IN ('past_due','canceled')` | customer exists, has not paid | pause page with a reactivate link |
 
-- [ ] **T5.4** Add `subscription_status` to the registry JOIN so it lands in the `reg:{code}` KV
-      entry. The join already reads `public.tenants` and already filters `t.is_active = true`, so
+- [x] **T5.4** `subscription_status` added to the registry JOIN and to `ResolvedRegistryEntry`. The join already reads `public.tenants` and already filters `t.is_active = true`, so
       this is one more column on a query that already runs.
 
 #### Kill-switch: KV mirrors the truth, it does not hold it

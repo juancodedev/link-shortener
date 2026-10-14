@@ -585,7 +585,7 @@ vi.mock("../../src/handlers/action-screen", () => ({
 
 describe("subscription pause", () => {
   /** Runs the handler with a registry entry whose status is `status`. */
-  async function run(status: string | undefined, cachedUrl?: string) {
+  async function run(status: string | undefined, cachedUrl?: string, billingContact?: string) {
     vi.resetAllMocks();
     vi.mocked(renderActionScreen).mockReturnValue(new Response("screen"));
     // resetAllMocks clears this module-level mockResolvedValue, and the handler
@@ -623,7 +623,11 @@ describe("subscription pause", () => {
         param: vi.fn().mockReturnValue("abc123"),
         raw: new Request("https://short.link/abc123"),
       },
-      env: { SHORT_URL_DOMAIN: "short.link", SHORT_URL_CACHE: {} as any },
+      env: {
+        SHORT_URL_DOMAIN: "short.link",
+        SHORT_URL_CACHE: {} as any,
+        ...(billingContact === undefined ? {} : { BILLING_CONTACT: billingContact }),
+      },
       json: jsonFn,
       redirect: redirectFn,
       get: vi.fn(),
@@ -751,4 +755,63 @@ describe("subscription pause", () => {
     expect(body).not.toContain("<script>");
     expect(body).toContain("&lt;script&gt;");
   });
+// ---------------------------------------------------------------------------
+// Getting out of a pause
+//
+// Billing is off-platform, so there is no checkout to send the owner to — and a
+// button that changed the subscription would defeat the reason /api/ops refuses
+// every customer credential. The link must route to a human.
+// ---------------------------------------------------------------------------
+
+describe("pause page — reactivation path", () => {
+  it("links to the configured contact when there is one", async () => {
+    const { res } = await run("past_due", undefined, "hola@juancode.dev");
+    const body = await res.text();
+
+    expect(body).toContain('href="mailto:hola@juancode.dev"');
+    expect(body).toContain("Reactivar este punto");
+  });
+
+  // Operator config, but it lands in an href. A javascript: URL there is script
+  // execution on a page a customer is already looking at.
+  it("refuses a javascript: contact instead of rendering it", async () => {
+    const { res } = await run("past_due", undefined, "javascript:alert(1)");
+    const body = await res.text();
+
+    expect(body).not.toContain("javascript:");
+    expect(body).not.toContain("<a class=\"reactivate\"");
+  });
+
+  it("accepts an https url", async () => {
+    const { res } = await run("past_due", undefined, "https://juancode.dev/ayuda");
+    expect(await res.text()).toContain('href="https://juancode.dev/ayuda"');
+  });
+
+  // A deployment with no support address must still render a usable page — the
+  // instructions minus the link, not a broken empty mailto:.
+  it("still renders without a contact configured", async () => {
+    const { res } = await run("past_due");
+    const body = await res.text();
+
+    expect(res.status).toBe(402);
+    expect(body).toContain("contactanos para reactivarlo");
+    expect(body).not.toContain("mailto:");
+  });
+
+  // The diner must not be told they owe something. The reactivation path is
+  // separated and addressed to the owner, because they are the one who finds
+  // this page by checking their own sticker.
+  it("addresses reactivation to the owner, not the diner", async () => {
+    const { res } = await run("past_due", undefined, "hola@juancode.dev");
+    const body = (await res.text()).toLowerCase();
+
+    // The page uses HTML entities for the accented characters, so the raw body
+    // carries `&ntilde;` where a browser would render ñ.
+    expect(body).toContain("due&ntilde;o de este negocio");
+    expect(body).toContain("el local está abierto");
+    for (const blame of ["debate", "impago", "moroso", "adeuda"]) {
+      expect(body).not.toContain(blame);
+    }
+  });
+});
 });

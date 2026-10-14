@@ -102,16 +102,20 @@ export const redirectHandler: Handler<{
   // produces a 404 above; this returns 402 with a way back, because the business
   // exists and the customer is being asked to settle an invoice.
   if (isSubscriptionPaused(entry.subscriptionStatus)) {
-    return new Response(renderSubscriptionPaused(slug, displayName ?? slug), {
-      status: 402,
-      headers: {
-        "Content-Type": "text/html; charset=utf-8",
-        // A paused sticker must not be cached by anything in between: serving a
-        // paused page from a CDN would outlive the pause by an unknown amount.
-        "Cache-Control": "no-store",
-        "X-Robots-Tag": "noindex, nofollow",
+    return new Response(
+      renderSubscriptionPaused(slug, displayName ?? slug, c.env.BILLING_CONTACT),
+      {
+        status: 402,
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          // A paused sticker must not be cached by anything in between: serving
+          // a paused page from a CDN would outlive the pause by an unknown
+          // amount.
+          "Cache-Control": "no-store",
+          "X-Robots-Tag": "noindex, nofollow",
+        },
       },
-    });
+    );
   }
 
   // --- 2. KV cache lookup ---
@@ -309,8 +313,10 @@ export function isSubscriptionPaused(status: string | undefined): boolean {
 export function renderSubscriptionPaused(
   slug: string,
   businessName: string,
+  billingContact?: string,
 ): string {
   const name = escapeHtml(businessName);
+  const reactivate = renderReactivate(escapeHtml(slug), billingContact);
   return `<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -331,10 +337,71 @@ export function renderSubscriptionPaused(
 </head>
 <body>
 <main>
+  h1 { font-size: 1.15rem; margin: 0 0 .75rem; }
+  p { font-size: .95rem; line-height: 1.55; margin: 0 0 .75rem; color: #3d3d3d; }
+  a.reactivate { display: inline-block; margin-top: .25rem; padding: .7rem 1.1rem;
+                 background: #1a1a1a; color: #fff; border-radius: 8px;
+                 text-decoration: none; font-size: .95rem; }
+  small { display: block; margin-top: 1.25rem; padding-top: 1rem;
+         border-top: 1px solid #e5e5e0; font-size: .85rem; color: #6b6b6b; }
+</style>
+</head>
+<body>
+<main>
   <h1>${name}</h1>
   <p>Este punto está pausado temporalmente y no puede recibir comentarios ni reseñas por ahora.</p>
   <p>El local está abierto: si necesitás algo, pedí ayuda en el mostrador.</p>
+  ${reactivate}
 </main>
 </body>
 </html>`;
+}
+
+/**
+ * The way out of a pause.
+ *
+ * Two audiences share this page and the copy has to serve both without
+ * confusing either. The person who scanned the sticker is a diner who did
+ * nothing wrong and should never be told they owe something. The person who
+ * needs to act is the owner, who finds this page by checking their own sticker.
+ *
+ * So the diner's line comes first and says plainly that the business is open,
+ * and the reactivation path is separated under a rule and addressed to the
+ * owner. Neither is presented as the other.
+ *
+ * The link is deliberately NOT a checkout. Billing is off-platform, and a
+ * button that changed the subscription itself would defeat the reason `/api/ops`
+ * refuses every customer credential: `active` is exactly what a non-paying
+ * customer would grant themselves.
+ */
+function renderReactivate(slug: string, contact?: string): string {
+  const href = safeContactHref(contact);
+  const action = href
+    ? `<a class="reactivate" href="${href}">Reactivar este punto</a>`
+    : `<p>Si sos el due&ntilde;o de este negocio, contactanos para reactivarlo.</p>`;
+
+  return `<small>
+  <p style="margin:0 0 .75rem">&iquest;Sos el due&ntilde;o de este negocio? ${action}</p>
+</small>`;
+}
+
+/**
+ * Accepts only the schemes a support address legitimately uses.
+ *
+ * `BILLING_CONTACT` is operator configuration rather than user input, but it
+ * lands inside an `href`, and a value like `javascript:...` there would be
+ * script execution on a page a customer is already visiting. Anything that is
+ * not a plain address, a `mailto:`, or an http(s) URL is discarded, and the
+ * page falls back to showing the instructions without a link.
+ */
+function safeContactHref(contact?: string): string | null {
+  if (!contact) return null;
+  const value = contact.trim();
+  if (/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(value)) {
+    return `mailto:${value}`;
+  }
+  if (/^https?:\/\/[A-Za-z0-9.-]+(?:\/[^\s]*)?$/i.test(value)) {
+    return value;
+  }
+  return null;
 }

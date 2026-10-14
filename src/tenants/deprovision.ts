@@ -130,6 +130,13 @@ export async function deprovisionTenant(
   // --- 2. Delete Supabase Auth user (fire-and-forget, non-fatal) ---
   // ONLY when the owner has no memberships left anywhere.
   //
+  // ORDER MATTERS, and 00012 makes it load-bearing: `tenants.owner_id` is
+  // ON DELETE RESTRICT, so the tenant row must already be gone (step 1) before
+  // this call can succeed. Deleting the account first would now fail on the
+  // foreign key — which is the correct outcome, but it would leave the tenant
+  // alive and the account stuck. The steps above run in one transaction, so a
+  // failure anywhere above rolls the whole thing back.
+  //
   // This was unconditional, and with one profile per tenant that was correct:
   // the owner of the only tenant was about to lose access to it, so deleting
   // the login matched the intent.

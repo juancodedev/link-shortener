@@ -327,10 +327,18 @@ waits for Phase 4.
 - [ ] **T1.1** `supabase/migrations/00006_locations.sql` — `public.locations(id, tenant_id →
       public.tenants ON DELETE CASCADE, name, slug, is_active, created_at)`, index on `tenant_id`.
 - [ ] **T1.2** Backfill: create one location per existing tenant so no tenant is left without one.
-- [ ] **T1.3** Add `location_id UUID REFERENCES {schema}.locations` to the tenant `links` DDL in
-      **both** `src/tenants/provision.ts:22` and `supabase/migrations/tenant/001_create_links.sql`.
-      **Nullable at first**, with existing rows left null — this is what keeps the change
-      additive. `test/db/schema.test.ts` must keep asserting the two copies match.
+- [ ] **T1.3** Add `location_id UUID` to the tenant `links` DDL in **both**
+      `src/tenants/provision.ts:22` and `supabase/migrations/tenant/001_create_links.sql`, plus
+      a `00007` ALTER migration for tenants that already exist, following the `00004` pattern.
+      **Nullable, no default, existing rows left null** — that is what keeps the change additive.
+
+      *Correction to the first draft of this task:* it specified
+      `REFERENCES {schema}.locations`. That is wrong on two counts — `locations` lives in
+      `public`, not in the tenant schema, and a constraint earns nothing here. Both objects
+      share the tenant's lifecycle and are dropped together by the same CASCADE, while
+      `ALTER TABLE ... ADD CONSTRAINT` has no `IF NOT EXISTS` form in PostgreSQL and would
+      break the re-runnable ALTER pattern. The FK belongs on `analytics.tag_ratings` in
+      Phase 2, which outlives any tenant schema.
 - [ ] **T1.4** `GET /api/links` returns `location_id` and `location_name` so the dashboard can
       label rows without a second round trip.
 
@@ -570,7 +578,16 @@ Nothing on the Phases 0–3 critical path is blocked. Work can start today.
     transaction that did not exist; they now assert the bracket instead.
   - T0.3 README corrected: `SUPABASE_JWT_SECRET`, real auth behaviour, printable-slug rules,
     `/api/links/batch`, `MAX_ACTIVE_LINKS`, and the real analytics limits.
-- [ ] Phase 1 — locations
+- [x] **Phase 1 — locations complete.** `457 tests / 20 files`, typecheck clean.
+  - T1.1 `00006_locations.sql` — `public.locations` with a cascading FK to `public.tenants`,
+    an index on `tenant_id`, and a UNIQUE `(tenant_id, slug)` so two businesses may both own
+    a "centro".
+  - T1.2 The backfill lives in the same migration: one location per existing tenant, named
+    after the tenant, guarded by `NOT EXISTS` + `ON CONFLICT` so it is re-runnable.
+  - T1.3 `location_id UUID` added to both DDL copies with `idx_links_location`, plus
+    `00007_add_location_id_to_tenant_links.sql` for deployed tenants, using the same
+    `EXECUTE format` / `to_regclass` pattern as `00004`.
+  - T1.4 `GET /api/links` returns `location_id` and `location_name` via a LEFT JOIN.
 - [ ] Phase 2 — action screen
 - [ ] Phase 3 — metrics
 - [ ] Phase 4 — multi-site RBAC

@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS {schema}.links (
     short_code   TEXT NOT NULL,
     title        TEXT,                              -- Optional display name
     client_ref   TEXT,                              -- User-defined CRM identifier; NULL = no client
+    location_id  UUID,                              -- public.locations(id); NULL = unassigned
     clicks_count INTEGER DEFAULT 0 NOT NULL,
     is_active    BOOLEAN DEFAULT true NOT NULL,
     expires_at   TIMESTAMPTZ,                       -- NULL = never expires
@@ -34,6 +35,11 @@ CREATE INDEX IF NOT EXISTS idx_links_active_expires
 -- Sparse: most links have no client_ref until the user fills one in
 CREATE INDEX IF NOT EXISTS idx_links_client_ref
     ON {schema}.links(client_ref);
+
+-- Index for per-location rollups (a pack of stickers, one per table)
+-- Sparse: most links have no location until the owner assigns one
+CREATE INDEX IF NOT EXISTS idx_links_location
+    ON {schema}.links(location_id);
 
 -- Migration tracking table (one per tenant schema)
 CREATE TABLE IF NOT EXISTS {schema}._migrations (

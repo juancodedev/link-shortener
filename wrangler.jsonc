@@ -16,6 +16,17 @@
     }
   },
 
+  "ratelimits": [
+    {
+      "name": "GATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": {
+        "limit": 30,
+        "period": 60
+      }
+    }
+  ],
+
   "kv_namespaces": [
     {
       "binding": "SHORT_URL_CACHE",

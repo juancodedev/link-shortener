@@ -625,6 +625,40 @@ Nothing on the Phases 0–3 critical path is blocked. Work can start today.
   - The peak chart is CSS bars, not a charting library — this screen is screenshotted and
     forwarded as the monthly report, and a canvas renders as a blank box in a headless
     screenshot.
+- [x] **Volume guard on `POST /api/gate`.** Cloudflare `ratelimits` binding
+  (`GATE_LIMITER`), keyed on the short code, 30/min.
+  - **Why the code and not the IP**: an IP key punishes the customer. A whole
+    restaurant sits behind one carrier-grade NAT, so per-IP limiting blocks real
+    people at the exact moment a full room arrives together. `test/handlers/gate.test.ts`
+    fails if this is ever reverted to an IP key.
+  - **Fails open.** A limiter outage must not take the screen down for real
+    customers; the cost is that a flood gets through during the outage.
+  - **Junk spends no budget.** The guard sits after validation, so a malformed
+    body cannot exhaust a real sticker's allowance; a flood of *well-formed*
+    bodies is stopped before Postgres.
+
+  ### Deliberately NOT done — and why
+
+  The derivation rate is computed from `analytics.tag_ratings` for both
+  numerator and denominator, and **that table is what the public POST writes**.
+  An attacker who inflates one inflates the other. So rate limiting bounds
+  volume; it does not make the metric trustworthy. A patient attacker under the
+  limit is never slowed down.
+
+  Closing that would mean anchoring the denominator to `analytics.link_clicks`
+  (written on the redirect, not the POST) and/or a per-visit HMAC nonce minted
+  when the `no-store` action screen renders. The owner chose volume control as
+  sufficient for now, and declined the integrity work — recorded here so it is a
+  decision rather than an oversight.
+
+  Also considered and **rejected: rotating QR/NFC codes.** A short-lived code
+  would break the product's essence — a sticker that is pasted once and works
+  for a year becomes a screen to maintain or a monthly reprint. It is also worse
+  technically: the QR error-correction level that buys scannability at table
+  distance costs ~33% extra width, so a shorter rotating code renders a larger,
+  harder-to-scan symbol. Viable only for digital signage, which is a different
+  product. Worth revisiting if digital-menu customers ask for it.
+
 - [ ] Phase 4 — multi-site RBAC
 - [ ] Phase 5 — subscriptions
 

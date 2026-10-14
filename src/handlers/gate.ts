@@ -36,6 +36,20 @@ const MAX_CONTACT_LENGTH = 200;
 
 const VALID_ACTIONS = new Set(["google_redirect", "internal_feedback"]);
 
+/**
+ * Bounds submissions per sticker per minute. Set in `wrangler.jsonc`.
+ *
+ * Sized against the busiest plausible minute of a single table, not against a
+ * whole restaurant: a code is one sticker, and a rushed service might put a
+ * dozen people through it inside one minute. Thirty leaves headroom without
+ * letting one code fill the queue.
+ *
+ * This is volume control, not an integrity guarantee. A patient attacker who
+ * stays under it is never slowed down. See `odd/tasks/local-business-links.md`
+ * for what integrity would actually cost.
+ */
+const GATE_RATE_LIMIT = 30;
+
 interface GateInput {
   code: string;
   action: string;
@@ -119,6 +133,53 @@ export const gateHandler: Handler<{
   // would inflate the feedback count with nothing behind it.
   if (input.action === "internal_feedback" && input.comment.trim().length === 0) {
     return c.json({ error: "invalid_request", code: "invalid_request" }, 400);
+  }
+
+  // Volume guard, after validation and before any database work. A malformed
+  // body never reaches the limiter, so junk cannot exhaust a real sticker's
+  // budget; a flood of well-formed bodies is stopped before Postgres.
+  //
+  // Keyed on the CODE, not the IP. An IP key punishes the customer: a whole
+  // restaurant sits behind one carrier-grade NAT, so per-IP limiting blocks
+  // real people at the exact moment they are most likely to arrive together —
+  // a full room at 21:00. The code is the resource being protected, and a
+  // single code cannot exceed one table's worth of traffic.
+  if (c.env.GATE_LIMITER) {
+    let allowed: boolean;
+    try {
+      const { success } = await c.env.GATE_LIMITER.limit({ key: input.code });
+      allowed = success;
+    } catch {
+      // Fail open. A limiter outage must not take the action screen down for
+      // real customers; the cost is that a flood gets through during the
+      // outage, which is strictly better than every customer being unable to
+      // leave feedback.
+      allowed = true;
+    }
+
+    if (!allowed) {
+      // 429 rather than a silently-served success: the rating row is what the
+      // owner's dashboard is computed from, and accepting the body while
+      // discarding it would inflate nothing but still cost a database write.
+      //
+      // Note the Google branch is unaffected either way. The screen reaches
+      // Google through a plain `<a href>`, and its POST is fire-and-forget with
+      // the response discarded — so a rate-limited customer still reaches
+      // Google, and refusing here costs the business a rating, not a review.
+      //
+      // The private form, by contrast, is a real navigation. Showing raw JSON to
+      // someone who just typed a complaint is unacceptable, so a browser
+      // `Accept: text/html` gets a page that explains what happened.
+      return wantsHtml(c.req.header("Accept"))
+        ? new Response(rateLimitedHtml(), {
+            status: 429,
+            headers: {
+              "Content-Type": "text/html; charset=utf-8",
+              "Cache-Control": "no-store",
+            },
+          })
+        : c.json({ error: "rate_limited", code: "rate_limited" }, 429);
+    }
   }
 
   let entry: Awaited<ReturnType<typeof resolveRegistryEntry>>;
@@ -228,4 +289,46 @@ async function destinationFor(
     );
     return null;
   }
+}
+/**
+ * Whether this request is a real browser navigation rather than the
+ * screen's fire-and-forget `fetch`.
+ *
+ * `fetch()` sends a wildcard Accept header; a top-level navigation sends
+ * `text/html`. Only the latter needs to be given something readable.
+ */
+function wantsHtml(accept: string | undefined): boolean {
+  return accept != null && accept.includes("text/html");
+}
+
+/**
+ * Shown when the private-feedback form is submitted from an already-full
+ * sticker. It must not read as an accusation: the customer did nothing wrong,
+ * and a busy room is the normal cause.
+ */
+function rateLimitedHtml(): string {
+  return `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Momentáneamente saturado</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 2rem 1.25rem;
+         background: #f6f6f4; color: #1a1a1a; }
+  main { max-width: 30rem; margin: 0 auto; background: #fff; border: 1px solid #e5e5e0;
+         border-radius: 12px; padding: 1.75rem; }
+  h1 { font-size: 1.15rem; margin: 0 0 .75rem; }
+  p { font-size: .95rem; line-height: 1.55; margin: 0 0 .75rem; color: #3d3d3d; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Nos llegó demasiado feedback a la vez</h1>
+  <p>Este punto recibió demasiados envíos en este momento. Tu comentario no se registró.</p>
+  <p>Si querés que el local lo sepa, podés escribirles directamente.</p>
+</main>
+</body>
+</html>`;
 }

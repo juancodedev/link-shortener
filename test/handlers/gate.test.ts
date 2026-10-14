@@ -247,3 +247,165 @@ describe("POST /api/gate", () => {
     expect(calls).toHaveLength(0);
   });
 });
+// ---------------------------------------------------------------------------
+// Volume guard — POST /api/gate
+// ---------------------------------------------------------------------------
+
+describe("POST /api/gate rate limiting", () => {
+  /** A limiter that reports `allowed` and records the keys it was asked about. */
+  function limiter(allowed: boolean) {
+    const limit = vi.fn().mockResolvedValue({ success: allowed });
+    return { GATE_LIMITER: { limit } as any, limit };
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(resolveRegistryEntry).mockResolvedValue(resolvedEntry());
+    mockDb([[], ...DESTINATION_ROWS]);
+  });
+
+  it("allows the request and records nothing unusual when under the limit", async () => {
+    const { GATE_LIMITER, limit } = limiter(true);
+    const { c, jsonFn } = mockContext("code=mesa-01&action_taken=google_redirect");
+    c.env = { SHORT_URL_DOMAIN: "short.link", GATE_LIMITER } as any;
+
+    await gateHandler(c as any, vi.fn() as any);
+
+    expect(limit).toHaveBeenCalledWith({ key: "mesa-01" });
+    expect(jsonFn).toHaveBeenCalledWith(
+      expect.objectContaining({ redirectUrl: expect.any(String) }),
+      200,
+    );
+  });
+
+  // The key decision in this unit. An IP key would block a whole restaurant
+  // behind one carrier NAT, at the exact moment a full room arrives together.
+  it("keys on the code so one restaurant's NAT cannot lock out its own customers", async () => {
+    const { GATE_LIMITER, limit } = limiter(true);
+    const { c } = mockContext("code=mesa-01&action_taken=google_redirect");
+    c.env = { SHORT_URL_DOMAIN: "short.link", GATE_LIMITER } as any;
+
+    await gateHandler(c as any, vi.fn() as any);
+
+    const { key } = limit.mock.calls[0][0] as { key: string };
+    expect(key).toBe("mesa-01");
+    expect(key).not.toMatch(/\d+\.\d+\.\d+\.\d+/);
+  });
+
+  it("returns 429 once the sticker is full", async () => {
+    const { GATE_LIMITER } = limiter(false);
+    const { c, jsonFn } = mockContext("code=mesa-01&action_taken=google_redirect");
+    c.env = { SHORT_URL_DOMAIN: "short.link", GATE_LIMITER } as any;
+
+    await gateHandler(c as any, vi.fn() as any);
+
+    expect(jsonFn).toHaveBeenCalledWith(
+      expect.objectContaining({ error: "rate_limited" }),
+      429,
+    );
+  });
+
+  // A full sticker must not silently swallow a complaint and show a success
+  // page — the customer would believe the local was told.
+  it("writes nothing when it refuses", async () => {
+    const calls = mockDb([[], ...DESTINATION_ROWS]);
+    const { GATE_LIMITER } = limiter(false);
+    const { c, flush } = mockContext(
+      "code=mesa-01&action_taken=internal_feedback&comment=great+food",
+    );
+    c.env = { SHORT_URL_DOMAIN: "short.link", GATE_LIMITER } as any;
+
+    await gateHandler(c as any, vi.fn() as any);
+    await flush();
+
+    expect(calls).toHaveLength(0);
+  });
+
+  // The form is a real navigation; fetch() is not. Someone who just typed a
+  // complaint must not be shown a bare JSON envelope.
+  it("shows a readable page, not JSON, when a browser submits the form", async () => {
+    const { GATE_LIMITER } = limiter(false);
+    const { c } = mockContext("code=mesa-01&action_taken=internal_feedback&comment=hello");
+    c.env = { SHORT_URL_DOMAIN: "short.link", GATE_LIMITER } as any;
+    c.req.header = vi.fn((h: string) =>
+      h.toLowerCase() === "accept" ? "text/html" : "application/x-www-form-urlencoded",
+    ) as any;
+
+    const res = (await gateHandler(c as any, vi.fn() as any)) as Response;
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get("Content-Type")).toContain("text/html");
+    const body = await res.text();
+    expect(body).toContain("demasiados envíos");
+    // It must read as a busy room, not as a punishment.
+    expect(body).not.toMatch(/prohibid|ilegal|abuso/i);
+  });
+
+  it("keeps returning JSON to the screen's own fetch", async () => {
+    const { GATE_LIMITER } = limiter(false);
+    const { c, jsonFn } = mockContext("code=mesa-01&action_taken=google_redirect");
+    c.env = { SHORT_URL_DOMAIN: "short.link", GATE_LIMITER } as any;
+    c.req.header = vi.fn((h: string) =>
+      h.toLowerCase() === "accept" ? "*/*" : "application/x-www-form-urlencoded",
+    ) as any;
+
+    await gateHandler(c as any, vi.fn() as any);
+
+    expect(jsonFn).toHaveBeenCalledWith(
+      expect.objectContaining({ error: "rate_limited" }),
+      429,
+    );
+  });
+
+  // A limiter outage must not take the screen down for real customers.
+  it("fails open when the limiter itself throws", async () => {
+    const GATE_LIMITER = {
+      limit: vi.fn().mockRejectedValue(new Error("limiter down")),
+    } as any;
+    const { c, jsonFn } = mockContext("code=mesa-01&action_taken=google_redirect");
+    c.env = { SHORT_URL_DOMAIN: "short.link", GATE_LIMITER } as any;
+
+    await gateHandler(c as any, vi.fn() as any);
+
+    expect(jsonFn).toHaveBeenCalledWith(
+      expect.objectContaining({ redirectUrl: expect.any(String) }),
+      200,
+    );
+  });
+
+  // Local dev and any deploy where the binding is absent must still work.
+  it("works with no limiter bound at all", async () => {
+    const { c, jsonFn } = mockContext("code=mesa-01&action_taken=google_redirect");
+
+    await gateHandler(c as any, vi.fn() as any);
+
+    expect(jsonFn).toHaveBeenCalledWith(
+      expect.objectContaining({ redirectUrl: expect.any(String) }),
+      200,
+    );
+  });
+
+  // Junk must not be able to burn a real sticker's budget.
+  it("does not spend budget on a request it was going to reject anyway", async () => {
+    const { GATE_LIMITER, limit } = limiter(true);
+    const { c } = mockContext("code=mesa-01&action_taken=not_a_real_branch");
+    c.env = { SHORT_URL_DOMAIN: "short.link", GATE_LIMITER } as any;
+
+    await gateHandler(c as any, vi.fn() as any);
+
+    expect(limit).not.toHaveBeenCalled();
+  });
+
+  // And a flood of valid bodies is stopped before it reaches Postgres.
+  it("stops a flood before any database work", async () => {
+    const calls = mockDb([[], ...DESTINATION_ROWS]);
+    const { GATE_LIMITER } = limiter(false);
+    const { c, flush } = mockContext("code=mesa-01&action_taken=google_redirect");
+    c.env = { SHORT_URL_DOMAIN: "short.link", GATE_LIMITER } as any;
+
+    await gateHandler(c as any, vi.fn() as any);
+    await flush();
+
+    expect(calls).toHaveLength(0);
+  });
+});

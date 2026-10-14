@@ -58,6 +58,17 @@ export interface AppVars {
    * default rather than reject every creation.
    */
   MAX_ACTIVE_LINKS?: string;
+
+  /**
+   * Cloudflare rate limiter guarding `POST /api/gate`.
+   *
+   * Optional for the same reason as `MAX_ACTIVE_LINKS`: the binding exists in
+   * `wrangler.jsonc`, but `wrangler types` only emits what it sees at generation
+   * time, and tests inject a fake. Declaring it optional forces every read site
+   * to decide what an absent limiter means — which for this endpoint is
+   * "allow", because the alternative is a screen that stops working.
+   */
+  GATE_LIMITER?: RateLimit;
 }
 
 /**

@@ -5,7 +5,7 @@ import { qualifyTable } from "../db/schema";
 import { setCachedUrl, getCachedUrl } from "../cache/shortcode";
 import { resolveRegistryEntry } from "../api/links";
 import { trackClick } from "../analytics/tracker";
-import { renderActionScreen } from "./action-screen";
+import { renderActionScreen, escapeHtml } from "./action-screen";
 
 // ---------------------------------------------------------------------------
 // Types for KV-cached link metadata
@@ -88,6 +88,31 @@ export const redirectHandler: Handler<{
 
   const { schemaName, tenantId, tenantSalt, subdomain, displayName } = entry;
   const slug = subdomain;
+
+  // --- 1b. Subscription pause ---
+  //
+  // Checked HERE, before the short-URL cache is consulted, because the Google
+  // URL lives in `{slug}:{code}`, not in the registry entry. Gating after the
+  // cache lookup would let the pause be bypassed by a warm cache — and a warm
+  // cache is exactly the state a printed sticker is in most of the time.
+  //
+  // It is also the first place this runs, so a paused tenant costs no query.
+  //
+  // A paused tenant is NOT a missing tenant. `is_active = false` already
+  // produces a 404 above; this returns 402 with a way back, because the business
+  // exists and the customer is being asked to settle an invoice.
+  if (isSubscriptionPaused(entry.subscriptionStatus)) {
+    return new Response(renderSubscriptionPaused(slug, displayName ?? slug), {
+      status: 402,
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        // A paused sticker must not be cached by anything in between: serving a
+        // paused page from a CDN would outlive the pause by an unknown amount.
+        "Cache-Control": "no-store",
+        "X-Robots-Tag": "noindex, nofollow",
+      },
+    });
+  }
 
   // --- 2. KV cache lookup ---
   let cacheHit = false;
@@ -260,3 +285,56 @@ export const redirectHandler: Handler<{
 
   return c.redirect(redirectUrl!, 302);
 };
+
+/**
+ * Whether a tenant's billing state should stop its links from resolving.
+ *
+ * A missing status means "assume active". That is the pre-subscription
+ * behaviour and is the only safe reading: a cache entry written before the
+ * field existed has no such key, and failing closed there would 404 a live
+ * business over an absent JSON property.
+ */
+export function isSubscriptionPaused(status: string | undefined): boolean {
+  return status === "past_due" || status === "canceled";
+}
+
+/**
+ * Shown when a tenant's subscription has lapsed.
+ *
+ * It must not accuse: most often this is an invoice the owner has not seen, not
+ * a customer in arrears, and the person reading it at the table is a diner who
+ * did nothing wrong. Hence "ask the business to settle it" and no blame, no
+ * judgement, and no implication that the local is closed — it is not.
+ */
+export function renderSubscriptionPaused(
+  slug: string,
+  businessName: string,
+): string {
+  const name = escapeHtml(businessName);
+  return `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>${name}</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 2rem 1.25rem;
+         background: #f6f6f4; color: #1a1a1a; }
+  main { max-width: 30rem; margin: 0 auto; background: #fff; border: 1px solid #e5e5e0;
+         border-radius: 12px; padding: 1.75rem; }
+  h1 { font-size: 1.15rem; margin: 0 0 .75rem; }
+  p { font-size: .95rem; line-height: 1.55; margin: 0 0 .75rem; color: #3d3d3d; }
+  code { font-family: ui-monospace, monospace; font-size: .85rem; background: #f0f0ec;
+         padding: .1rem .35rem; border-radius: 4px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>${name}</h1>
+  <p>Este punto está pausado temporalmente y no puede recibir comentarios ni reseñas por ahora.</p>
+  <p>El local está abierto: si necesitás algo, pedí ayuda en el mostrador.</p>
+</main>
+</body>
+</html>`;
+}

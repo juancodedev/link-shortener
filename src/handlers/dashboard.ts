@@ -226,6 +226,26 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       -webkit-overflow-scrolling: touch;
       margin: 0 -1rem;
       padding: 0 1rem;
+
+      /* Scroll affordance.
+         This container scrolls, but on a platform with overlay scrollbars
+         there is nothing on screen saying so — which is how Disable and Del
+         ended up off-screen with no hint. At narrow widths a five-column table
+         still needs more room than a phone has, and that is Direction B's job
+         to fix; what this layer fixes is that the overflow is now DISCOVERABLE.
+
+         Four layers. The two local ones scroll WITH the content, so they
+         cover the two scroll ones once you reach that end — so each fade
+         only appears while there is more table in that direction. */
+      background-image:
+        linear-gradient(to right, var(--sticker), transparent),
+        linear-gradient(to left, var(--sticker), transparent),
+        linear-gradient(to right, var(--shadow-card), transparent),
+        linear-gradient(to left, var(--shadow-card), transparent);
+      background-position: left center, right center, left center, right center;
+      background-repeat: no-repeat;
+      background-size: 24px 100%, 24px 100%, 14px 100%, 14px 100%;
+      background-attachment: local, local, scroll, scroll;
     }
     @media (min-width: 768px) {
       .table-wrap { margin: 0; padding: 0; }
@@ -439,6 +459,34 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     }
     .panel-pad { padding: 0.75rem; }
     .flush-cell { padding: 0; }
+
+    /* Controls that moved out of the links row into the metrics panel.
+       They are a set of independent fields, not a row of equal-weight
+       buttons, so they stack as a grid on narrow screens. */
+    .panel-controls {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 0.75rem;
+      margin-bottom: 0.75rem;
+    }
+    @media (min-width: 640px) {
+      .panel-controls { grid-template-columns: 1fr 1fr 1fr; gap: 1rem; }
+    }
+    .panel-controls label { margin-bottom: 0.25rem; }
+    .field-row { display: flex; gap: 0.375rem; align-items: center; }
+    .panel-controls .client-ref-input {
+      width: auto;
+      flex: 1 1 auto;
+      min-width: 0;
+      margin-bottom: 0;
+    }
+    .panel-controls button { flex: 0 0 auto; }
+    .field-note {
+      font-size: 0.688rem;
+      line-height: 1.5;
+      color: var(--ink-soft);
+      margin-top: 0.375rem;
+    }
     .gap-top { margin-top: 1rem; }
     .gap-top-sm { margin-top: 0.5rem; }
   </style>
@@ -609,7 +657,6 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
             <th>URL</th>
             <th>Clicks</th>
             <th>Status</th>
-            <th>Client Ref</th>
             <th></th>
           </tr>
         </thead>
@@ -1001,19 +1048,54 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
               <td><span class="url-trunc" title="\${esc(l.original_url)}">\${esc(l.original_url)}</span></td>
               <td><a href="#" data-action="metrics" data-id="\${esc(l.id)}" data-code="\${esc(l.short_code)}" class="clicks-link">\${esc(l.clicks_count)}</a></td>
               <td><span class="badge badge-\${status}">\${status}</span></td>
-              <td><input type="text" id="client-ref-\${esc(l.id)}" value="\${esc(l.client_ref)}" placeholder="None" maxlength="200" class="client-ref-input"></td>
-              <td>
-                <div class="row-actions">
-                  <button class="btn-sm btn-outline" data-action="save-client-ref" data-id="\${esc(l.id)}" title="Save client identifier">Save</button>
-                  <button class="btn-sm" data-action="qr" data-url="\${esc(shortUrl)}" title="QR Code">QR</button>
-                  <button class="btn-sm btn-outline" data-action="toggle" data-id="\${esc(l.id)}" data-active="\${!l.is_active}">\${l.is_active ? "Disable" : "Enable"}</button>
-                  <button class="btn-sm btn-danger" data-action="delete" data-id="\${esc(l.id)}">Del</button>
-                </div>
-              </td>
+              <td><div class="row-actions"><button class="btn-sm btn-danger" data-action="delete" data-id="\${esc(l.id)}">Del</button></div></td>
             </tr>
             <tr id="metrics-\${esc(l.id)}" style="display:none;">
-              <td colspan="6" class="flush-cell">
+              <td colspan="5" class="flush-cell">
                 <div class="panel-pad">
+                  <!-- WHAT LEFT THE ROW, AND WHY IT LIVES HERE
+                       The client-ref field and the state change used to sit in
+                       this row. Measured, that row carried a 130px editable input
+                       and four buttons into a 92.7px cell: the buttons stacked
+                       four rows tall, and because the actions column is LAST,
+                       auto table layout pushed it off the right edge where
+                       overflow-x:auto hid it with no affordance at all. On a
+                       390px phone, 392px of the table was simply not on screen.
+
+                       Both controls belong here anyway. This panel is opened by
+                       the clicks cell -- the primary action of the row -- and it
+                       already holds everything else you do TO a tag rather than
+                       read ABOUT one. An editable identifier and a lifecycle
+                       change are not reading. -->
+                  <div class="panel-controls">
+                    <div class="field">
+                      <label for="client-ref-\${esc(l.id)}">Client ref</label>
+                      <div class="field-row">
+                        <input type="text" id="client-ref-\${esc(l.id)}" value="\${esc(l.client_ref)}" placeholder="None" maxlength="200" class="client-ref-input">
+                        <button class="btn-sm btn-outline" data-action="save-client-ref" data-id="\${esc(l.id)}">Save</button>
+                      </div>
+                    </div>
+                    <div class="field">
+                      <label>Print sheet</label>
+                      <div class="field-row">
+                        <button class="btn-sm" data-action="qr" data-url="\${esc(shortUrl)}">QR code</button>
+                      </div>
+                      <p class="field-note">The code that goes on the sticker. This is the destination the printed tag resolves to.</p>
+                    </div>
+                    <div class="field">
+                      <label>Tag state</label>
+                      <div class="field-row">
+                        <button class="btn-sm btn-outline" data-action="toggle" data-id="\${esc(l.id)}" data-active="\${!l.is_active}">\${l.is_active ? "Disable" : "Enable"}</button>
+                      </div>
+                      <!-- The reason the redirect is a 302 and not a 301, said
+                           where the decision is made. It was absent from the
+                           interface entirely; odd/analysis/dashboard-directions.md
+                           calls that absence out by name. -->
+                      <p class="field-note">\${l.is_active
+                        ? "This tag stops working. Anyone holding the printed sticker keeps the old destination until their browser cache expires."
+                        : "This tag starts working again. The printed sticker works from the next scan."}</p>
+                    </div>
+                  </div>
                   <div class="metric-box visitors-box">
                     <h4>Visitors (estimate)</h4>
                     <div id="visitors-\${esc(l.id)}"><div class="loading">Loading...</div></div>

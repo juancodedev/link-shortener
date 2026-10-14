@@ -782,6 +782,19 @@ describe("pause page — reactivation path", () => {
     expect(body).not.toContain("<a class=\"reactivate\"");
   });
 
+  // The regression this existed to catch: BILLING_CONTACT is configured WITH
+  // the mailto: scheme, and a validator that only understood a bare address
+  // rejected the exact value the project ships. The page then rendered with no
+  // link and no error.
+  it("accepts an address that already carries the mailto: scheme", async () => {
+    const { res } = await run("past_due", undefined, "mailto:owner@example.test");
+    const body = await res.text();
+
+    expect(body).toContain('href="mailto:owner@example.test"');
+    // And not doubled: "mailto:mailto:".
+    expect(body).not.toContain("mailto:mailto:");
+  });
+
   it("accepts an https url", async () => {
     const { res } = await run("past_due", undefined, "https://juancode.dev/ayuda");
     expect(await res.text()).toContain('href="https://juancode.dev/ayuda"');

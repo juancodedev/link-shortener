@@ -397,8 +397,14 @@ function renderReactivate(slug: string, contact?: string): string {
 function safeContactHref(contact?: string): string | null {
   if (!contact) return null;
   const value = contact.trim();
-  if (/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(value)) {
-    return `mailto:${value}`;
+  // Accepts a bare address or one already carrying the `mailto:` scheme.
+  // `BILLING_CONTACT` is configured WITH the prefix, and a validator that
+  // only understood the bare form rejected the one value this project actually
+  // ships — the page silently rendered with no link. Every test used a bare
+  // address, so none of them could see it.
+  const email = /^(?:mailto:)?[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/i;
+  if (email.test(value)) {
+    return value.toLowerCase().startsWith("mailto:") ? value : `mailto:${value}`;
   }
   if (/^https?:\/\/[A-Za-z0-9.-]+(?:\/[^\s]*)?$/i.test(value)) {
     return value;

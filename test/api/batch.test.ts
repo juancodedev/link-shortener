@@ -56,7 +56,7 @@ vi.mock("../../src/middleware/auth", () => ({
  * the wrong two middleware were registered.
  */
 vi.mock("../../src/middleware/tenant", () => ({
-  createUserProfileTenantMiddleware: vi.fn(() =>
+  createTenantMembershipMiddleware: vi.fn(() =>
     vi.fn(async (c: any, next: any) => {
       (globalThis as any).__tenantMiddlewareRuns =
         ((globalThis as any).__tenantMiddlewareRuns ?? 0) + 1;
@@ -199,7 +199,7 @@ describe("batch creation reports per item (T3.3)", () => {
     //
     // The routing tests below build the real app from the mocked auth and
     // tenant middleware. resetAllMocks strips implementations, so
-    // createUserProfileTenantMiddleware() would return undefined and every route
+    // createTenantMembershipMiddleware() would return undefined and every route
     // would register a chain containing `undefined` — the tests would then be
     // asserting on a broken app and "passing" for the wrong reason.
     vi.clearAllMocks();
@@ -474,7 +474,7 @@ describe("POST /api/links/batch is registered on the tenant-scoped chain", () =>
   it("runs auth and the tenant middleware on a real request through the app", async () => {
     // Behavioural, and the one that would catch a chain wired with the RIGHT
     // NUMBER of handlers but the wrong two. The counter only moves if
-    // createUserProfileTenantMiddleware's instance actually executed.
+    // createTenantMembershipMiddleware's instance actually executed.
     //
     // `app.fetch(request, env, executionCtx)` rather than `app.request(path)`:
     // the latter binds an EMPTY env, so `c.env.SHORT_URL_DOMAIN` is undefined and

@@ -174,90 +174,68 @@ export function createTenantMiddleware(
   };
 }
 
-// ---------------------------------------------------------------------------
-// User-profile-based tenant resolution (API endpoints)
+// Membership-based tenant resolution (API endpoints)
 // ---------------------------------------------------------------------------
 
+/** Header a caller sets to choose which tenant a request operates on. */
+export const TENANT_SELECTOR_HEADER = "X-Tenant-Slug";
+
+interface MembershipRow {
+  id: string;
+  schema_name: string;
+  subdomain: string;
+  salt: string;
+  role: string;
+}
+
 /**
- * Creates tenant resolution middleware for API endpoints where the tenant
- * is resolved from the authenticated user's profile (not from a URL path).
+ * Resolves which tenant an authenticated request operates on, from the
+ * memberships that grant access rather than from `profiles.tenant_id`.
  *
- * Flow:
- * 1. Read `c.get('user').userId` (set by auth middleware)
- * 2. Query `public.profiles JOIN public.tenants` via Hyperdrive
- * 3. Found → check KV cache → populate if miss → set context
- * 4. Not found → 404 (user has no tenant/profile)
+ * WHY THE JOIN TABLE
+ * `profiles.tenant_id` is NOT NULL and one profile had exactly one tenant, so
+ * the old query could read it, return the only row, and be correct. The moment
+ * a person belongs to two restaurants that query returns two rows and picking
+ * one arbitrarily would make every route inherit that choice — the API would
+ * answer a question the user never asked.
  *
- * This is used on `/api/links` where the tenant cannot be extracted from
- * the URL path since the path does not contain a tenant slug.
+ * HOW ISOLATION IS ACHIEVED
+ * The `m.profile_id = $1` predicate is inside the SQL. Nothing is fetched and
+ * then checked: there is no step where a handler could be handed another
+ * tenant's data and fail to notice. Selecting a tenant the caller has no
+ * membership in produces zero rows, which is why the refusal below must not
+ * distinguish "not yours" from "does not exist" — that distinction would turn
+ * this endpoint into an oracle for discovering which restaurants exist.
+ *
+ * SELECTION
+ * `X-Tenant-Slug` names the tenant. With no header, a single membership is
+ * used — so every existing single-restaurant user keeps working with no client
+ * change at all. With several and no header, the request is refused with the
+ * list rather than guessed, because guessing is the bug this replaces.
  */
-export function createUserProfileTenantMiddleware(): MiddlewareHandler<TenantEnv> {
+export function createTenantMembershipMiddleware(): MiddlewareHandler<TenantEnv> {
   return async (c, next) => {
     const user = c.get("user");
     if (!user?.userId) {
       return c.json({ error: "unauthenticated" }, 401);
     }
 
+    const requested =
+      c.req.header(TENANT_SELECTOR_HEADER) ?? c.req.query("tenant") ?? "";
+
+    let rows: MembershipRow[];
     try {
-      const result = await withClient(c.env, async (client) => {
-        const query = `
-          SELECT t.id, t.schema_name, t.subdomain, t.salt
-          FROM public.profiles p
-          JOIN public.tenants t ON p.tenant_id = t.id
-          WHERE p.id = $1 AND t.is_active = true
-          LIMIT 1
-        `;
-        const res = await client.query<{
-          id: string;
-          schema_name: string;
-          subdomain: string;
-          salt: string;
-        }>(query, [user.userId]);
+      rows = await withClient(c.env, async (client) => {
+        const res = await client.query<MembershipRow>(
+          `SELECT t.id, t.schema_name, t.subdomain, t.salt, m.role
+             FROM public.tenant_memberships m
+             JOIN public.tenants t ON t.id = m.tenant_id
+            WHERE m.profile_id = $1 AND t.is_active = true
+            ORDER BY t.subdomain`,
+          [user.userId],
+        );
         return res.rows;
       });
-
-      if (result.length === 0) {
-        return c.json({ error: "tenant_not_found" }, 404);
-      }
-
-      const { id: tenantId, schema_name: schemaName, subdomain, salt: tenantSalt } = result[0]!;
-
-      // Validate schema name from database (defense-in-depth)
-      try {
-        validateSchemaName(schemaName);
-      } catch {
-        console.error(
-          JSON.stringify({
-            event: "error",
-            type: "invalid_db_schema",
-            message: `Schema name "${schemaName}" for user "${user.userId}" failed validation`,
-          }),
-        );
-        return c.json({ error: "internal_error" }, 500);
-      }
-
-      // Populate KV cache (fire-and-forget through waitUntil)
-      c.executionCtx.waitUntil(
-        setCachedTenant(c.env, subdomain, { schemaName, tenantId, tenantSalt }).catch((err) => {
-          console.error(
-            JSON.stringify({
-              event: "error",
-              type: "kv_write_failed",
-              message: err instanceof Error ? err.message : String(err),
-              tenant: subdomain,
-            }),
-          );
-        }),
-      );
-
-      c.set("tenant", {
-        tenantSlug: subdomain,
-        schemaName,
-        tenantId,
-        tenantSalt,
-      });
-
-      return await next();
     } catch (err) {
       console.error(
         JSON.stringify({
@@ -269,5 +247,86 @@ export function createUserProfileTenantMiddleware(): MiddlewareHandler<TenantEnv
       );
       return c.json({ error: "service_unavailable" }, 503);
     }
+
+    if (rows.length === 0) {
+      // No membership anywhere. Same answer as the old query gave a user with
+      // no profile, so a deprovisioned account is refused exactly as before.
+      return c.json({ error: "tenant_not_found" }, 404);
+    }
+
+    let selected: MembershipRow | undefined;
+    if (requested) {
+      selected = rows.find((r) => r.subdomain === requested);
+      if (!selected) {
+        // Deliberately indistinguishable from "no such tenant". Saying 403 here
+        // and 404 for a missing slug would confirm to a stranger whether a
+        // given restaurant is on the platform.
+        return c.json({ error: "tenant_not_found" }, 404);
+      }
+    } else if (rows.length === 1) {
+      selected = rows[0];
+    }
+
+    if (!selected) {
+      // Several memberships and no choice made. Refusing is the honest answer;
+      // the old `LIMIT 1` answered this silently and arbitrarily.
+      return c.json(
+        {
+          error: "tenant_required",
+          available: rows.map((r) => ({
+            slug: r.subdomain,
+            schemaName: r.schema_name,
+            role: r.role,
+          })),
+        },
+        409,
+      );
+    }
+
+    const { id: tenantId, schema_name: schemaName, subdomain, salt: tenantSalt } =
+      selected;
+
+    // Defense-in-depth: the schema name is spliced into SQL downstream, so it
+    // is validated against the generated-name pattern before it reaches context.
+    try {
+      validateSchemaName(schemaName);
+    } catch {
+      console.error(
+        JSON.stringify({
+          event: "error",
+          type: "invalid_db_schema",
+          message: `Schema name "${schemaName}" for user "${user.userId}" failed validation`,
+        }),
+      );
+      return c.json({ error: "internal_error" }, 500);
+    }
+
+    // Warms the redirect path's cache. This middleware does not read it — the
+    // membership decision above is made from Postgres on every request, so a
+    // revoked membership takes effect immediately rather than when a TTL ends.
+    c.executionCtx.waitUntil(
+      setCachedTenant(c.env, subdomain, { schemaName, tenantId, tenantSalt }).catch(
+        (err) => {
+          console.error(
+            JSON.stringify({
+              event: "error",
+              type: "kv_write_failed",
+              message: err instanceof Error ? err.message : String(err),
+              tenant: subdomain,
+            }),
+          );
+        },
+      ),
+    );
+
+    c.set("tenant", {
+      tenantSlug: subdomain,
+      schemaName,
+      tenantId,
+      tenantSalt,
+      membershipRole: selected.role,
+    });
+
+    return await next();
   };
 }

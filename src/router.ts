@@ -4,7 +4,7 @@ import type { AppEnv, HonoVars } from "./types/env";
 // Middleware
 import { errorHandler } from "./middleware/error";
 import { auth } from "./middleware/auth";
-import { createUserProfileTenantMiddleware } from "./middleware/tenant";
+import { createTenantMembershipMiddleware } from "./middleware/tenant";
 
 // Handlers
 import { landingHandler } from "./handlers/landing";
@@ -16,14 +16,14 @@ import { createLink, listLinks, updateLink, deleteLink, linkClicks } from "./api
 import { createLinksBatch } from "./api/batch";
 import { listClientRefMetrics } from "./api/clients";
 import { reviewGateMetrics } from "./api/review-gate";
-import { createTenant, deleteTenant } from "./api/tenants";
+import { createTenant, deleteTenant, listTenants } from "./api/tenants";
 
 // ---------------------------------------------------------------------------
 // Middleware instances (pre-built — reused across all requests)
 // ---------------------------------------------------------------------------
 
 /** Tenant resolution for API routes: resolves from authenticated user's profile. */
-const userProfileTenantMiddleware = createUserProfileTenantMiddleware();
+const tenantMembershipMiddleware = createTenantMembershipMiddleware();
 
 // ---------------------------------------------------------------------------
 // Application factory
@@ -70,11 +70,11 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
   // -----------------------------------------------------------------------
 
   // Link CRUD: auth → resolve tenant from user profile → handler
-  app.post("/api/links", auth, userProfileTenantMiddleware, createLink);
-  app.get("/api/links", auth, userProfileTenantMiddleware, listLinks);
-  app.patch("/api/links/:id", auth, userProfileTenantMiddleware, updateLink);
-  app.delete("/api/links/:id", auth, userProfileTenantMiddleware, deleteLink);
-  app.get("/api/links/:id/clicks", auth, userProfileTenantMiddleware, linkClicks);
+  app.post("/api/links", auth, tenantMembershipMiddleware, createLink);
+  app.get("/api/links", auth, tenantMembershipMiddleware, listLinks);
+  app.patch("/api/links/:id", auth, tenantMembershipMiddleware, updateLink);
+  app.delete("/api/links/:id", auth, tenantMembershipMiddleware, deleteLink);
+  app.get("/api/links/:id/clicks", auth, tenantMembershipMiddleware, linkClicks);
 
   // Batch creation: auth → resolve tenant from user profile → handler.
   //
@@ -84,7 +84,7 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
   // on an undefined tenant, and any later edit that made it tolerate that would
   // read across tenants. It is identical to the routes above for exactly that
   // reason, not for tidiness.
-  app.post("/api/links/batch", auth, userProfileTenantMiddleware, createLinksBatch);
+  app.post("/api/links/batch", auth, tenantMembershipMiddleware, createLinksBatch);
 
   // Per-client_ref visitor rollup: auth → resolve tenant from user profile →
   // handler. The same chain as every other tenant-scoped route above, and for
@@ -94,14 +94,15 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
   // Its own route rather than part of the GET /api/links payload — carrying it
   // there changed that response from a bare array into an envelope. See
   // src/api/clients.ts for the full reasoning.
-  app.get("/api/clients/metrics", auth, userProfileTenantMiddleware, listClientRefMetrics);
+  app.get("/api/clients/metrics", auth, tenantMembershipMiddleware, listClientRefMetrics);
 
   // The action screen's three views in one response. They describe the same
   // scans and the dashboard renders them on one screen, so fetching them
   // separately would let the numbers disagree in front of the owner.
-  app.get("/api/review-gate/metrics", auth, userProfileTenantMiddleware, reviewGateMetrics);
+  app.get("/api/review-gate/metrics", auth, tenantMembershipMiddleware, reviewGateMetrics);
 
   // Tenant provisioning: auth required, no tenant middleware (tenant doesn't exist yet)
+  app.get("/api/tenants", auth, listTenants);
   app.post("/api/tenants", auth, createTenant);
 
   // Tenant deletion: auth required, ownership verified inside handler

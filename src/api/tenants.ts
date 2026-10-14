@@ -184,3 +184,72 @@ export const deleteTenant: Handler<{
   // --- 3. Return 204 ---
   return new Response(null, { status: 204 });
 };
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Handles `GET /api/tenants` — the switcher's data source.
+ *
+ * Returns every active tenant the caller holds a membership in, and nothing
+ * else. The predicate is `m.profile_id = $1` inside the SQL, so a tenant the
+ * caller cannot reach is never loaded and then filtered: it is never loaded at
+ * all. Deactivated tenants are excluded for the same reason the resolver
+ * excludes them — a paused or removed business must not appear as switchable.
+ *
+ * Role travels with each entry because the switcher shows what the person may
+ * do in that store, and a second call to learn it would be both slower and a
+ * place for the two answers to disagree.
+ */
+export const listTenants: Handler<{
+  Bindings: AppEnv;
+  Variables: HonoVars;
+}> = async (c) => {
+  const user = c.get("user");
+  if (!user?.userId) {
+    return c.json({ error: "unauthenticated" }, 401);
+  }
+
+  let rows: {
+    slug: string;
+    schema_name: string;
+    role: string;
+    display_name: string | null;
+  }[];
+  try {
+    rows = await withClient(c.env, async (client) => {
+      const res = await client.query<{
+        slug: string;
+        schema_name: string;
+        role: string;
+        display_name: string | null;
+      }>(
+        `SELECT t.subdomain AS slug, t.schema_name, t.display_name, m.role
+           FROM public.tenant_memberships m
+           JOIN public.tenants t ON t.id = m.tenant_id
+          WHERE m.profile_id = $1 AND t.is_active = true
+          ORDER BY t.subdomain`,
+        [user.userId],
+      );
+      return res.rows;
+    });
+  } catch (err) {
+    console.error(
+      JSON.stringify({
+        event: "error",
+        type: "tenant_list_failed",
+        message: err instanceof Error ? err.message : String(err),
+        userId: user.userId,
+      }),
+    );
+    return c.json({ error: "service_unavailable" }, 503);
+  }
+
+  return c.json({
+    tenants: rows.map((r) => ({
+      slug: r.slug,
+      schemaName: r.schema_name,
+      displayName: r.display_name ?? r.slug,
+      role: r.role,
+    })),
+  });
+};

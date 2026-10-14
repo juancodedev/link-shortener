@@ -41,7 +41,7 @@ vi.mock("../src/middleware/auth", () => ({
 // ---------------------------------------------------------------------------
 
 vi.mock("../src/middleware/tenant", () => ({
-  createUserProfileTenantMiddleware: vi.fn(() =>
+  createTenantMembershipMiddleware: vi.fn(() =>
     vi.fn(async (c: any, next: any) => {
       c.set("tenant", {
         tenantSlug: "acme",

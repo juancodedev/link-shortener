@@ -43,7 +43,7 @@ vi.mock("../../src/cache/tenant", () => ({
 import { withClient } from "../../src/db/client";
 import { provisionTenant } from "../../src/tenants/provision";
 import { deprovisionTenant } from "../../src/tenants/deprovision";
-import { createTenant, deleteTenant } from "../../src/api/tenants";
+import { createTenant, deleteTenant, listTenants } from "../../src/api/tenants";
 
 // ---------------------------------------------------------------------------
 // Helper: mock Hono context
@@ -254,5 +254,110 @@ describe("deleteTenant handler (DELETE)", () => {
     const { c } = mockContext({ tenantId: "nonexistent" });
 
     await expect(deleteTenant(c as any)).rejects.toThrow("not found");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/tenants — the switcher's data source
+// ---------------------------------------------------------------------------
+
+describe("listTenants", () => {
+  const env = {
+    SUPABASE_URL: "https://test.supabase.co",
+    SUPABASE_ANON_KEY: "k",
+    SUPABASE_SERVICE_ROLE_KEY: "s",
+    SUPABASE_JWT_SECRET: "j",
+    SHORT_URL_DOMAIN: "short.link",
+  } as any;
+
+  function ctx(over: { user?: unknown } = {}) {
+    const jsonFn = vi.fn().mockImplementation(
+      (b: unknown, s?: number) =>
+        new Response(JSON.stringify(b), { status: s ?? 200 }),
+    );
+    return {
+      c: {
+        env,
+        get: vi.fn((k: string) => (k === "user" ? over.user : undefined)),
+        json: jsonFn,
+      } as any,
+      jsonFn,
+    };
+  }
+
+  function membershipRows(rows: unknown[]) {
+    const seen: { sql: string; params?: unknown[] }[] = [];
+    vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) =>
+      fn({
+        query: vi.fn().mockImplementation((sql: string, params?: unknown[]) => {
+          seen.push({ sql, params });
+          return Promise.resolve({ rows });
+        }),
+      }),
+    );
+    return seen;
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it("returns every tenant the caller can reach", async () => {
+    membershipRows([
+      { slug: "alpha", schema_name: "tenant_alpha", display_name: "Alpha", role: "owner" },
+      { slug: "beta", schema_name: "tenant_beta", display_name: null, role: "viewer" },
+    ]);
+    const { c, jsonFn } = ctx({ user: { userId: "u1", email: "a@b.c" } });
+
+    await listTenants(c, vi.fn() as any);
+
+    const [body] = jsonFn.mock.calls[0];
+    expect(body).toEqual({
+      tenants: [
+        { slug: "alpha", schemaName: "tenant_alpha", displayName: "Alpha", role: "owner" },
+        // Falls back to the slug rather than rendering a blank row in the switcher.
+        { slug: "beta", schemaName: "tenant_beta", displayName: "beta", role: "viewer" },
+      ],
+    });
+  });
+
+  // T4.5 at the listing level: unreachable tenants are never loaded, so there is
+  // no step where they could be loaded and then forgotten.
+  it("scopes by profile_id and excludes inactive tenants in the query", async () => {
+    const seen = membershipRows([]);
+    const { c } = ctx({ user: { userId: "u1", email: "a@b.c" } });
+
+    await listTenants(c, vi.fn() as any);
+
+    expect(seen[0]!.sql).toContain("m.profile_id = $1");
+    expect(seen[0]!.sql).toContain("t.is_active = true");
+    expect(seen[0]!.params).toEqual(["u1"]);
+  });
+
+  it("returns an empty list rather than an error when there are none", async () => {
+    membershipRows([]);
+    const { c, jsonFn } = ctx({ user: { userId: "u1", email: "a@b.c" } });
+
+    await listTenants(c, vi.fn() as any);
+
+    expect(jsonFn).toHaveBeenCalledWith({ tenants: [] });
+  });
+
+  it("returns 401 without a user", async () => {
+    const { c, jsonFn } = ctx({});
+
+    await listTenants(c, vi.fn() as any);
+
+    expect(jsonFn).toHaveBeenCalledWith({ error: "unauthenticated" }, 401);
+    expect(withClient).not.toHaveBeenCalled();
+  });
+
+  it("returns 503 when the database is unavailable", async () => {
+    vi.mocked(withClient).mockRejectedValueOnce(new Error("down"));
+    const { c, jsonFn } = ctx({ user: { userId: "u1", email: "a@b.c" } });
+
+    await listTenants(c, vi.fn() as any);
+
+    expect(jsonFn).toHaveBeenCalledWith({ error: "service_unavailable" }, 503);
   });
 });

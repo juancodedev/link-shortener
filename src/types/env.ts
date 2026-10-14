@@ -30,6 +30,20 @@ export interface TenantContext {
   tenantId: string;
   /** Per-tenant salt for IP hashing — retrieved from public.tenants.salt (REQ-A002). */
   tenantSalt: string;
+  /**
+   * Role this profile holds in THIS tenant, from `tenant_memberships.role`.
+   *
+   * Distinct from `public.profiles.role`, which is now inert. Permission checks
+   * read this: it answers "what may this person do in the store they selected",
+   * which a single global role could never express.
+   *
+   * Optional because it genuinely does not exist on the public redirect path:
+   * `/<code>` is scanned by a customer, not a dashboard user, and there is no
+   * profile behind it. Optional here means "no membership applies", which is
+   * the truth — rather than a sentinel role that a later check might mistake
+   * for a real one.
+   */
+  membershipRole?: string;
 }
 
 /**

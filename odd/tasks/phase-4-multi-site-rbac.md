@@ -112,8 +112,8 @@ plus an explicit update of the bookkeeping row. Reuse verbatim.
 - [x] **T4.2** Migration that makes `profiles.tenant_id` nullable. **Column stays.** → done inside `00011`.
 - [ ] **T4.3** One role vocabulary. Decide and document which of `member` / `viewer` survives, and
   what happens to existing rows.
-- [ ] **T4.4** `GET /api/tenants` + explicit per-request tenant context.
-- [ ] **T4.5** Isolation enforcement, with a test that holds a membership in A and reads B.
+- [x] **T4.4** `GET /api/tenants` (`listTenants`) + `createTenantMembershipMiddleware`, replacing `createUserProfileTenantMiddleware`. Selects via `X-Tenant-Slug` header or `?tenant=`; one membership and no header resolves silently so every existing user is unaffected; several and no header returns **409 with the list** rather than guessing.
+- [x] **T4.5** Isolation enforcement. `m.profile_id = $1` lives **inside the SQL**, so an unreachable tenant is never loaded and then filtered — there is no step where a handler could be handed another tenant's data. A selector naming an unheld tenant and a selector naming a nonexistent one both return the identical 404, so the endpoint is not an oracle for discovering which restaurants exist on the platform. Verified by mutation: removing the predicate fails `scopes the query by profile_id`.
 
 ## Verification
 
@@ -123,7 +123,8 @@ plus an explicit update of the bookkeeping row. Reuse verbatim.
 
 ## Progress
 
-T4.0–T4.3 done. Nothing reads `tenant_memberships` yet, so the product is unchanged.
+T4.0–T4.5 done. The resolver now reads memberships, so multi-tenant selection is live.
+The `LIMIT 1` is gone; `profiles.tenant_id` is written but no longer read for access.
 
 ### The bug this phase found before it found itself
 
@@ -142,10 +143,20 @@ when nobody is still looking for it. Both now require "no memberships anywhere",
 directions are tested: the login **survives** when other stores remain, and is **deleted** when
 the last one goes.
 
+### T4.4 — what the client must now do
+
+The resolver answers **409 `tenant_required`** when the caller holds several
+memberships and names none. That is a new response shape the dashboard does not yet
+handle: it will need to call `GET /api/tenants`, render a switcher, and send
+`X-Tenant-Slug` on subsequent API calls. Until the client sends it, a multi-store
+user gets a 409 instead of a dashboard. **Single-store users are unaffected** — one
+membership resolves with no header, which is why this was safe to ship before the
+UI.
+
 ## Verification
 
 - `pnpm run typecheck` — clean
-- `pnpm test` — 578 → **587**, 26 files, all green
+- `pnpm test` — 587 → **600**, 26 files, all green
 
 ## Decisions and corrections
 

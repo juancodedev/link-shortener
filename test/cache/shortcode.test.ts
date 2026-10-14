@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { getCachedUrl, setCachedUrl, invalidateCachedUrl } from "../../src/cache/shortcode";
+import {
+  getCachedUrl,
+  setCachedUrl,
+  invalidateCachedUrl,
+  setCachedRegistryEntry,
+} from "../../src/cache/shortcode";
 
 // ---------------------------------------------------------------------------
 // Mock KV namespace for short URL cache
@@ -139,5 +144,53 @@ describe("invalidateCachedUrl", () => {
     await expect(
       invalidateCachedUrl(env, "acme", "abc123"),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("setCachedRegistryEntry", () => {
+  let kv: ReturnType<typeof mockKV>;
+  let env: AppEnv;
+
+  beforeEach(() => {
+    kv = mockKV();
+    env = mockEnv(kv);
+  });
+
+  // This is the guard that matters. The registry entry carries
+  // `subscriptionStatus` -- billing state. KV deletes are eventually consistent,
+  // so when one fails to propagate the TTL is the ONLY thing that bounds how
+  // long stale billing state is served. Unifying these two TTLs quietly puts
+  // that bound at 24 hours, and the suite stays green.
+  //
+  // Nobody is going to remember this reasoning in eight months. This test is
+  // what remembers it.
+  it("bounds stale billing state well below the destination-URL TTL", async () => {
+    await setCachedRegistryEntry(env, "abc123", {
+      shortCode: "abc123",
+      tenantId: "t1",
+      tenantSlug: "acme",
+      subdomain: "acme",
+      isActive: true,
+      actionScreenEnabled: false,
+      customMessage: null,
+      screenTitle: null,
+      isGated: false,
+      subscriptionStatus: "past_due",
+    });
+
+    const ttl = kv.put.mock.calls.at(-1)?.[2]?.expirationTtl as number;
+
+    // Bounded: a 24h window on billing state is not a backstop.
+    expect(ttl).toBeLessThanOrEqual(900);
+    // Still meaningfully longer than the ~60s KV propagation window, so the
+    // TTL is a backstop and not a reason to query on every single scan.
+    expect(ttl).toBeGreaterThanOrEqual(300);
+  });
+
+  it("keeps the destination URL cache long-lived", async () => {
+    await setCachedUrl(env, "acme", "abc123", "https://example.com");
+
+    const ttl = kv.put.mock.calls.at(-1)?.[2]?.expirationTtl as number;
+    expect(ttl).toBe(86400);
   });
 });

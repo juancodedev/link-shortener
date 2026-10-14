@@ -4,6 +4,24 @@ import type { AppEnv } from "../types/env";
 const SHORT_URL_TTL = 86400;
 
 /**
+ * TTL for registry entries: 15 minutes in seconds.
+ *
+ * The registry entry carries `subscriptionStatus`, so it holds billing state --
+ * a much stronger claim than "this code resolves to this URL". KV deletes are
+ * eventually consistent, and when a delete fails to propagate the TTL is the
+ * ONLY backstop. At 24h that backstop is a 24-hour window on serving stale
+ * billing state, which is not a backstop at all.
+ *
+ * The destination URL is left at 24h: it changes only when a client edits its
+ * own link, so a stale one costs an extra redirect, never correctness.
+ *
+ * This makes the WORST case bounded without adding a query per scan. It does
+ * not make the COMMON case fast -- if reactivations feel slow, that is this
+ * TTL and the honest fix is reading billing state straight from Postgres.
+ */
+const REGISTRY_TTL = 900;
+
+/**
  * Builds the KV key for a short URL cache entry.
  * Format: `{tenantSlug}:{shortCode}`
  */
@@ -147,7 +165,7 @@ export async function setCachedRegistryEntry(
 ): Promise<void> {
   try {
     await env.SHORT_URL_CACHE.put(registryKey(shortCode), JSON.stringify(entry), {
-      expirationTtl: SHORT_URL_TTL,
+      expirationTtl: REGISTRY_TTL,
     });
   } catch {
     // KV write failure is non-fatal — the next request reads the registry again

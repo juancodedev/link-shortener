@@ -468,8 +468,28 @@ paused tenant costs no query.
       gated by a dedicated `OPERATIONS_TOKEN`, deliberately **not** `SUPABASE_SERVICE_ROLE_KEY`:
       a credential whose only power is flipping a subscription should not also be able to drop a
       schema. Token comparison hashes both sides first, so length and prefix leaks are impossible.
-      Changing the status invalidates every `reg:{code}` for that tenant so reactivation is
-      immediate rather than up to 24 h away.
+      Changing the status invalidates every `reg:{code}` for that tenant so reactivation does
+      not wait out the 24 h TTL.
+
+  #### Measured in production, and a claim in #51 that was wrong
+
+  #51 says reactivation is **immediate**. It is not, and testing against the real worker
+  showed two separate delays behind it:
+
+  1. **Hyperdrive caches query results.** With defaults it returned the *pre-write* value
+     after an UPDATE — a tenant just marked `active` re-cached `past_due`, and one just
+     marked `past_due` kept serving. Fixed in #52 by setting
+     `hyperdrive_query_cache=false` as a startup parameter on every connection.
+  2. The KV delete itself is **eventually consistent**, so even with the cache disabled
+     there is a short window.
+
+  What was verified working in production, end to end: auth (503 unset / 403 wrong / 200
+  correct), the KV flush landing, the 402 page with `no-store`, and a paused tenant
+  returning 402 with a cold cache. What could not be shown is instant propagation.
+
+  The honest characterisation is **bounded delay, not immediate**, and the failure
+  direction is the costly one: a tenant that stops paying keeps serving for the length of
+  the window.
 
 ## Acceptance criteria
 

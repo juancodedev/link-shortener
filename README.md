@@ -18,6 +18,7 @@ PostgreSQL schema so link data is physically isolated.
 | Cache | Workers KV (2 namespaces) |
 | Auth | Supabase Auth (local HS256 verification via `jose`, Auth API fallback) |
 | Tooling | Wrangler 4, Vitest (workers pool), TypeScript strict |
+| Package manager | pnpm (`packageManager` pinned; `pnpm-lock.yaml` is the only lockfile) |
 
 The database is reached with a direct `pg` client over Hyperdrive, not through Supabase REST.
 Supabase REST is used only for auth verification and user deletion.
@@ -25,9 +26,9 @@ Supabase REST is used only for auth verification and user deletion.
 ## Getting started
 
 ```bash
-npm install
+pnpm install
 cp .dev.vars.example .dev.vars   # fill in secrets
-npm run dev                      # wrangler dev
+pnpm run dev                      # wrangler dev
 ```
 
 Local development uses Hyperdrive pointed at a local Postgres instance. See
@@ -37,11 +38,12 @@ Local development uses Hyperdrive pointed at a local Postgres instance. See
 
 | Command | Purpose |
 | --- | --- |
-| `npm run dev` | Start the local dev server |
-| `npm run deploy` | Deploy to Cloudflare |
-| `npm run typecheck` | `tsc --noEmit` |
-| `npm test` | Run the Vitest suite |
-| `npm run types` | Regenerate `worker-configuration.d.ts` |
+| `pnpm run dev` | Start the local dev server |
+| `pnpm run deploy` | Deploy to Cloudflare |
+| `pnpm run typecheck` | `tsc --noEmit` |
+| `pnpm test` | Run the Vitest suite |
+| `pnpm test:watch` | Run the Vitest suite in watch mode |
+| `pnpm run types` | Regenerate `worker-configuration.d.ts` |
 
 ### Required secrets
 
@@ -274,7 +276,7 @@ openspec/         archived MVP spec, design, and verification report
 ## Testing
 
 ```bash
-npm test
+pnpm test
 ```
 
 Vitest runs against the Workers pool. Redirect lifecycle (cache hit and miss), short-code

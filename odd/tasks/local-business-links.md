@@ -299,7 +299,7 @@ Every phase obeys these. They are not aspirations; they are the acceptance gate 
 | Schema changes are additive only | `ADD COLUMN` / `CREATE TABLE IF NOT EXISTS`. No drops, no renames, no type changes to a column with data |
 | New columns have defaults | `is_gated BOOLEAN DEFAULT false`, so every existing link keeps behaving exactly as before |
 | The redirect path cannot break | Any error in the action screen falls back to a plain 302 to the stored URL. A bug in the new UI must never take down a printed sticker |
-| Tests stay green | Baseline is **430 tests / 20 files**, `npm run typecheck` clean. A phase is not done until it matches or exceeds it |
+| Tests stay green | Baseline is **430 tests / 20 files**, `pnpm run typecheck` clean. A phase is not done until it matches or exceeds it |
 | One concern per commit | Each task is its own work-unit commit, so a regression has a bisectable origin |
 
 ### Phase 0 — Foundations
@@ -454,7 +454,7 @@ paused tenant costs no query.
 - A tenant whose subscription is `past_due` serves the pause page, **including after the
   `reg:{code}` KV entry expires**.
 - Reactivating the subscription restores routing without reprinting or redeploying.
-- `npm run typecheck` and `npm test` stay green.
+- `pnpm run typecheck` and `pnpm test` stay green.
 
 ## Applicable checks
 
@@ -567,7 +567,7 @@ Nothing on the Phases 0–3 critical path is blocked. Work can start today.
 
 ## Progress
 
-- [x] Baseline established 2026-10-13: `npm run typecheck` clean, **430 tests / 20 files passing**.
+- [x] Baseline established 2026-10-13: `pnpm run typecheck` clean, **430 tests / 20 files passing**.
 - [x] Differentiator spec integrated; Google policy blocker resolved by removing the gate.
 - [x] **Phase 0 — foundations complete.** `438 tests / 20 files`, typecheck clean.
   - T0.1 local HS256 verification via `jose`, with an Auth API fallback on ambiguous failure.

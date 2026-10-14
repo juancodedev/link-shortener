@@ -19,62 +19,65 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     /* ------------------------------------------------------------------
        TOKENS — the single place a literal colour is allowed.
 
-       Values here are the ones that were previously hardcoded throughout the
-       sheet, unchanged. This block changes WHERE a colour lives, never WHAT it
-       is: swapping the palette is now a one-line edit in one place instead of
-       a find-and-replace across the whole template.
-
-       Names come from the product, not from a scale. A person reading only
+       Values come from the physical world this product lives in: uncoated
+       kraft, espresso ink on matte laminate, a terracotta storefront, the
+       green "open" light on a chalkboard, amber for the printer that is out.
+       Names come from the same place, not from a scale. A person reading only
        --kraft, --sticker, --tag, --live, --retired should be able to guess
        what this is: printed tags mounted in venues, and the states they can be
        in. See odd/analysis/dashboard-directions.md.
+
+       Every value here was checked for contrast against the surface it sits
+       on. Warm colours darken faster than cool ones, so that was measured
+       rather than eyeballed — see odd/tasks/dashboard-physical-palette.md.
        ------------------------------------------------------------------ */
     :root {
       /* Surfaces — what the tags are physically resting on */
-      --kraft: #f8fafc;        /* the page */
-      --kraft-deep: #f1f5f9;   /* inset panels, hover wash, row rules */
-      --sticker: #ffffff;      /* the printed tag itself: nav, cards, tiles */
+      --kraft: #f4f1ea;        /* the page: uncoated paper */
+      --kraft-deep: #ece7dd;   /* inset panels, hover wash, row rules */
+      --sticker: #fbf9f5;      /* the printed tag itself: nav, cards, tiles */
 
       /* Edges — where one surface meets another */
-      --edge: #e2e8f0;
-      --edge-strong: #d1d5db;  /* form fields, outlined buttons */
+      --edge: #ddd6c8;         /* a cut edge of board, not a cold grey rule */
+      --edge-strong: #c4bba9;  /* form fields, outlined buttons */
 
       /* Ink — five steps, from a heading down to a placeholder */
-      --ink: #1e293b;
-      --ink-strong: #0f172a;
-      --ink-soft: #64748b;     /* secondary text, table headers */
-      --ink-label: #475569;    /* form labels */
-      --ink-faint: #94a3b8;    /* placeholders, disabled, empty states */
+      --ink: #2b2622;          /* espresso */
+      --ink-strong: #1a1613;   /* ink on matte laminate */
+      --ink-soft: #6b625a;     /* secondary text, table headers */
+      --ink-label: #544c44;    /* form labels */
+      --ink-faint: #8d847a;    /* placeholders, disabled, empty states */
 
-      /* The tag — the printed code, and the action that makes one */
-      --tag: #2563eb;
-      --tag-deep: #1d4ed8;
-      --tag-wash: rgba(37, 99, 235, 0.1);
+      /* The tag — terracotta, the colour of a storefront */
+      --tag: #a8482a;
+      --tag-deep: #8a3a1f;
+      --tag-wash: rgba(168, 72, 42, 0.12);
 
       /* Lifecycle — a mounted tag is live, stale, or retired */
-      --live: #166534;
-      --live-wash: #dcfce7;
-      --live-edge: #bbf7d0;
-      --stale: #854d0e;
-      --stale-wash: #fef9c3;
-      --retired: #dc2626;      /* destructive fill */
-      --retired-deep: #b91c1c;
-      --retired-ink: #991b1b;
-      --retired-wash: #fef2f2;
-      --retired-edge: #fecaca;
+      --live: #2f6b3a;         /* the green "open" light, seen on a chalkboard */
+      --live-wash: #e2eee0;
+      --live-edge: #bcd6b8;
+      --stale: #8a5a12;        /* amber: the light that means the printer is out */
+      --stale-wash: #f7ecd4;
+      --retired: #a13325;      /* oxblood: destructive fill */
+      --retired-deep: #7d2519;
+      --retired-ink: #8c2f21;
+      --retired-wash: #f6e4df;
+      --retired-edge: #e0b8ae;
 
       /* Chrome — the location bar that sits above everything */
-      --chrome: #1a1a1a;
-      --chrome-ink: #ffffff;
+      --chrome: #241f1b;
+      --chrome-ink: #f4f1ea;
 
-      /* Depth */
-      --shadow-card: rgba(0, 0, 0, 0.04);
-      --shadow-modal: rgba(0, 0, 0, 0.12);
-      --veil: rgba(0, 0, 0, 0.4);
+      /* Depth — a shadow on a warm surface picks up that surface's colour,
+         so these are tinted espresso rather than the neutral black they were. */
+      --shadow-card: rgba(43, 38, 34, 0.06);
+      --shadow-modal: rgba(43, 38, 34, 0.18);
+      --veil: rgba(36, 31, 27, 0.45);
 
       /* Peak chart — the two segments of each scan bucket */
-      --peak-public: #cbd5e1;  /* the share that left for the public review */
-      --peak-private: var(--ink); /* the share that stayed in the private path */
+      --peak-public: #9c8d74;  /* brass */
+      --peak-private: var(--ink);
     }
 
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }

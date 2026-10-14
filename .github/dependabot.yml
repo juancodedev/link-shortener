@@ -1,0 +1,53 @@
+# Dependabot configuration
+#
+# WHY THIS FILE EXISTS
+#
+# Without it Dependabot runs on defaults, and it opened three PRs — #14, #16,
+# #18 — that all modify `package-lock.json`. That file does not exist in this
+# repository: commit 8aa3969 ("fix(deps): use a single pnpm lockfile and
+# unblock CI") deleted all 3317 lines of it. Those Dependabot branches predate
+# that consolidation, so merging any of them resurrects the npm lockfile and
+# leaves two competing lockfiles for one `package.json`.
+#
+# The CI workflows were already pnpm throughout, so nothing caught it: they
+# run `pnpm install --frozen-lockfile` and simply ignore a `package-lock.json`
+# a PR happens to carry. The green checks were validating the pnpm tree while
+# the PR quietly added a second, stale one.
+#
+# `package-ecosystem: npm` is still the correct value — it is the identifier
+# Dependabot uses for all Node package managers, including pnpm. What this file
+# actually fixes is that Dependabot now has an explicit schedule and an
+# explicit directory, instead of inferring both.
+
+version: 2
+
+updates:
+  # Dependencies. This is the repo's single, declared package manager:
+  # package.json pins `packageManager: pnpm@9.15.9` and the only lockfile is
+  # pnpm-lock.yaml.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    commit-message:
+      prefix: "build(deps)"
+
+  # GitHub Actions. `pnpm/action-setup` is pinned to a major in the workflows;
+  # Dependabot tracks the patch releases.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: "ci(deps)"

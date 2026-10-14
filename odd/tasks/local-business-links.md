@@ -588,7 +588,20 @@ Nothing on the Phases 0–3 critical path is blocked. Work can start today.
     `00007_add_location_id_to_tenant_links.sql` for deployed tenants, using the same
     `EXECUTE format` / `to_regclass` pattern as `00004`.
   - T1.4 `GET /api/links` returns `location_id` and `location_name` via a LEFT JOIN.
-- [ ] Phase 2 — action screen
+- [x] **Phase 2 — action screen complete.** `494 tests / 21 files`, typecheck clean.
+  - T2.1 `is_gated` in both DDL copies + `00008` ALTER for deployed tenants.
+  - T2.2/T2.3 `analytics.tag_ratings` and `analytics.tag_feedback` in `00009`, with real
+    foreign keys to `public.locations` — unlike `links.location_id`, these tables live in a
+    shared schema and survive the drop of any tenant schema, so the FK guards something real.
+  - T2.4 `src/handlers/action-screen.ts`. HTML string with inline styles, matching the repo's
+    no-build pattern; the second button uses `<details>` so it needs no JavaScript.
+    **T2.8 resolved by convention: `src/handlers/`, not `src/ui/`.**
+  - T2.5 `POST /api/gate` — records `action_taken` plus the optional rating, returns the
+    destination verbatim or the thanks page. Public by necessity: the person scanning a sticker
+    is a customer of the business, not a dashboard user.
+  - T2.6 Both writes run inside `waitUntil`, so the customer never waits on a database write to
+    reach Google.
+  - T2.7 The private branch is the inline form on the screen itself.
 - [ ] Phase 3 — metrics
 - [ ] Phase 4 — multi-site RBAC
 - [ ] Phase 5 — subscriptions

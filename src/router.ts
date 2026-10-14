@@ -11,6 +11,7 @@ import { landingHandler } from "./handlers/landing";
 import { redirectHandler } from "./handlers/redirect";
 import { signupHandler, loginHandler, resetPasswordHandler, authCallbackHandler } from "./handlers/auth";
 import { dashboardHandler } from "./handlers/dashboard";
+import { gateHandler } from "./handlers/gate";
 import { createLink, listLinks, updateLink, deleteLink, linkClicks } from "./api/links";
 import { createLinksBatch } from "./api/batch";
 import { listClientRefMetrics } from "./api/clients";
@@ -48,6 +49,11 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
 
   // Landing page
   app.get("/", landingHandler);
+
+  // The action screen's recorder. Public by necessity: the person scanning a
+  // sticker is a customer of the business, not a user of this dashboard, so
+  // requiring a JWT here would mean the product cannot work at all.
+  app.post("/api/gate", gateHandler);
 
   // Auth pages (public)
   app.get("/signup", signupHandler);

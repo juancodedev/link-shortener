@@ -143,6 +143,14 @@ export interface ResolvedRegistryEntry {
   tenantSalt: string;
   subdomain: string;
   linkId: string | null;
+  /**
+   * Human-readable business name, used as the action screen's heading.
+   *
+   * Optional because a KV entry written before this field existed has no such
+   * key, and the redirect falls back to the subdomain rather than rendering a
+   * blank title.
+   */
+  displayName?: string;
 }
 
 /**
@@ -179,13 +187,15 @@ export async function resolveRegistryEntry(
       schema_name: string;
       salt: string;
       subdomain: string;
+      display_name: string;
     }>(
       `SELECT r.short_code,
               r.link_id,
-              t.id       AS tenant_id,
+              t.id           AS tenant_id,
               t.schema_name,
               t.salt,
-              t.subdomain
+              t.subdomain,
+              t.display_name
          FROM public.short_code_registry r
          JOIN public.tenants t ON t.id = r.tenant_id
         WHERE r.short_code = $1
@@ -209,6 +219,7 @@ export async function resolveRegistryEntry(
     tenantSalt: row.salt,
     subdomain: row.subdomain,
     linkId: row.link_id,
+    displayName: row.display_name,
   };
 
   await setCachedRegistryEntry(env, shortCode, entry);

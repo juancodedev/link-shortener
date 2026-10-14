@@ -409,3 +409,158 @@ describe("redirectHandler link lifecycle", () => {
     expect(redirectFn).toHaveBeenCalledWith("https://legacy-url.com", 302);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 2 — the dual-path action screen (T2.4)
+//
+// A gated link renders the screen instead of a 302. Both options are always
+// visible and the destination URL is never withheld: this is the compliance
+// guarantee, and the tests below are what stop someone re-adding a branch.
+// ---------------------------------------------------------------------------
+
+vi.mock("../../src/handlers/action-screen", () => ({
+  renderActionScreen: vi.fn(),
+}));
+
+import { renderActionScreen } from "../../src/handlers/action-screen";
+
+const GOOGLE_URL = "https://search.google.com/local/writereview?placeid=abc";
+
+function mockGated(opts: { links?: unknown[]; cachedUrl?: string | null } = {}) {
+  const path = mockColdPath({
+    links: opts.links ?? [linkRow({ original_url: GOOGLE_URL, is_gated: true })],
+  });
+  vi.mocked(getCachedUrl).mockResolvedValue(
+    opts.cachedUrl === undefined ? null : opts.cachedUrl,
+  );
+  return path;
+}
+
+describe("redirectHandler action screen (T2.4)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(renderActionScreen).mockReturnValue(
+      new Response("<html>screen</html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      }),
+    );
+  });
+
+  it("renders the screen instead of redirecting when the link is gated", async () => {
+    mockGated();
+
+    const { c, redirectFn } = mockContext();
+
+    await redirectHandler(c as any, vi.fn() as any);
+
+    expect(renderActionScreen).toHaveBeenCalled();
+    expect(redirectFn).not.toHaveBeenCalled();
+  });
+
+  it("still 302s when the link is not gated", async () => {
+    mockColdPath({ links: [linkRow({ is_gated: false })] });
+
+    const { c, redirectFn } = mockContext();
+
+    await redirectHandler(c as any, vi.fn() as any);
+
+    expect(renderActionScreen).not.toHaveBeenCalled();
+    expect(redirectFn).toHaveBeenCalledWith("https://example.com", 302);
+  });
+
+  it("still 302s when an older cache blob carries no is_gated field", async () => {
+    // KV entries survive a deploy for up to 24h. A blob written before this
+    // change has no is_gated key at all, and treating that as "gated" would
+    // replace every live redirect with an interstitial on deploy day.
+    const legacy = JSON.stringify({
+      url: "https://example.com",
+      isActive: true,
+      expiresAt: null,
+      linkId: "link-uuid",
+    });
+    mockGated({ cachedUrl: legacy });
+
+    const { c, redirectFn } = mockContext();
+
+    await redirectHandler(c as any, vi.fn() as any);
+
+    expect(renderActionScreen).not.toHaveBeenCalled();
+    expect(redirectFn).toHaveBeenCalledWith("https://example.com", 302);
+  });
+
+  it("hands the screen the destination URL and the tenant name", async () => {
+    mockDb({
+      registry: [registryRow({ display_name: "Sabores" })],
+      links: [linkRow({ original_url: GOOGLE_URL, is_gated: true })],
+    });
+    vi.mocked(getCachedUrl).mockResolvedValue(null);
+
+    const { c } = mockContext();
+
+    await redirectHandler(c as any, vi.fn() as any);
+
+    const args = vi.mocked(renderActionScreen).mock.calls[0]![0] as any;
+    expect(args.destinationUrl).toBe(GOOGLE_URL);
+    expect(args.businessName).toBe("Sabores");
+  });
+
+  it("falls back to a trailing business name when the cache predates display_name", async () => {
+    // Same 24h KV survival problem as is_gated. A registry entry written
+    // before display_name existed has no such key; the screen still needs a
+    // heading, so the tenant subdomain is the honest fallback.
+    vi.mocked(getCachedRegistryEntry).mockResolvedValue({
+      tenantId: "tenant-uuid",
+      schemaName: "tenant_a7f3",
+      tenantSalt: "salt-abc",
+      subdomain: "sabores",
+      linkId: "link-uuid",
+    } as any);
+    mockDb({ links: [linkRow({ original_url: GOOGLE_URL, is_gated: true })] });
+
+    const { c } = mockContext();
+
+    await redirectHandler(c as any, vi.fn() as any);
+
+    const args = vi.mocked(renderActionScreen).mock.calls[0]![0] as any;
+    expect(args.businessName).toBe("sabores");
+  });
+
+  it("still records the click when the screen is served", async () => {
+    mockGated();
+
+    const { c, waitUntilFn } = mockContext();
+
+    await redirectHandler(c as any, vi.fn() as any);
+
+    // The scan happened regardless of what the customer does next.
+    expect(waitUntilFn).toHaveBeenCalled();
+    expect(trackClick).toHaveBeenCalled();
+  });
+
+  it("falls back to the plain 302 when rendering the screen throws", async () => {
+    // The always-functional contract: a bug in the new UI must never take
+    // down a sticker already printed and sitting on a customer's table.
+    mockGated();
+    vi.mocked(renderActionScreen).mockImplementation(() => {
+      throw new Error("screen exploded");
+    });
+
+    const { c, redirectFn } = mockContext();
+
+    await redirectHandler(c as any, vi.fn() as any);
+
+    expect(redirectFn).toHaveBeenCalledWith(GOOGLE_URL, 302);
+  });
+
+  it("returns the screen with a 200 and an HTML content type", async () => {
+    mockGated();
+
+    const { c } = mockContext();
+
+    const res = (await redirectHandler(c as any, vi.fn() as any)) as Response;
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toMatch(/text\/html/i);
+  });
+});

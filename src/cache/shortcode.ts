@@ -105,6 +105,12 @@ export interface CachedRegistryEntry {
   subdomain: string;
   /** Registry's idea of the link id; null when the row was written without one. */
   linkId: string | null;
+  /**
+   * Business name for the action screen heading. Optional: a blob written
+   * before this field existed has no such key, and the caller falls back to
+   * `subdomain`.
+   */
+  displayName?: string;
 }
 
 /**

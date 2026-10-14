@@ -5,6 +5,7 @@ import { qualifyTable } from "../db/schema";
 import { setCachedUrl, getCachedUrl } from "../cache/shortcode";
 import { resolveRegistryEntry } from "../api/links";
 import { trackClick } from "../analytics/tracker";
+import { renderActionScreen } from "./action-screen";
 
 // ---------------------------------------------------------------------------
 // Types for KV-cached link metadata
@@ -16,6 +17,15 @@ interface CachedLink {
   isActive: boolean;
   expiresAt: string | null;
   linkId: string;
+  /**
+   * Whether a scan renders the action screen instead of redirecting.
+   *
+   * Optional because KV entries outlive a deploy: a blob written before this
+   * field existed has no such key, and reading `undefined` must mean `false`.
+   * A gated default here would replace every live redirect with an
+   * interstitial the day the change shipped.
+   */
+  isGated?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -76,12 +86,15 @@ export const redirectHandler: Handler<{
     return c.json({ error: "not_found" }, 404);
   }
 
-  const { schemaName, tenantId, tenantSalt, subdomain } = entry;
+  const { schemaName, tenantId, tenantSalt, subdomain, displayName } = entry;
   const slug = subdomain;
 
   // --- 2. KV cache lookup ---
   let cacheHit = false;
   let redirectUrl: string | null = null;
+  // Defaults to false so every pre-deploy code path that never learns about
+  // gating keeps its plain 302. Only an explicit true opens the screen.
+  let isGated = false;
   // Prefer the registry's link id: it is the value the registry was written with
   // and it saves a round trip when the short-URL entry is cold.
   let linkId = entry.linkId ?? "";
@@ -103,6 +116,7 @@ export const redirectHandler: Handler<{
         }
         redirectUrl = parsed.url;
         linkId = parsed.linkId || "";
+        isGated = parsed.isGated === true;
         // Cache missing linkId (old format) — force DB refresh
         if (!parsed.linkId) cacheHit = false;
       } catch {
@@ -120,7 +134,7 @@ export const redirectHandler: Handler<{
       const rows = await withClient(env, async (client) => {
         const table = qualifyTable(schemaName, "links");
         const query = `
-          SELECT id, original_url, is_active, expires_at
+          SELECT id, original_url, is_active, expires_at, is_gated
           FROM ${table}
           WHERE short_code = $1
           LIMIT 1
@@ -130,6 +144,7 @@ export const redirectHandler: Handler<{
           original_url: string;
           is_active: boolean;
           expires_at: string | null;
+          is_gated: boolean | null;
         }>(query, [code]);
         return res.rows;
       });
@@ -150,6 +165,7 @@ export const redirectHandler: Handler<{
       }
 
       redirectUrl = row.original_url;
+      isGated = row.is_gated === true;
 
       // --- 4. Populate KV cache (fire-and-forget via waitUntil) ---
       const cacheValue: CachedLink = {
@@ -157,6 +173,7 @@ export const redirectHandler: Handler<{
         isActive: row.is_active,
         expiresAt: row.expires_at,
         linkId: row.id,
+        isGated: row.is_gated === true,
       };
 
       c.executionCtx.waitUntil(
@@ -214,6 +231,32 @@ export const redirectHandler: Handler<{
       );
     }),
   );
+
+  // --- 6. Gated links render the action screen instead of redirecting ---
+  //
+  // The whole branch is wrapped: a throw anywhere in rendering must fall
+  // through to the plain 302 below. A sticker is printed once and lives in the
+  // world for months, and a bug in this new UI must never be able to take one
+  // down. The always-functional contract, in code.
+  if (isGated) {
+    try {
+      return renderActionScreen({
+        businessName: displayName || slug,
+        destinationUrl: redirectUrl!,
+        code,
+      });
+    } catch (err) {
+      console.error(
+        JSON.stringify({
+          event: "error",
+          type: "action_screen_failed",
+          message: err instanceof Error ? err.message : String(err),
+          tenant: slug,
+          code,
+        }),
+      );
+    }
+  }
 
   return c.redirect(redirectUrl!, 302);
 };

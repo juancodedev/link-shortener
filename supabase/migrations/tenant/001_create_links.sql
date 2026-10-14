@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS {schema}.links (
     short_code   TEXT NOT NULL,
     title        TEXT,                              -- Optional display name
     client_ref   TEXT,                              -- User-defined CRM identifier; NULL = no client
-    location_id  UUID,                              -- public.locations(id); NULL = unassigned
+    location_id  UUID,                              -- public.locations(id), NULL = unassigned
+    is_gated     BOOLEAN DEFAULT false NOT NULL,    -- false = plain 302, true = action screen
     clicks_count INTEGER DEFAULT 0 NOT NULL,
     is_active    BOOLEAN DEFAULT true NOT NULL,
     expires_at   TIMESTAMPTZ,                       -- NULL = never expires

@@ -16,7 +16,7 @@ PostgreSQL schema so link data is physically isolated.
 | Framework | Hono 4 |
 | Database | PostgreSQL via Supabase, connected over `pg` + Hyperdrive |
 | Cache | Workers KV (2 namespaces) |
-| Auth | Supabase Auth (JWT, `jose` verification) |
+| Auth | Supabase Auth (local HS256 verification via `jose`, Auth API fallback) |
 | Tooling | Wrangler 4, Vitest (workers pool), TypeScript strict |
 
 The database is reached with a direct `pg` client over Hyperdrive, not through Supabase REST.
@@ -50,10 +50,35 @@ Set with `wrangler secret put`; declared in `.dev.vars.example`.
 | Secret | Required | Purpose |
 | --- | --- | --- |
 | `SUPABASE_URL` | yes | Supabase project URL |
-| `SUPABASE_ANON_KEY` | yes | Client-side auth from the dashboard |
+| `SUPABASE_ANON_KEY` | yes | Client-side auth from the dashboard, and the Auth API fallback |
 | `SUPABASE_SERVICE_ROLE_KEY` | yes | Admin operations (user deletion) |
-| `JWT_SECRET` | yes | HS256 verification of Supabase JWTs |
+| `SUPABASE_JWT_SECRET` | yes | HS256 verification of Supabase JWTs, done locally |
 | `DATABASE_URL` | no | Overrides the Hyperdrive connection string |
+
+### Optional vars
+
+| Var | Default | Purpose |
+| --- | --- | --- |
+| `MAX_ACTIVE_LINKS` | `30` | Cap on active links per tenant. Set it from `wrangler.jsonc` `vars` |
+
+## Authentication
+
+`src/middleware/auth.ts` verifies a Supabase access token **locally** with HS256 against
+`SUPABASE_JWT_SECRET`. The common path costs no network round trip.
+
+When the secret is absent, or when local verification fails ambiguously, it falls back to
+`GET /auth/v1/user` on the Supabase Auth API. The fallback exists so a wrong or stale secret
+degrades into one extra hop rather than a total lockout.
+
+The two failure kinds are deliberately treated differently:
+
+- **Definitive** — expired, wrong audience, or structurally malformed. Rejected locally with
+  no network call. Nothing a network round trip could change.
+- **Ambiguous** — signature mismatch. That is what a misconfigured secret looks like, and also
+  what a forged token looks like, so the Auth API gets the final say.
+
+Tokens whose `aud` is not `authenticated` are rejected. The publishable key is itself an HS256
+JWT signed with the same secret, so accepting it would let it impersonate a user.
 
 ## How tenancy works
 
@@ -83,6 +108,12 @@ have nothing to disambiguate them. Link creation claims the code with
 API-key auth. The redirect path does not use it.
 
 To create a tenant, register a Supabase Auth user first, then `POST /api/tenants`.
+
+Provisioning runs every statement inside an explicit `BEGIN` … `COMMIT` on a single connection.
+PostgreSQL DDL is transactional, so `CREATE SCHEMA` and the `CREATE TABLE`/`CREATE INDEX`
+statements roll back together — a failure partway through cannot leave a tenant row whose schema
+exists but has no `links` table. `withClient` on its own does not give this; it only connects,
+runs, and ends.
 
 ### Reserved routes
 
@@ -115,6 +146,7 @@ entry — `/:code` cannot match them.
 | `PATCH` | `/api/links/:id` | JWT + tenant | Update link |
 | `DELETE` | `/api/links/:id` | JWT + tenant | Delete link |
 | `GET` | `/api/links/:id/clicks` | JWT + tenant | Per-link analytics |
+| `POST` | `/api/links/batch` | JWT + tenant | Create up to 100 links in one call |
 | `POST` | `/api/tenants` | JWT | Create tenant |
 | `DELETE` | `/api/tenants/:id` | JWT (owner) | Delete tenant |
 
@@ -146,10 +178,40 @@ rendered as expandable panels in the dashboard.
 
 **Current limits.** Two things are worth knowing before relying on these numbers:
 
-- **Raw hits, not unique visitors.** `ip_hash` is stored but never used for distinct counting.
-  Every hit increments the totals, so repeated taps inflate the numbers.
 - **Bounded aggregation.** The clicks endpoint returns at most 50 recent rows and reports
   `total` as that row count, so totals can undercount on high-traffic links.
+- **Visitors are estimated, not counted.** `ip_hash` is a SHA-256 of the client IP salted per
+  tenant. Unique-visitor and session figures are derived from it over a 1-day and 30-minute
+  window respectively, so they are estimates under NAT and mobile carrier NAT. The dashboard
+  surfaces this caveat rather than presenting the numbers as exact.
+
+## Short codes
+
+A link's `short_code` is either generated or supplied by the caller.
+
+**Generated** codes are 7 random characters from an alphabet with visually ambiguous characters
+removed. If the drawn code is reserved the generator draws again — free here, because nothing
+external depends on it yet.
+
+**Caller-supplied** slugs (`POST /api/links` with a `slug` field) exist for links that will be
+printed. `validateCustomSlug` in `src/utils/short-code.ts`:
+
+| Rule | Why |
+| --- | --- |
+| 3–32 characters | 32 keeps printed QR modules small and scannable |
+| `[A-Za-z0-9_-]` only | No `/` — it would break the single-segment route |
+| No leading or trailing hyphen | `-foo` reads like a flag |
+| Not a reserved route | Such a link would be permanently unreachable |
+| Must be a string | `12345` would otherwise become a printed label's literal |
+
+**A supplied slug gets exactly one attempt.** A collision returns 409 naming the slug; it is
+never regenerated. A retry would produce a *different* code, and a different code means a sticker
+already sitting on a customer's table now points somewhere else — permanently, with no way to
+recall it. Generated codes still retry, because nothing depends on them yet.
+
+`POST /api/links/batch` creates up to 100 links in one call, reusing the single-link path so the
+two cannot drift. It returns `201` when every item succeeds and `207` when partial, with
+`results[]` positionally aligned to the request.
 
 ## Data model
 

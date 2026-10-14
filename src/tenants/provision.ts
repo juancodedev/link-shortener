@@ -69,9 +69,20 @@ export interface ProvisionResult {
  * PostgreSQL schema, runs DDL to create the `links` table plus indexes,
  * and records the migration version.
  *
- * All DB operations run in a single transaction via `withClient`. Any
- * failure causes a full rollback (client throws → connection ends →
- * uncommitted work is discarded).
+ * Every statement runs inside an explicit `BEGIN` … `COMMIT` on one connection.
+ * This matters because PostgreSQL DDL is transactional: `CREATE SCHEMA` and the
+ * `CREATE TABLE`/`CREATE INDEX` statements roll back with everything else. A
+ * failure partway through the DDL would otherwise leave a `public.tenants` row
+ * whose schema exists but has no `links` table — a tenant that provisions
+ * successfully and then fails on first use.
+ *
+ * `withClient` alone does not provide this. It only connects, runs the
+ * callback, and ends; without an explicit bracket a partial failure commits
+ * whatever ran before it.
+ *
+ * A rollback that itself fails means the connection is already gone, and there
+ * is nothing left to undo. The original error is what the caller needs, so it
+ * is rethrown rather than replaced.
  *
  * After the transaction commits, the KV cache is warmed asynchronously
  * via the caller's ctx.waitUntil (handled in the API endpoint).
@@ -94,39 +105,54 @@ export async function provisionTenant(
   const now = new Date().toISOString();
 
   return withClient(env, async (client) => {
-    // --- 1. INSERT into public.tenants ---
-    const tenantRes = await client.query<{ id: string; salt: string }>(
-      `INSERT INTO public.tenants (schema_name, display_name, subdomain, owner_id, is_active, created_at)
-       VALUES ($1, $2, $3, $4, true, $5)
-       RETURNING id, salt`,
-      [schemaName, displayName, subdomain, userId, now],
-    );
-    const tenantId = tenantRes.rows[0]!.id;
-    const tenantSalt = tenantRes.rows[0]!.salt;
+    await client.query("BEGIN");
 
-    // --- 2. INSERT into public.profiles ---
-    await client.query(
-      `INSERT INTO public.profiles (id, tenant_id, role, created_at)
-       VALUES ($1, $2, 'owner', $3)`,
-      [userId, tenantId, now],
-    );
+    try {
+      // --- 1. INSERT into public.tenants ---
+      const tenantRes = await client.query<{ id: string; salt: string }>(
+        `INSERT INTO public.tenants (schema_name, display_name, subdomain, owner_id, is_active, created_at)
+         VALUES ($1, $2, $3, $4, true, $5)
+         RETURNING id, salt`,
+        [schemaName, displayName, subdomain, userId, now],
+      );
+      const tenantId = tenantRes.rows[0]!.id;
+      const tenantSalt = tenantRes.rows[0]!.salt;
 
-    // --- 3. CREATE SCHEMA ---
-    await client.query(buildQuery(schemaName, `CREATE SCHEMA IF NOT EXISTS {schema}`));
+      // --- 2. INSERT into public.profiles ---
+      await client.query(
+        `INSERT INTO public.profiles (id, tenant_id, role, created_at)
+         VALUES ($1, $2, 'owner', $3)`,
+        [userId, tenantId, now],
+      );
 
-    // --- 4. Execute tenant DDL (links table + indexes + _migrations) ---
-    // Split by semicolons and execute each statement individually.
-    // pg's `query()` only supports a single SQL statement per call.
-    const ddl = buildQuery(schemaName, TENANT_DDL);
-    const statements = ddl
-      .split(";")
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
+      // --- 3. CREATE SCHEMA ---
+      await client.query(buildQuery(schemaName, `CREATE SCHEMA IF NOT EXISTS {schema}`));
 
-    for (const stmt of statements) {
-      await client.query(stmt + ";");
+      // --- 4. Execute tenant DDL (links table + indexes + _migrations) ---
+      // Split by semicolons and execute each statement individually.
+      // pg's `query()` only supports a single SQL statement per call.
+      const ddl = buildQuery(schemaName, TENANT_DDL);
+      const statements = ddl
+        .split(";")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+
+      for (const stmt of statements) {
+        await client.query(stmt + ";");
+      }
+
+      await client.query("COMMIT");
+
+      return { schemaName, tenantId, tenantSalt };
+    } catch (err) {
+      // Best-effort: a failed rollback means the session is dead, so surfacing
+      // that error instead would hide the real cause.
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // Connection already unusable — the original error is the useful one.
+      }
+      throw err;
     }
-
-    return { schemaName, tenantId, tenantSalt };
   });
 }

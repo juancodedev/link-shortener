@@ -1,6 +1,7 @@
 import type { Handler } from "hono";
 import type { AppEnv, HonoVars } from "../types/env";
 import { VISITOR_ESTIMATE_CAVEAT } from "../analytics/metrics";
+import { renderGatePanel } from "./gate-panel";
 import { resolveMaxActiveLinks } from "../api/links";
 
 // ---------------------------------------------------------------------------
@@ -221,6 +222,72 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     @media (min-width: 768px) {
       .visitors-pair { grid-template-columns: 1fr 1fr; }
     }
+
+    /* Review-gate panel: stat tiles + a CSS bar chart. Bars rather than a
+       charting library because this screen is screenshotted and forwarded as
+       the monthly report — a canvas or SVG chart renders as a blank box in a
+       headless screenshot, and self-contained DOM bars do not. */
+    .stat-tiles {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+      gap: 0.625rem;
+      margin-bottom: 1rem;
+    }
+    .stat-tile {
+      border: 1px solid #e2e8f0;
+      border-radius: 0.5rem;
+      padding: 0.625rem 0.75rem;
+      background: #fff;
+    }
+    .stat-tile .label {
+      font-size: 0.688rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #64748b;
+      margin-bottom: 0.125rem;
+    }
+    .stat-tile .value {
+      font-size: 1.5rem;
+      font-weight: 600;
+      line-height: 1.2;
+      color: #1e293b;
+    }
+    .stat-tile .sub {
+      font-size: 0.688rem;
+      color: #64748b;
+      margin-top: 0.125rem;
+    }
+    .stat-tile .value.withheld {
+      font-size: 0.938rem;
+      font-weight: 500;
+      color: #94a3b8;
+    }
+    .peak-chart {
+      display: flex;
+      align-items: flex-end;
+      gap: 2px;
+      height: 5rem;
+      padding-top: 0.5rem;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .peak-bar {
+      flex: 1 1 0;
+      min-width: 2px;
+      background: #94a3b8;
+      border-radius: 1px 1px 0 0;
+      position: relative;
+    }
+    .peak-bar .google {
+      background: #1e293b;
+      border-radius: 1px 1px 0 0;
+    }
+    .peak-axis {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.688rem;
+      color: #94a3b8;
+      margin-top: 0.25rem;
+    }
     .qr-modal {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -393,6 +460,15 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       <p class="estimate-note">${VISITOR_ESTIMATE_CAVEAT}</p>
     </div>
 
+    <!-- Review gate. Presentable as a screenshot on purpose: this screen is
+         what the owner forwards as their monthly report, so every figure here
+         carries its own qualification in the markup rather than in a tooltip
+         that a screenshot would not capture. -->
+    <div class="card" id="gate-card" style="display:none;">
+      <h3>Customer satisfaction</h3>
+      <div id="gate-body"><div class="loading">Loading...</div></div>
+    </div>
+
     <!-- QR code modal -->
     <div id="qr-modal" class="qr-modal hidden" onclick="this.classList.add('hidden')">
       <div class="qr-card" onclick="event.stopPropagation()">
@@ -423,6 +499,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
     </div>
 
     <script>
+      const renderGatePanel = ${renderGatePanel.toString()};
       /**
        * Readiness gate for the auth bootstrap.
        *
@@ -653,12 +730,15 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         const tbody = document.getElementById("links-body");
         const count = document.getElementById("link-count");
         const clientsCard = document.getElementById("clients-card");
+        const gateCard = document.getElementById("gate-card");
+        const gateBody = document.getElementById("gate-body");
         const clientsBody = document.getElementById("clients-body");
 
         loading.style.display = "";
         table.style.display = "none";
         empty.style.display = "none";
         clientsCard.style.display = "none";
+        gateCard.style.display = "none";
 
         try {
           // Two endpoints, two fetches: the links collection and the
@@ -672,12 +752,29 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           // paint. A failure in EITHER one fails the load, because the previous
           // behaviour was also all-or-nothing and a half-rendered dashboard is
           // harder to trust than an error message.
-          const [linksRes, clientsRes] = await Promise.all([
+          const [linksRes, clientsRes, gateRes] = await Promise.all([
             window.__api("GET", "/api/links"),
             window.__api("GET", "/api/clients/metrics"),
+            window.__api("GET", "/api/review-gate/metrics"),
           ]);
           if (!linksRes || !linksRes.ok) throw new Error("Failed to load links");
           if (!clientsRes || !clientsRes.ok) throw new Error("Failed to load client metrics");
+
+          // The gate panel is the exception to the all-or-nothing rule the two
+          // fetches above follow. Its numbers qualify each other — a derivation
+          // rate beside a satisfaction mean with a different sample — so a
+          // partial paint is worse than no paint. But a tenant who has never
+          // activated a gated link has no rows, and failing the whole dashboard
+          // over an empty panel would be wrong. So this one degrades to hidden,
+          // and only if the panel could not be rendered at all.
+          if (gateRes && gateRes.ok) {
+            try {
+              gateBody.innerHTML = renderGatePanel(await gateRes.json());
+              gateCard.style.display = "";
+            } catch (err) {
+              console.error("gate panel failed to render", err);
+            }
+          }
 
           const links = await linksRes.json();
           // An array is the documented contract for /api/links. If that ever

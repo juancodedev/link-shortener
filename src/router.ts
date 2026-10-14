@@ -17,6 +17,7 @@ import { createLinksBatch } from "./api/batch";
 import { listClientRefMetrics } from "./api/clients";
 import { reviewGateMetrics } from "./api/review-gate";
 import { createTenant, deleteTenant, listTenants } from "./api/tenants";
+import { listTenantSubscriptions, setTenantSubscription } from "./handlers/ops";
 
 // ---------------------------------------------------------------------------
 // Middleware instances (pre-built — reused across all requests)
@@ -102,6 +103,15 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
   app.get("/api/review-gate/metrics", auth, tenantMembershipMiddleware, reviewGateMetrics);
 
   // Tenant provisioning: auth required, no tenant middleware (tenant doesn't exist yet)
+  // -----------------------------------------------------------------------
+  // Operator routes — bearer OPERATIONS_TOKEN, never a customer JWT.
+  // Billing is collected off-platform and recorded here, so a customer able to
+  // flip their own status would grant themselves 'active' instead of paying.
+  // -----------------------------------------------------------------------
+
+  app.get("/api/ops/tenants", listTenantSubscriptions);
+  app.post("/api/ops/tenants/subscription", setTenantSubscription);
+
   app.get("/api/tenants", auth, listTenants);
   app.post("/api/tenants", auth, createTenant);
 

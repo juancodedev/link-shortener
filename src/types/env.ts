@@ -9,6 +9,15 @@ export interface SupabaseSecrets {
   SUPABASE_JWT_SECRET: string;
   /** Direct connection string for local dev (bypasses Hyperdrive). Not set in production. */
   DATABASE_URL?: string;
+  /**
+   * Bearer token for the operator routes under `/api/ops`.
+   *
+   * Separate from SUPABASE_SERVICE_ROLE_KEY on purpose: that key is full database
+   * access, and a credential whose only power is flipping a subscription should
+   * not also be able to drop a schema. Optional so the routes fail closed with a
+   * logged error when it is absent, rather than a TypeError at request time.
+   */
+  OPERATIONS_TOKEN?: string;
 }
 
 /**

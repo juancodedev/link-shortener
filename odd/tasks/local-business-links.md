@@ -459,10 +459,17 @@ to tenant, `{slug}:{code}` holds the destination URL and its `isActive`/`expires
 the registry level is the correct layer — it is consulted before the database fallback, so a
 paused tenant costs no query.
 
-- [ ] **T5.5** A webhook that flips `subscription_status` writes the new value to every
-      `reg:{code}` entry of that tenant in `waitUntil`, so reactivation is immediate worldwide.
-      A tenant with many stickers means many KV writes — batch them and tolerate partial failure,
-      since T5.4 guarantees correctness even when a write is missed.
+- [x] **T5.5** Operator surface, replacing the gateway webhook (billing is off-platform).
+      `GET /api/ops/tenants` and `POST /api/ops/tenants/subscription` in `src/handlers/ops.ts`,
+      plus `00014` for `subscription_updated_at`.
+      **Not a dashboard feature.** Billing is collected off-platform and the operator records it,
+      so a customer able to flip their own status would grant themselves `active` instead of
+      paying. These routes accept no customer JWT at all — not even a tenant owner's. They are
+      gated by a dedicated `OPERATIONS_TOKEN`, deliberately **not** `SUPABASE_SERVICE_ROLE_KEY`:
+      a credential whose only power is flipping a subscription should not also be able to drop a
+      schema. Token comparison hashes both sides first, so length and prefix leaks are impossible.
+      Changing the status invalidates every `reg:{code}` for that tenant so reactivation is
+      immediate rather than up to 24 h away.
 
 ## Acceptance criteria
 

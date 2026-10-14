@@ -43,6 +43,9 @@ jobs:
           echo "${{ secrets.SUPABASE_ANON_KEY }}"          | pnpm exec wrangler secret put SUPABASE_ANON_KEY
           echo "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}"  | pnpm exec wrangler secret put SUPABASE_SERVICE_ROLE_KEY
           echo "${{ secrets.SUPABASE_JWT_SECRET }}"        | pnpm exec wrangler secret put SUPABASE_JWT_SECRET
+          # Separate credential for /api/ops. Deliberately not the service role
+          # key: revoking the operator token must not touch database access.
+          echo "${{ secrets.OPERATIONS_TOKEN }}"            | pnpm exec wrangler secret put OPERATIONS_TOKEN
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 

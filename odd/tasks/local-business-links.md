@@ -602,7 +602,16 @@ Nothing on the Phases 0–3 critical path is blocked. Work can start today.
   - T2.6 Both writes run inside `waitUntil`, so the customer never waits on a database write to
     reach Google.
   - T2.7 The private branch is the inline form on the screen itself.
-- [ ] Phase 3 — metrics
+- [x] **Phase 3 — metrics: work unit A complete** (queries + endpoint). `547 tests / 25 files`.
+  - `src/analytics/review-gate.ts` — action split + derivation rate, per-location rollup,
+    hourly peaks.
+  - `GET /api/review-gate/metrics` serves all three in ONE response. They describe the same
+    scans and the dashboard renders them on one screen; three fetches would let the numbers
+    disagree in front of the owner.
+  - `MIN_RATED_SAMPLE = 5`. Below it no average is published at all, and the sentiment gap is
+    null unless BOTH branches clear the floor. The constant ships in the response so the
+    "sample too small" label on the dashboard cannot drift from the rule that produces it.
+- [ ] Phase 3 — dashboard rendering
 - [ ] Phase 4 — multi-site RBAC
 - [ ] Phase 5 — subscriptions
 

@@ -222,8 +222,13 @@ describe("peak chart", () => {
       }),
     );
     // 4 scans against a max of 4 fills the bar; 1 against 4 is a quarter.
-    expect(html).toContain('style="height:100%;background:transparent;"');
-    expect(html).toContain('style="height:25%;background:transparent;"');
+    //
+    // The bar's HEIGHT stays inline because height is the data being encoded.
+    // The transparent background moved to a class when the colour values became
+    // tokens, so the assertion follows the height alone — the scaling it is
+    // actually about.
+    expect(html).toContain('class="peak-bar" style="height:100%;"');
+    expect(html).toContain('class="peak-bar" style="height:25%;"');
   });
 });
 

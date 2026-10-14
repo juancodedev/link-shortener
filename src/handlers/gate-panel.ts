@@ -96,7 +96,7 @@ export function renderGatePanel(payload: GatePanelPayload): string {
     }
 
     return `${head}
-        <div class="value">${branch.avgRating.toFixed(2)}<span style="font-size:0.875rem;color:#64748b;"> / 5</span></div>
+        <div class="value">${branch.avgRating.toFixed(2)}<span class="rating-of"> / 5</span></div>
         <div class="sub">from ${branch.rated} of ${branch.scans} scanned</div>
       </div>`;
   }
@@ -116,7 +116,7 @@ export function renderGatePanel(payload: GatePanelPayload): string {
    */
   function peakChart(peaks: PeakBucket[]): string {
     if (peaks.length === 0) {
-      return `<p class="estimate-note" style="border-top:0;padding-top:0;margin-top:0;">
+      return `<p class="estimate-note gate-empty-note">
         No tagged scans in the last 7 days yet.</p>`;
     }
 
@@ -128,11 +128,13 @@ export function renderGatePanel(payload: GatePanelPayload): string {
         const googleShare =
           p.total > 0 ? Math.round((p.google / p.total) * 100) : 0;
 
-        return `<div class="peak-bar" style="height:${height}%;background:transparent;"
+        // Only the HEIGHTS stay inline: they are the data. Every colour is a
+        // class, so the token layer can still reach it.
+        return `<div class="peak-bar" style="height:${height}%;"
                        title="${p.total} scans · ${pct(p.derivationRate)} to review">
-              <div style="position:absolute;bottom:0;left:0;right:0;height:100%;">
-                <div style="height:${googleShare}%;background:#cbd5e1;"></div>
-                <div class="google" style="height:${100 - googleShare}%;"></div>
+              <div class="peak-seg" style="height:100%;">
+                <div class="peak-seg-public" style="height:${googleShare}%;"></div>
+                <div class="peak-seg-rest" style="height:${100 - googleShare}%;"></div>
               </div>
             </div>`;
       })
@@ -160,7 +162,7 @@ export function renderGatePanel(payload: GatePanelPayload): string {
       })
       .join("");
 
-    return `<h4 style="margin:1.25rem 0 0.5rem;font-size:0.875rem;color:#64748b;text-transform:uppercase;letter-spacing:0.04em;">
+    return `<h4 class="gate-h">
         By location
       </h4>
       <div class="table-wrap">
@@ -208,13 +210,13 @@ export function renderGatePanel(payload: GatePanelPayload): string {
 
   const empty =
     split.totalScans === 0
-      ? `<p style="color:#64748b;font-size:0.875rem;">
+      ? `<p class="gate-empty">
            No tagged scans yet. Point a link at a sticker and scan it to see numbers here.
          </p>`
       : "";
 
   return `${empty}${tiles}
-    <h4 style="margin:1.25rem 0 0.5rem;font-size:0.875rem;color:#64748b;text-transform:uppercase;letter-spacing:0.04em;">
+    <h4 class="gate-h">
       Peak hours
     </h4>
     ${peakChart(peaks)}

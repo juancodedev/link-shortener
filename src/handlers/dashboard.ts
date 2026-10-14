@@ -16,11 +16,72 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${title} — Link Shortener</title>
   <style>
+    /* ------------------------------------------------------------------
+       TOKENS — the single place a literal colour is allowed.
+
+       Values here are the ones that were previously hardcoded throughout the
+       sheet, unchanged. This block changes WHERE a colour lives, never WHAT it
+       is: swapping the palette is now a one-line edit in one place instead of
+       a find-and-replace across the whole template.
+
+       Names come from the product, not from a scale. A person reading only
+       --kraft, --sticker, --tag, --live, --retired should be able to guess
+       what this is: printed tags mounted in venues, and the states they can be
+       in. See odd/analysis/dashboard-directions.md.
+       ------------------------------------------------------------------ */
+    :root {
+      /* Surfaces — what the tags are physically resting on */
+      --kraft: #f8fafc;        /* the page */
+      --kraft-deep: #f1f5f9;   /* inset panels, hover wash, row rules */
+      --sticker: #ffffff;      /* the printed tag itself: nav, cards, tiles */
+
+      /* Edges — where one surface meets another */
+      --edge: #e2e8f0;
+      --edge-strong: #d1d5db;  /* form fields, outlined buttons */
+
+      /* Ink — five steps, from a heading down to a placeholder */
+      --ink: #1e293b;
+      --ink-strong: #0f172a;
+      --ink-soft: #64748b;     /* secondary text, table headers */
+      --ink-label: #475569;    /* form labels */
+      --ink-faint: #94a3b8;    /* placeholders, disabled, empty states */
+
+      /* The tag — the printed code, and the action that makes one */
+      --tag: #2563eb;
+      --tag-deep: #1d4ed8;
+      --tag-wash: rgba(37, 99, 235, 0.1);
+
+      /* Lifecycle — a mounted tag is live, stale, or retired */
+      --live: #166534;
+      --live-wash: #dcfce7;
+      --live-edge: #bbf7d0;
+      --stale: #854d0e;
+      --stale-wash: #fef9c3;
+      --retired: #dc2626;      /* destructive fill */
+      --retired-deep: #b91c1c;
+      --retired-ink: #991b1b;
+      --retired-wash: #fef2f2;
+      --retired-edge: #fecaca;
+
+      /* Chrome — the location bar that sits above everything */
+      --chrome: #1a1a1a;
+      --chrome-ink: #ffffff;
+
+      /* Depth */
+      --shadow-card: rgba(0, 0, 0, 0.04);
+      --shadow-modal: rgba(0, 0, 0, 0.12);
+      --veil: rgba(0, 0, 0, 0.4);
+
+      /* Peak chart — the two segments of each scan bucket */
+      --peak-public: #cbd5e1;  /* the share that left for the public review */
+      --peak-private: var(--ink); /* the share that stayed in the private path */
+    }
+
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      background: #f8fafc;
-      color: #1e293b;
+      background: var(--kraft);
+      color: var(--ink);
       line-height: 1.6;
       min-height: 100dvh;
     }
@@ -33,8 +94,8 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       .container { padding: 1.5rem; }
     }
     nav {
-      background: #fff;
-      border-bottom: 1px solid #e2e8f0;
+      background: var(--sticker);
+      border-bottom: 1px solid var(--edge);
       padding: 0.5rem 1rem;
       display: flex;
       justify-content: space-between;
@@ -45,10 +106,10 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     @media (min-width: 768px) {
       nav { padding: 0.75rem 1.5rem; }
     }
-    nav h2 { font-size: 1.125rem; color: #0f172a; }
+    nav h2 { font-size: 1.125rem; color: var(--ink-strong); }
     nav a, nav button {
       font-size: 0.813rem;
-      color: #64748b;
+      color: var(--ink-soft);
       text-decoration: none;
       background: none;
       border: none;
@@ -56,66 +117,66 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       padding: 0.25rem 0.5rem;
       border-radius: 0.25rem;
     }
-    nav a:hover, nav button:hover { color: #2563eb; background: #f1f5f9; }
+    nav a:hover, nav button:hover { color: var(--tag); background: var(--kraft-deep); }
     .card {
-      background: #fff;
-      border: 1px solid #e2e8f0;
+      background: var(--sticker);
+      border: 1px solid var(--edge);
       border-radius: 0.75rem;
       padding: 1.5rem;
       margin-top: 1.5rem;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+      box-shadow: 0 1px 3px var(--shadow-card);
     }
     h3 {
       font-size: 1rem;
       font-weight: 700;
-      color: #0f172a;
+      color: var(--ink-strong);
       margin-bottom: 1rem;
     }
     label {
       display: block;
       font-size: 0.813rem;
       font-weight: 600;
-      color: #475569;
+      color: var(--ink-label);
       margin-bottom: 0.25rem;
     }
     input, select {
       width: 100%;
       padding: 0.5rem 0.75rem;
-      border: 1.5px solid #d1d5db;
+      border: 1.5px solid var(--edge-strong);
       border-radius: 0.5rem;
       font-size: 0.875rem;
       margin-bottom: 1rem;
     }
     input:focus, select:focus {
       outline: none;
-      border-color: #2563eb;
-      box-shadow: 0 0 0 3px rgba(37,99,235,0.1);
+      border-color: var(--tag);
+      box-shadow: 0 0 0 3px var(--tag-wash);
     }
     button {
       padding: 0.625rem 1.25rem;
-      background: #2563eb;
-      color: #fff;
+      background: var(--tag);
+      color: var(--sticker);
       border: none;
       border-radius: 0.5rem;
       font-size: 0.875rem;
       font-weight: 600;
       cursor: pointer;
     }
-    button:hover { background: #1d4ed8; }
-    button:disabled { background: #94a3b8; cursor: not-allowed; }
+    button:hover { background: var(--tag-deep); }
+    button:disabled { background: var(--ink-faint); cursor: not-allowed; }
     .btn-sm {
       padding: 0.25rem 0.75rem;
       font-size: 0.75rem;
       border-radius: 0.375rem;
     }
-    .btn-danger { background: #dc2626; }
-    .btn-danger:hover { background: #b91c1c; }
+    .btn-danger { background: var(--retired); }
+    .btn-danger:hover { background: var(--retired-deep); }
     .btn-outline {
       background: transparent;
-      color: #2563eb;
-      border: 1px solid #d1d5db;
+      color: var(--tag);
+      border: 1px solid var(--edge-strong);
     }
-    .btn-outline:hover { background: #f1f5f9; }
+    .btn-outline:hover { background: var(--kraft-deep); }
     table {
       width: 100%;
       border-collapse: collapse;
@@ -123,21 +184,22 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     }
     th {
       text-align: left;
-      color: #64748b;
+      color: var(--ink-soft);
       font-weight: 600;
       padding: 0.5rem 0.75rem;
-      border-bottom: 1px solid #e2e8f0;
+      border-bottom: 1px solid var(--edge);
     }
     td {
       padding: 0.5rem 0.75rem;
-      border-bottom: 1px solid #f1f5f9;
+      border-bottom: 1px solid var(--kraft-deep);
       vertical-align: middle;
     }
-    tr:hover td { background: #f8fafc; }
+    tr:hover td { background: var(--kraft); }
     .code {
       font-family: "SF Mono", "Fira Code", monospace;
-      color: #2563eb;
+      color: var(--tag);
       font-weight: 600;
+      cursor: pointer;
     }
     .url-trunc {
       max-width: 200px;
@@ -153,9 +215,9 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       font-size: 0.688rem;
       font-weight: 600;
     }
-    .badge-active { background: #dcfce7; color: #166534; }
-    .badge-inactive { background: #fef2f2; color: #991b1b; }
-    .badge-expired { background: #fef9c3; color: #854d0e; }
+    .badge-active { background: var(--live-wash); color: var(--live); }
+    .badge-inactive { background: var(--retired-wash); color: var(--retired-ink); }
+    .badge-expired { background: var(--stale-wash); color: var(--stale); }
     .table-wrap {
       overflow-x: auto;
       -webkit-overflow-scrolling: touch;
@@ -172,12 +234,13 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       margin: 1rem 0;
       display: none;
     }
-    .message.success { display: block; background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
-    .message.error { display: block; background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+    .message.success { display: block; background: var(--live-wash); color: var(--live); border: 1px solid var(--live-edge); }
+    .message.error { display: block; background: var(--retired-wash); color: var(--retired-ink); border: 1px solid var(--retired-edge); }
     .row-actions { display: flex; gap: 0.25rem; flex-wrap: wrap; }
     @media (min-width: 768px) { .row-actions { gap: 0.375rem; } }
-    .empty { text-align: center; color: #94a3b8; padding: 2rem; }
-    .loading { text-align: center; color: #94a3b8; padding: 1rem; }
+    .empty { text-align: center; color: var(--ink-faint); padding: 2rem; }
+    .empty-cell { color: var(--ink-faint); text-align: center; }
+    .loading { text-align: center; color: var(--ink-faint); padding: 1rem; }
     .metrics-grid {
       display: grid;
       grid-template-columns: 1fr;
@@ -188,15 +251,15 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       .metrics-grid { grid-template-columns: 1fr 1fr 1fr; gap: 1rem; }
     }
     .metric-box {
-      background: #f8fafc;
-      border: 1px solid #e2e8f0;
+      background: var(--kraft);
+      border: 1px solid var(--edge);
       border-radius: 0.5rem;
       padding: 0.75rem;
     }
     .metric-box h4 {
       font-size: 0.688rem;
       text-transform: uppercase;
-      color: #94a3b8;
+      color: var(--ink-faint);
       margin-bottom: 0.5rem;
     }
     .metric-row {
@@ -208,10 +271,10 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     .estimate-note {
       font-size: 0.688rem;
       line-height: 1.5;
-      color: #64748b;
+      color: var(--ink-soft);
       margin-top: 0.625rem;
       padding-top: 0.5rem;
-      border-top: 1px dashed #e2e8f0;
+      border-top: 1px dashed var(--edge);
     }
     .visitors-box { margin-bottom: 1rem; }
     .visitors-pair {
@@ -234,33 +297,33 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       margin-bottom: 1rem;
     }
     .stat-tile {
-      border: 1px solid #e2e8f0;
+      border: 1px solid var(--edge);
       border-radius: 0.5rem;
       padding: 0.625rem 0.75rem;
-      background: #fff;
+      background: var(--sticker);
     }
     .stat-tile .label {
       font-size: 0.688rem;
       text-transform: uppercase;
       letter-spacing: 0.04em;
-      color: #64748b;
+      color: var(--ink-soft);
       margin-bottom: 0.125rem;
     }
     .stat-tile .value {
       font-size: 1.5rem;
       font-weight: 600;
       line-height: 1.2;
-      color: #1e293b;
+      color: var(--ink);
     }
     .stat-tile .sub {
       font-size: 0.688rem;
-      color: #64748b;
+      color: var(--ink-soft);
       margin-top: 0.125rem;
     }
     .stat-tile .value.withheld {
       font-size: 0.938rem;
       font-weight: 500;
-      color: #94a3b8;
+      color: var(--ink-faint);
     }
     .peak-chart {
       display: flex;
@@ -268,30 +331,72 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       gap: 2px;
       height: 5rem;
       padding-top: 0.5rem;
-      border-bottom: 1px solid #e2e8f0;
+      border-bottom: 1px solid var(--edge);
     }
     .peak-bar {
       flex: 1 1 0;
       min-width: 2px;
-      background: #94a3b8;
+      background: transparent;
       border-radius: 1px 1px 0 0;
       position: relative;
     }
-    .peak-bar .google {
-      background: #1e293b;
-      border-radius: 1px 1px 0 0;
+    .peak-seg {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
     }
+    .peak-seg-rest { background: var(--peak-private); }
+    .peak-seg-public { background: var(--peak-public); }
     .peak-axis {
       display: flex;
       justify-content: space-between;
       font-size: 0.688rem;
-      color: #94a3b8;
+      color: var(--ink-faint);
       margin-top: 0.25rem;
     }
+
+    /* Gate panel sub-headings and empty state. Shared with
+       src/handlers/gate-panel.ts, which emits these classes. */
+    .gate-h {
+      margin: 1.25rem 0 0.5rem;
+      font-size: 0.875rem;
+      color: var(--ink-soft);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .gate-h:first-child { margin-top: 0; }
+    .gate-empty { color: var(--ink-soft); font-size: 0.875rem; }
+    .gate-empty-note { border-top: 0; padding-top: 0; margin-top: 0; }
+    .rating-of { font-size: 0.875rem; color: var(--ink-soft); }
+
+    /* The location bar is injected by script into document.body. It used to
+       carry its own inline cssText blob, which meant its colours could not be
+       reached by the tokens. */
+    .tenant-bar {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      background: var(--chrome);
+      color: var(--chrome-ink);
+      padding: 0.6rem 1rem;
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+      font-size: 0.9rem;
+    }
+    .tenant-bar label { margin-bottom: 0; color: var(--chrome-ink); }
+    .tenant-bar select {
+      padding: 0.3rem;
+      border-radius: 6px;
+      border: 0;
+      margin-bottom: 0;
+    }
+
     .qr-modal {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0,0,0,0.4);
+      background: var(--veil);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -299,19 +404,47 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     }
     .qr-modal.hidden { display: none; }
     .qr-card {
-      background: #fff;
+      background: var(--sticker);
       border-radius: 0.75rem;
       padding: 1.5rem;
       text-align: center;
-      box-shadow: 0 4px 24px rgba(0,0,0,0.12);
+      box-shadow: 0 4px 24px var(--shadow-modal);
     }
+    .qr-title { margin-bottom: 0.5rem; }
+    .qr-img { max-width: 200px; }
+    .qr-url {
+      font-size: 0.75rem;
+      color: var(--ink-soft);
+      margin-top: 0.5rem;
+      word-break: break-all;
+    }
+
+    /* Small shared utilities that used to be inline style attributes.
+       Only the ones no script touches: a display:none stays inline, because
+       loadLinks toggles those elements through .style.display. */
+    .nav-email { font-size: 0.813rem; color: var(--ink-soft); margin-right: 0.75rem; }
+    .caption { font-size: 0.813rem; color: var(--ink-soft); }
+    .caption-sm { font-size: 0.75rem; color: var(--ink-soft); }
+    .short-url { background: var(--kraft); cursor: pointer; }
+    .clicks-link { color: var(--tag); text-decoration: none; font-weight: 600; }
+    .client-ref-input {
+      width: 130px;
+      padding: 0.25rem 0.5rem;
+      margin-bottom: 0;
+      border-radius: 0.375rem;
+      font-size: 0.75rem;
+    }
+    .panel-pad { padding: 0.75rem; }
+    .flush-cell { padding: 0; }
+    .gap-top { margin-top: 1rem; }
+    .gap-top-sm { margin-top: 0.5rem; }
   </style>
 </head>
 <body>
   <nav>
     <h2>⚡ Link Shortener</h2>
     <div>
-      <span id="nav-email" style="font-size:0.813rem;color:#64748b;margin-right:0.75rem;"></span>
+      <span id="nav-email" class="nav-email"></span>
       <a href="/">Home</a>
       <button id="logout-nav">Log Out</button>
     </div>
@@ -359,10 +492,11 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
           '<div class="tenant-bar"><label for="tenant-select">Ubicaci&oacute;n</label>' +
           '<select id="tenant-select">' + opts + "</select></div>";
 
-        host.style.cssText = "position:sticky;top:0;z-index:50;background:#1a1a1a;color:#fff;" +
-          "padding:.6rem 1rem;display:flex;gap:.75rem;align-items:center;font-size:.9rem";
+        // The bar used to be styled from here with an inline cssText blob
+        // carrying its own hardcoded colours, which put two of them outside the
+        // reach of the token layer. It is a real rule now (see .tenant-bar), so
+        // the markup above is the only thing this function needs to produce.
         var sel = document.getElementById("tenant-select");
-        sel.style.cssText = "padding:.3rem;border-radius:6px;border:0";
         sel.onchange = function () {
           try { window.localStorage.setItem("tenant", sel.value); } catch (e) {}
           window.location.reload();
@@ -455,9 +589,9 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         <button type="submit">Shorten</button>
       </form>
       <div id="create-msg" class="message"></div>
-      <div id="result" style="display:none;margin-top:1rem;">
-        <p style="font-size:0.813rem;color:#64748b;">Your short link:</p>
-        <input type="text" id="short-url" readonly style="background:#f8fafc;cursor:pointer;" onclick="this.select();navigator.clipboard.writeText(this.value)">
+      <div id="result" class="gap-top" style="display:none;">
+        <p class="caption">Your short link:</p>
+        <input type="text" id="short-url" readonly class="short-url" onclick="this.select();navigator.clipboard.writeText(this.value)">
       </div>
     </div>
 
@@ -526,9 +660,9 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
     <!-- QR code modal -->
     <div id="qr-modal" class="qr-modal hidden" onclick="this.classList.add('hidden')">
       <div class="qr-card" onclick="event.stopPropagation()">
-        <h3 style="margin-bottom:0.5rem;">QR Code</h3>
-        <img id="qr-img" src="" alt="QR Code" style="max-width:200px;">
-        <p id="qr-url" style="font-size:0.75rem;color:#64748b;margin-top:0.5rem;word-break:break-all;"></p>
+        <h3 class="qr-title">QR Code</h3>
+        <img id="qr-img" src="" alt="QR Code" class="qr-img">
+        <p id="qr-url" class="qr-url"></p>
         <!--
           PRINT-SHEET ENTRY POINT (T3.4).
 
@@ -547,8 +681,8 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           that terminate nothing. The pre-existing inline handlers on the modal
           chrome are static and carry no record data; this one is not that.
         -->
-        <button id="copy-print-sheet" class="btn-sm btn-outline" style="margin-top:0.5rem;">Copy URL for print sheet</button>
-        <button class="btn-sm" style="margin-top:0.5rem;" onclick="document.getElementById('qr-modal').classList.add('hidden')">Close</button>
+        <button id="copy-print-sheet" class="btn-sm btn-outline gap-top-sm">Copy URL for print sheet</button>
+        <button class="btn-sm gap-top-sm" onclick="document.getElementById('qr-modal').classList.add('hidden')">Close</button>
       </div>
     </div>
 
@@ -685,7 +819,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
        */
       function renderClients(clients) {
         if (!clients || clients.length === 0) {
-          return "<tr><td colspan=\\"3\\" style=\\"color:#94a3b8;\\">No client identifiers yet — set one on a link to see store-level visitors.</td></tr>";
+          return "<tr><td colspan=\\"3\\" class=\\"empty-cell\\">No client identifiers yet — set one on a link to see store-level visitors.</td></tr>";
         }
         return clients.map((c) => \`<tr>
           <td><span class="code">\${esc(c.client_ref)}</span></td>
@@ -860,11 +994,11 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
               : "active";
             const shortUrl = l.short_url || "";
             return \`<tr>
-              <td><span class="code" data-action="copy" data-url="\${esc(shortUrl)}" data-code="\${esc(l.short_code)}" title="Click to copy \${esc(shortUrl)}" style="cursor:pointer;">\${esc(l.short_code)}</span></td>
+              <td><span class="code" data-action="copy" data-url="\${esc(shortUrl)}" data-code="\${esc(l.short_code)}" title="Click to copy \${esc(shortUrl)}">\${esc(l.short_code)}</span></td>
               <td><span class="url-trunc" title="\${esc(l.original_url)}">\${esc(l.original_url)}</span></td>
-              <td><a href="#" data-action="metrics" data-id="\${esc(l.id)}" data-code="\${esc(l.short_code)}" style="color:#2563eb;text-decoration:none;font-weight:600;">\${esc(l.clicks_count)}</a></td>
+              <td><a href="#" data-action="metrics" data-id="\${esc(l.id)}" data-code="\${esc(l.short_code)}" class="clicks-link">\${esc(l.clicks_count)}</a></td>
               <td><span class="badge badge-\${status}">\${status}</span></td>
-              <td><input type="text" id="client-ref-\${esc(l.id)}" value="\${esc(l.client_ref)}" placeholder="None" maxlength="200" style="width:130px;padding:0.25rem 0.5rem;margin-bottom:0;border-radius:0.375rem;font-size:0.75rem;"></td>
+              <td><input type="text" id="client-ref-\${esc(l.id)}" value="\${esc(l.client_ref)}" placeholder="None" maxlength="200" class="client-ref-input"></td>
               <td>
                 <div class="row-actions">
                   <button class="btn-sm btn-outline" data-action="save-client-ref" data-id="\${esc(l.id)}" title="Save client identifier">Save</button>
@@ -875,8 +1009,8 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
               </td>
             </tr>
             <tr id="metrics-\${esc(l.id)}" style="display:none;">
-              <td colspan="6" style="padding:0;">
-                <div style="padding:0.75rem;">
+              <td colspan="6" class="flush-cell">
+                <div class="panel-pad">
                   <div class="metric-box visitors-box">
                     <h4>Visitors (estimate)</h4>
                     <div id="visitors-\${esc(l.id)}"><div class="loading">Loading...</div></div>

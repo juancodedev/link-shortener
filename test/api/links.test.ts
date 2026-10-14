@@ -1032,6 +1032,88 @@ describe("listLinks response shape", () => {
 
     expect(jsonFn.mock.calls[0]![0]).toEqual([]);
   });
+
+  // -------------------------------------------------------------------------
+  // T1.4 — location on the list response
+  // -------------------------------------------------------------------------
+
+  it("returns location_id and location_name so the dashboard needs no second round trip", async () => {
+    mockRecordingDb([
+      [
+        {
+          id: "link-1",
+          short_code: "mesa-01",
+          original_url: "https://example.com",
+          title: null,
+          client_ref: null,
+          location_id: "loc-1",
+          location_name: "Mesa 1",
+          clicks_count: 7,
+          is_active: true,
+          expires_at: null,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-02T00:00:00Z",
+        },
+      ],
+    ]);
+
+    const { c, jsonFn } = mockContext();
+
+    await listLinks(c as any);
+
+    expect(jsonFn.mock.calls[0]![0]).toEqual([
+      expect.objectContaining({
+        location_id: "loc-1",
+        location_name: "Mesa 1",
+      }),
+    ]);
+  });
+
+  it("returns nulls, not undefined, for a link with no location assigned", async () => {
+    mockRecordingDb([
+      [
+        {
+          id: "link-1",
+          short_code: "aaa1111",
+          original_url: "https://example.com",
+          title: null,
+          client_ref: null,
+          location_id: null,
+          location_name: null,
+          clicks_count: 0,
+          is_active: true,
+          expires_at: null,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-02T00:00:00Z",
+        },
+      ],
+    ]);
+
+    const { c, jsonFn } = mockContext();
+
+    await listLinks(c as any);
+
+    const [row] = jsonFn.mock.calls[0]![0] as Record<string, unknown>[];
+    // `undefined` disappears from the JSON payload entirely, so a client
+    // reading `row.location_id` gets a missing key rather than a null.
+    expect(row).toHaveProperty("location_id", null);
+    expect(row).toHaveProperty("location_name", null);
+  });
+
+  it("joins public.locations with a LEFT JOIN so unassigned links still appear", async () => {
+    const calls = mockRecordingDb([[]]);
+
+    const { c } = mockContext();
+
+    await listLinks(c as any);
+
+    const sql = calls[0]!.sql;
+    expect(sql).toMatch(/LEFT\s+JOIN\s+public\.locations/i);
+    expect(sql).toMatch(/location_name/i);
+    // An INNER JOIN would silently drop every link the owner has not placed
+    // yet, which is most of them on day one.
+    expect(sql).not.toMatch(/INNER\s+JOIN/i);
+  });
 });
 
 // ---------------------------------------------------------------------------

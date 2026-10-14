@@ -4,6 +4,8 @@ import { validateSchemaName, qualifyTable, buildQuery } from "../../src/db/schem
 import referrerSourceMigration from "../../supabase/migrations/00003_add_referrer_source.sql?raw";
 import tenantLinksMigration from "../../supabase/migrations/tenant/001_create_links.sql?raw";
 import clientRefAlterMigration from "../../supabase/migrations/00004_add_client_ref_to_tenant_links.sql?raw";
+import locationsMigration from "../../supabase/migrations/00006_locations.sql?raw";
+import locationIdAlterMigration from "../../supabase/migrations/00007_add_location_id_to_tenant_links.sql?raw";
 import { TENANT_DDL } from "../../src/tenants/provision";
 
 // ---------------------------------------------------------------------------
@@ -234,15 +236,31 @@ describe("00004_add_client_ref_to_tenant_links migration", () => {
  * the other path's tests assume. These helpers compare the COLUMN NAMES only,
  * ignoring the whitespace and comment differences that already exist between
  * the two copies.
+ *
+ * Comments are stripped BEFORE the block is located, not after. Slicing on
+ * `indexOf(");")` over raw text breaks the moment a comment mentions a
+ * parenthesised expression — a `public.locations(id);` in a column comment
+ * truncated the block and made this guard compare a 10-column list against a
+ * 5-column one. The guard silently defeated itself, which is the one failure
+ * mode it exists to prevent.
  */
 function linkColumnNames(ddl: string): string[] {
-  const body = ddl.slice(ddl.indexOf("CREATE TABLE"), ddl.indexOf(");"));
+  const code = stripSqlComments(ddl);
+  const body = code.slice(code.indexOf("CREATE TABLE"), code.indexOf(");"));
   return body
     .split("\n")
-    .map((line) => line.replace(/--.*$/, "").trim())
+    .map((line) => line.trim())
     .filter((line) => line.length > 0 && !/^(CREATE\s+TABLE|IF\s+NOT\s+EXISTS|\{schema\})/i.test(line))
     .map((line) => line.split(/\s+/)[0]!.toLowerCase())
     .sort();
+}
+
+/** Removes `--` line comments, which carry prose, not DDL. */
+function stripSqlComments(ddl: string): string {
+  return ddl
+    .split("\n")
+    .map((line) => line.replace(/--.*$/, ""))
+    .join("\n");
 }
 
 describe("provision.ts template / tenant 001_create_links parity", () => {
@@ -252,7 +270,7 @@ describe("provision.ts template / tenant 001_create_links parity", () => {
 
   it("declares the same indexes in both copies", () => {
     const indexNames = (ddl: string) =>
-      [...ddl.matchAll(/CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+(\w+)/gi)].map((m) =>
+      [...stripSqlComments(ddl).matchAll(/CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+(\w+)/gi)].map((m) =>
         m[1]!.toLowerCase(),
       );
     expect(indexNames(TENANT_DDL).sort()).toEqual(indexNames(tenantLinksMigration).sort());
@@ -261,5 +279,123 @@ describe("provision.ts template / tenant 001_create_links parity", () => {
   it("carries client_ref through both copies", () => {
     expect(TENANT_DDL).toMatch(/client_ref\s+TEXT/i);
     expect(TENANT_DDL).toMatch(/idx_links_client_ref/i);
+  });
+
+  // -------------------------------------------------------------------------
+  // location_id (T1.3)
+  // -------------------------------------------------------------------------
+
+  it("declares location_id in both copies", () => {
+    expect(TENANT_DDL).toMatch(/location_id\s+UUID/i);
+    expect(tenantLinksMigration).toMatch(/location_id\s+UUID/i);
+  });
+
+  it("keeps location_id nullable in both copies so existing links need no backfill", () => {
+    for (const ddl of [TENANT_DDL, tenantLinksMigration]) {
+      const columnLine = ddl.split("\n").find((l) => /^\s*location_id\b/i.test(l))!;
+      expect(columnLine).toBeTruthy();
+      expect(columnLine).not.toMatch(/NOT\s+NULL/i);
+      // A non-null DEFAULT would defeat "existing rows stay NULL".
+      expect(columnLine).not.toMatch(/DEFAULT/i);
+    }
+  });
+
+  it("does not put a foreign key on links.location_id", () => {
+    // Deliberate. Links live in a tenant schema that is dropped with the
+    // tenant, and public.locations cascades with the same tenant, so a
+    // constraint guards nothing CASCADE does not already handle — while
+    // ADD CONSTRAINT is not idempotent in PostgreSQL, which would break the
+    // re-runnable ALTER pattern the 00004 migration established.
+    expect(TENANT_DDL).not.toMatch(/location_id[^,]*REFERENCES/i);
+    expect(tenantLinksMigration).not.toMatch(/location_id[^,]*REFERENCES/i);
+  });
+
+  it("indexes location_id in both copies so per-location rollups stay cheap", () => {
+    for (const ddl of [TENANT_DDL, tenantLinksMigration]) {
+      expect(ddl).toMatch(
+        /CREATE\s+INDEX\s+IF\s+NOT\s+EXISTS\s+idx_links_location[\s\S]*?links\s*\(\s*location_id\s*\)/i,
+      );
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 00006_locations — the per-business locations table (T1.1, T1.2)
+// ---------------------------------------------------------------------------
+
+describe("00006_locations migration", () => {
+  it("creates public.locations", () => {
+    expect(locationsMigration).toMatch(
+      /CREATE\s+TABLE\s+(IF\s+NOT\s+EXISTS\s+)?public\.locations/i,
+    );
+  });
+
+  it("scopes a location to its tenant via a cascading foreign key", () => {
+    expect(locationsMigration).toMatch(
+      /tenant_id\s+UUID[^,]*REFERENCES\s+public\.tenants\s*\(\s*id\s*\)\s*ON\s+DELETE\s+CASCADE/i,
+    );
+  });
+
+  it("indexes tenant_id so per-tenant lookups do not scan", () => {
+    expect(locationsMigration).toMatch(
+      /CREATE\s+INDEX\s+IF\s+NOT\s+EXISTS\s+idx_locations_tenant[\s\S]*?locations\s*\(\s*tenant_id\s*\)/i,
+    );
+  });
+
+  it("makes slug unique per tenant so two sites can share a display name", () => {
+    expect(locationsMigration).toMatch(
+      /CREATE\s+UNIQUE\s+INDEX\s+IF\s+NOT\s+EXISTS\s+\w+\s+ON\s+public\.locations\s*\(\s*tenant_id\s*,\s*slug\s*\)/i,
+    );
+  });
+
+  it("backfills one location per existing tenant", () => {
+    // Without this, every tenant created before the change would have zero
+    // locations and Phase 2 could not attach a rating to any of its links.
+    expect(locationsMigration).toMatch(
+      /INSERT\s+INTO\s+public\.locations[\s\S]*?SELECT[\s\S]*?FROM\s+public\.tenants/i,
+    );
+    expect(locationsMigration).toMatch(/ON\s+CONFLICT/i);
+  });
+
+  it("is idempotent throughout", () => {
+    expect(locationsMigration).toMatch(/IF\s+NOT\s+EXISTS/i);
+    expect(locationsMigration).toMatch(/ON\s+CONFLICT/i);
+  });
+
+  it("records its version in public._migrations", () => {
+    expect(locationsMigration).toMatch(/public\._migrations/i);
+    expect(locationsMigration).toContain("00006_locations");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 00007_add_location_id_to_tenant_links — existing-tenant ALTER (T1.3)
+// ---------------------------------------------------------------------------
+
+describe("00007_add_location_id_to_tenant_links migration", () => {
+  it("alters existing tenant schemas rather than editing the create template", () => {
+    expect(locationIdAlterMigration).toMatch(/ALTER\s+TABLE/i);
+    expect(locationIdAlterMigration).toMatch(/ADD\s+COLUMN/i);
+    expect(locationIdAlterMigration).toMatch(/location_id\s+UUID/i);
+  });
+
+  it("is idempotent so re-running is safe", () => {
+    expect(locationIdAlterMigration).toMatch(/ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS/i);
+  });
+
+  it("discovers concrete schema names from the tenant registry", () => {
+    expect(locationIdAlterMigration).toMatch(/public\.tenants/i);
+    expect(locationIdAlterMigration).toMatch(/schema_name/i);
+    expect(locationIdAlterMigration).toMatch(/EXECUTE\s+format/i);
+  });
+
+  it("skips tenants whose links table is absent instead of aborting the loop", () => {
+    expect(locationIdAlterMigration).toMatch(/CONTINUE\s+WHEN/i);
+    expect(locationIdAlterMigration).toMatch(/to_regclass/i);
+  });
+
+  it("records its version in each tenant's own _migrations table", () => {
+    expect(locationIdAlterMigration).toMatch(/_migrations/i);
+    expect(locationIdAlterMigration).toContain("00007_add_location_id_to_tenant_links");
   });
 });

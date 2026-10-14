@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS {schema}.links (
   short_code TEXT NOT NULL,
   title TEXT,
   client_ref TEXT,
+  location_id UUID,
   clicks_count INTEGER DEFAULT 0 NOT NULL,
   is_active BOOLEAN DEFAULT true NOT NULL,
   expires_at TIMESTAMPTZ,
@@ -40,6 +41,8 @@ CREATE INDEX IF NOT EXISTS idx_links_active_expires
   ON {schema}.links(is_active, expires_at) WHERE is_active = true;
 CREATE INDEX IF NOT EXISTS idx_links_client_ref
   ON {schema}.links(client_ref);
+CREATE INDEX IF NOT EXISTS idx_links_location
+  ON {schema}.links(location_id);
 CREATE TABLE IF NOT EXISTS {schema}._migrations (
   version INTEGER PRIMARY KEY,
   name TEXT NOT NULL,

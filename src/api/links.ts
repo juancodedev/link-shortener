@@ -583,10 +583,13 @@ export const listLinks: Handler<{
   const table = qualifyTable(tenant.schemaName, "links");
 
   const rows = await withClient(c.env, async (client) => {
-    const res = await client.query<LinkRow & { clicks_count: number; is_active: boolean; expires_at: string | null; updated_at: string }>(
-      `SELECT id, short_code, original_url, title, client_ref, clicks_count, is_active, expires_at, created_at, updated_at
-       FROM ${table}
-       ORDER BY created_at DESC
+    const res = await client.query<LinkRow & { clicks_count: number; is_active: boolean; expires_at: string | null; updated_at: string; location_id: string | null; location_name: string | null }>(
+      `SELECT l.id, l.short_code, l.original_url, l.title, l.client_ref, l.clicks_count,
+              l.is_active, l.expires_at, l.created_at, l.updated_at,
+              l.location_id, loc.name AS location_name
+       FROM ${table} l
+       LEFT JOIN public.locations loc ON loc.id = l.location_id
+       ORDER BY l.created_at DESC
        LIMIT 100`,
     );
 
@@ -603,6 +606,8 @@ export const listLinks: Handler<{
       short_url: `${domain}/${r.short_code}`,
       title: r.title,
       client_ref: r.client_ref ?? null,
+      location_id: r.location_id ?? null,
+      location_name: r.location_name ?? null,
       clicks_count: r.clicks_count,
       is_active: r.is_active,
       expires_at: r.expires_at,

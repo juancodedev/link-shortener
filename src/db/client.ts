@@ -9,14 +9,22 @@ import type { AppEnv } from "../types/env";
  * is the correct pattern. Always call client.end() after use to return the
  * connection to the pool.
  */
+const CONNECTION_OPTIONS = "-c hyperdrive_query_cache=false";
+
 export function createClient(env: AppEnv): Client {
   // Production / --remote: Hyperdrive handles connection pooling
   if (env.HYPERDRIVE?.connectionString) {
-    return new Client({ connectionString: env.HYPERDRIVE.connectionString });
+    return new Client({
+      connectionString: env.HYPERDRIVE.connectionString,
+      options: CONNECTION_OPTIONS,
+    });
   }
   // Local dev without --remote: use DATABASE_URL from .dev.vars
   if (env.DATABASE_URL) {
-    return new Client({ connectionString: env.DATABASE_URL });
+    return new Client({
+      connectionString: env.DATABASE_URL,
+      options: CONNECTION_OPTIONS,
+    });
   }
   throw new Error("No database connection configured (set DATABASE_URL in .dev.vars or use --remote)");
 }

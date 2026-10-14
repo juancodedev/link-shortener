@@ -6,6 +6,8 @@ import tenantLinksMigration from "../../supabase/migrations/tenant/001_create_li
 import clientRefAlterMigration from "../../supabase/migrations/00004_add_client_ref_to_tenant_links.sql?raw";
 import locationsMigration from "../../supabase/migrations/00006_locations.sql?raw";
 import locationIdAlterMigration from "../../supabase/migrations/00007_add_location_id_to_tenant_links.sql?raw";
+import isGatedAlterMigration from "../../supabase/migrations/00008_add_is_gated_to_tenant_links.sql?raw";
+import reviewGateMigration from "../../supabase/migrations/00009_review_gate_schema.sql?raw";
 import { TENANT_DDL } from "../../src/tenants/provision";
 
 // ---------------------------------------------------------------------------
@@ -397,5 +399,152 @@ describe("00007_add_location_id_to_tenant_links migration", () => {
   it("records its version in each tenant's own _migrations table", () => {
     expect(locationIdAlterMigration).toMatch(/_migrations/i);
     expect(locationIdAlterMigration).toContain("00007_add_location_id_to_tenant_links");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 2 — the action screen's schema
+//
+// `is_gated` is the flag that makes a scan render the dual-path screen
+// instead of a 302. `analytics.tag_ratings` and `analytics.tag_feedback`
+// record what the customer did there.
+//
+// These live in `analytics.*`, NOT in the tenant schema, and that is the whole
+// point: the dashboard has to aggregate across every link of a tenant in one
+// query, and a per-tenant table would make that N queries. They also outlive
+// any single tenant schema, which is why `location_id` here carries a real
+// foreign key while `links.location_id` does not.
+// ---------------------------------------------------------------------------
+
+describe("00008_add_is_gated_to_tenant_links migration", () => {
+  it("adds is_gated via ALTER TABLE to already-deployed tenants", () => {
+    expect(isGatedAlterMigration).toMatch(/ALTER\s+TABLE/i);
+    expect(isGatedAlterMigration).toMatch(/ADD\s+COLUMN/i);
+    expect(isGatedAlterMigration).toMatch(/is_gated\s+BOOLEAN/i);
+  });
+
+  it("defaults to false so every existing link keeps its plain 302", () => {
+    // This default is the whole backward-compatibility story: with the default
+    // false, a migration that adds the column changes no link's behaviour.
+    expect(isGatedAlterMigration).toMatch(/DEFAULT\s+false/i);
+  });
+
+  it("is idempotent and skips tenants with no links table", () => {
+    expect(isGatedAlterMigration).toMatch(/ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS/i);
+    expect(isGatedAlterMigration).toMatch(/EXECUTE\s+format/i);
+    expect(isGatedAlterMigration).toMatch(/public\.tenants/i);
+    expect(isGatedAlterMigration).toMatch(/CONTINUE\s+WHEN/i);
+  });
+
+  it("records its version per tenant and centrally", () => {
+    expect(isGatedAlterMigration).toMatch(/_migrations/i);
+    expect(isGatedAlterMigration).toContain("00008_add_is_gated_to_tenant_links");
+    expect(isGatedAlterMigration).toMatch(/public\._migrations/i);
+  });
+});
+
+describe("is_gated in the tenant DDL", () => {
+  it("is declared in both copies", () => {
+    for (const ddl of [TENANT_DDL, tenantLinksMigration]) {
+      expect(ddl).toMatch(/is_gated\s+BOOLEAN/i);
+      expect(ddl).toMatch(/DEFAULT\s+false/i);
+    }
+  });
+
+  it("defaults to false in both copies so new tenants redirect immediately", () => {
+    for (const ddl of [TENANT_DDL, tenantLinksMigration]) {
+      const line = ddl.split("\n").find((l) => /^\s*is_gated\b/i.test(l))!;
+      expect(line).toBeTruthy();
+      expect(line).toMatch(/DEFAULT\s+false/i);
+    }
+  });
+});
+
+describe("00009_review_gate_schema migration", () => {
+  it("creates analytics.tag_ratings and analytics.tag_feedback", () => {
+    expect(reviewGateMigration).toMatch(
+      /CREATE\s+TABLE\s+(IF\s+NOT\s+EXISTS\s+)?analytics\.tag_ratings/i,
+    );
+    expect(reviewGateMigration).toMatch(
+      /CREATE\s+TABLE\s+(IF\s+NOT\s+EXISTS\s+)?analytics\.tag_feedback/i,
+    );
+  });
+
+  it("makes action_taken NOT NULL with the two legal values", () => {
+    // action_taken is the branch the customer actually chose. It is the
+    // required column; `rating` stays optional because stars are a sentiment
+    // signal collected alongside, not the thing being measured.
+    expect(reviewGateMigration).toMatch(
+      /action_taken\s+TEXT\s+NOT\s+NULL[\s\S]*?google_redirect[\s\S]*?internal_feedback/i,
+    );
+    expect(reviewGateMigration).toMatch(
+      /CHECK\s*\(\s*action_taken\s+IN\s*\(\s*'google_redirect'\s*,\s*'internal_feedback'\s*\)\s*\)/i,
+    );
+  });
+
+  it("keeps rating nullable so a customer can act without rating", () => {
+    const line = reviewGateMigration
+      .split("\n")
+      .find((l) => /^\s*rating\b/i.test(l))!;
+    expect(line).toBeTruthy();
+    expect(line).not.toMatch(/NOT\s+NULL/i);
+  });
+
+  it("constrains rating to 1..5 when present", () => {
+    expect(reviewGateMigration).toMatch(
+      /CHECK\s*\(\s*rating\s+IS\s+NULL\s+OR\s*\(\s*rating\s+BETWEEN\s+1\s+AND\s+5\s*\)\s*\)/i,
+    );
+  });
+
+  it("cascades both tables from the tenant so deprovisioning removes the data", () => {
+    const cascades = reviewGateMigration.match(
+      /REFERENCES\s+public\.tenants\s*\(\s*id\s*\)\s*ON\s+DELETE\s+CASCADE/gi,
+    );
+    expect(cascades).toHaveLength(2);
+  });
+
+  it("carries a real foreign key to public.locations, unlike links.location_id", () => {
+    // These tables outlive any tenant schema, so the FK earns its keep here.
+    // Two FKs, one per table.
+    const fks = reviewGateMigration.match(
+      /REFERENCES\s+public\.locations\s*\(\s*id\s*\)/gi,
+    );
+    expect(fks).toHaveLength(2);
+  });
+
+  it("makes location_id nullable so pre-location scans still record", () => {
+    const lines = reviewGateMigration
+      .split("\n")
+      .filter((l) => /^\s*location_id\b/i.test(l));
+    expect(lines.length).toBe(2);
+    for (const line of lines) {
+      expect(line).not.toMatch(/NOT\s+NULL/i);
+    }
+  });
+
+  it("indexes tenant+time and link+time for the dashboard rollups", () => {
+    expect(reviewGateMigration).toMatch(
+      /CREATE\s+INDEX\s+IF\s+NOT\s+EXISTS\s+idx_tag_ratings_tenant_time[\s\S]*?tag_ratings\s*\(\s*tenant_id\s*,\s*scanned_at\s+DESC\s*\)/i,
+    );
+    expect(reviewGateMigration).toMatch(
+      /CREATE\s+INDEX\s+IF\s+NOT\s+EXISTS\s+idx_tag_ratings_link_time[\s\S]*?tag_ratings\s*\(\s*link_id\s*,\s*scanned_at\s+DESC\s*\)/i,
+    );
+  });
+
+  it("indexes location so per-zone rollups stay cheap", () => {
+    expect(reviewGateMigration).toMatch(
+      /CREATE\s+INDEX\s+IF\s+NOT\s+EXISTS\s+idx_tag_ratings_location[\s\S]*?tag_ratings\s*\(\s*location_id\s*\)/i,
+    );
+  });
+
+  it("stores customer contact only as text, never as a structured column", () => {
+    expect(reviewGateMigration).toMatch(/customer_contact\s+TEXT/i);
+  });
+
+  it("is idempotent throughout and records its version", () => {
+    expect(reviewGateMigration).toMatch(/IF\s+NOT\s+EXISTS/i);
+    expect(reviewGateMigration).toMatch(/analytics\._migrations/i);
+    expect(reviewGateMigration).toContain("00009_review_gate_schema");
+    expect(reviewGateMigration).toMatch(/ON\s+CONFLICT/i);
   });
 });

@@ -765,10 +765,10 @@ describe("subscription pause", () => {
 
 describe("pause page — reactivation path", () => {
   it("links to the configured contact when there is one", async () => {
-    const { res } = await run("past_due", undefined, "hola@juancode.dev");
+    const { res } = await run("past_due", undefined, "owner@example.test");
     const body = await res.text();
 
-    expect(body).toContain('href="mailto:hola@juancode.dev"');
+    expect(body).toContain('href="mailto:owner@example.test"');
     expect(body).toContain("Reactivar este punto");
   });
 
@@ -802,7 +802,7 @@ describe("pause page — reactivation path", () => {
   // separated and addressed to the owner, because they are the one who finds
   // this page by checking their own sticker.
   it("addresses reactivation to the owner, not the diner", async () => {
-    const { res } = await run("past_due", undefined, "hola@juancode.dev");
+    const { res } = await run("past_due", undefined, "owner@example.test");
     const body = (await res.text()).toLowerCase();
 
     // The page uses HTML entities for the accented characters, so the raw body

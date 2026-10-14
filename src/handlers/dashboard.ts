@@ -336,10 +336,64 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
 
       window.__sb = sb;
       window.__token = session.access_token;
+
+      // Defined before __api can reach it: __api calls this synchronously on a
+      // 409, and loadLinks() runs at the end of this IIFE.
+      window.__showTenantPicker = function (available) {
+        var host = document.getElementById("tenant-picker");
+        if (!host) {
+          host = document.createElement("div");
+          host.id = "tenant-picker";
+          document.body.insertBefore(host, document.body.firstChild);
+        }
+        var current = null;
+        try { current = window.localStorage.getItem("tenant"); } catch (e) {}
+
+        var opts = available.map(function (t) {
+          var sel = t.slug === current ? " selected" : "";
+          return '<option value="' + String(t.slug).replace(/"/g, "&quot;") + '"' + sel + ">" +
+                 String(t.displayName || t.slug).replace(/[<>&]/g, "") + " (" + String(t.role) + ")</option>";
+        }).join("");
+
+        host.innerHTML =
+          '<div class="tenant-bar"><label for="tenant-select">Ubicaci&oacute;n</label>' +
+          '<select id="tenant-select">' + opts + "</select></div>";
+
+        host.style.cssText = "position:sticky;top:0;z-index:50;background:#1a1a1a;color:#fff;" +
+          "padding:.6rem 1rem;display:flex;gap:.75rem;align-items:center;font-size:.9rem";
+        var sel = document.getElementById("tenant-select");
+        sel.style.cssText = "padding:.3rem;border-radius:6px;border:0";
+        sel.onchange = function () {
+          try { window.localStorage.setItem("tenant", sel.value); } catch (e) {}
+          window.location.reload();
+        };
+        window.scrollTo(0, 0);
+      };
       window.__api = async function(method, path, body) {
         const headers = { "Content-Type": "application/json", "Authorization": "Bearer " + window.__token };
+
+        // Which location this call is about. Resolved from the URL first so a
+        // shared dashboard link opens the right store, then from the last
+        // choice. Absent for a single-location user, who never sees it.
+        var q = new URLSearchParams(window.location.search).get("tenant");
+        if (!q) { try { q = window.localStorage.getItem("tenant"); } catch (e) { q = null; } }
+        if (q) headers["X-Tenant-Slug"] = q;
+
         const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
         if (res.status === 401) { window.location.href = "/login"; throw new Error("Unauthorized"); }
+
+        // Several locations and none chosen. The API refuses rather than
+        // guessing — guessing was the bug Phase 4 removed — so the client has
+        // to choose. This is the only way a multi-store user ever sees 409.
+        if (res.status === 409) {
+          let payload = null;
+          try { payload = await res.json(); } catch (e) {}
+          if (payload && payload.error === "tenant_required" && Array.isArray(payload.available)) {
+            window.__showTenantPicker(payload.available);
+            throw new Error("tenant_required");
+          }
+        }
+
         if (!res.ok) {
           let msg = "Server error";
           try { const e = await res.json(); msg = e.error || msg; } catch {}

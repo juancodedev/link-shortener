@@ -129,6 +129,19 @@ export async function provisionTenant(
         [userId, tenantId, now],
       );
 
+      // --- 2b. INSERT into public.tenant_memberships ---
+      // The resolver reads memberships, not profiles.tenant_id. A tenant
+      // provisioned without this row would exist, be active, and resolve —
+      // and then be invisible to every /api/* route, because the membership
+      // that grants access was never written. This is the one coupling that
+      // would break the product at cutover rather than at review.
+      await client.query(
+        `INSERT INTO public.tenant_memberships (profile_id, tenant_id, role, created_at)
+         VALUES ($1, $2, 'owner', $3)
+         ON CONFLICT (profile_id, tenant_id) DO NOTHING`,
+        [userId, tenantId, now],
+      );
+
       // --- 3. CREATE SCHEMA ---
       await client.query(buildQuery(schemaName, `CREATE SCHEMA IF NOT EXISTS {schema}`));
 

@@ -69,13 +69,25 @@ describe("provisionTenant", () => {
     expect(executedQueries[executedQueries.length - 1]!.trim().toUpperCase()).toBe("COMMIT");
 
     // Verify the real statements ran, in order, inside the transaction.
+    // Ordered by position of first match, not by fixed index: the body gained a
+    // statement when tenant_memberships was added, and a positional assertion
+    // reports that as a failure instead of as the change it actually is.
     const body = executedQueries.slice(1, -1);
-    expect(body[0]).toContain("INSERT INTO public.tenants");
-    expect(body[1]).toContain("INSERT INTO public.profiles");
-    expect(body[2]).toContain("CREATE SCHEMA");
+    const at = (needle: string) => body.findIndex((q) => q.includes(needle));
+    const order = [
+      at("INSERT INTO public.tenants"),
+      at("INSERT INTO public.profiles"),
+      at("INSERT INTO public.tenant_memberships"),
+      at("CREATE SCHEMA"),
+    ];
+    for (const [i, idx] of order.entries()) {
+      expect(idx, `${["tenants", "profiles", "memberships", "schema"][i]} statement missing`)
+        .toBeGreaterThanOrEqual(0);
+    }
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
 
     // DDL should include links table creation
-    const ddlStatements = body.slice(3);
+    const ddlStatements = body.slice(at("CREATE SCHEMA") + 1);
     const allDdl = ddlStatements.join(" ");
     expect(allDdl).toContain("CREATE TABLE");
     expect(allDdl).toContain("links");
@@ -214,5 +226,97 @@ describe("provisionTenant", () => {
     // session, so splitting the work across two clients would silently
     // discard the transaction.
     expect(withClient).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-site RBAC: the membership that makes a new tenant reachable
+// ---------------------------------------------------------------------------
+
+describe("provisionTenant — tenant_memberships", () => {
+  const env = {
+    SUPABASE_URL: "https://test.supabase.co",
+    SUPABASE_ANON_KEY: "test-anon-key",
+    SUPABASE_JWT_SECRET: "test-secret",
+    SUPABASE_SERVICE_ROLE_KEY: "test-service-key",
+    SHORT_URL_DOMAIN: "short.link",
+  } as any;
+
+  /** Captures every statement the provisioner runs. */
+  function capture() {
+    const queries: { sql: string; params?: unknown[] }[] = [];
+    vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) =>
+      fn({
+        query: vi.fn().mockImplementation((sql: string, params?: unknown[]) => {
+          queries.push({ sql, params });
+          if (sql.includes("INSERT INTO public.tenants")) {
+            return Promise.resolve({ rows: [{ id: "tenant-1", salt: "salt-1" }] });
+          }
+          return Promise.resolve({ rows: [] });
+        }),
+      }),
+    );
+    return queries;
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  // The cutover coupling. The resolver reads memberships; provision without
+  // this write and a brand-new tenant exists, is active, and is invisible to
+  // every /api/* route.
+  it("creates the owner's membership alongside the profile", async () => {
+    const queries = capture();
+
+    await provisionTenant(env, "user-1", "mesa", "Mesa");
+
+    const membership = queries.find((q) =>
+      q.sql.includes("INSERT INTO public.tenant_memberships"),
+    );
+    expect(membership).toBeDefined();
+    expect(membership!.params).toEqual(["user-1", "tenant-1", expect.any(String)]);
+  });
+
+  // 'owner' is not decorative: it is the role that grants management rights in
+  // the new vocabulary.
+  it("grants the membership role=owner", async () => {
+    const queries = capture();
+
+    await provisionTenant(env, "user-1", "mesa", "Mesa");
+
+    const membership = queries.find((q) =>
+      q.sql.includes("INSERT INTO public.tenant_memberships"),
+    )!;
+    expect(membership.sql).toContain("'owner'");
+  });
+
+  // Re-provisioning the same pairing must not fail on the UNIQUE constraint.
+  it("is re-runnable against an existing membership", async () => {
+    const queries = capture();
+
+    await provisionTenant(env, "user-1", "mesa", "Mesa");
+
+    const membership = queries.find((q) =>
+      q.sql.includes("INSERT INTO public.tenant_memberships"),
+    )!;
+    expect(membership.sql).toContain("ON CONFLICT (profile_id, tenant_id) DO NOTHING");
+  });
+
+  // Both writes must be inside the transaction: a membership that commits
+  // outside it survives a rollback of the tenant and points at nothing.
+  it("writes the membership inside the same transaction as the tenant", async () => {
+    const queries = capture();
+
+    await provisionTenant(env, "user-1", "mesa", "Mesa");
+
+    const begin = queries.findIndex((q) => /BEGIN/.test(q.sql));
+    const commit = queries.findIndex((q) => /COMMIT/.test(q.sql));
+    const membership = queries.findIndex((q) =>
+      q.sql.includes("INSERT INTO public.tenant_memberships"),
+    );
+    expect(begin).toBeGreaterThanOrEqual(0);
+    expect(membership).toBeGreaterThan(begin);
+    expect(membership).toBeLessThan(commit);
   });
 });

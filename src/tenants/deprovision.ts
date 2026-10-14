@@ -56,11 +56,44 @@ export async function deprovisionTenant(
       [tenantId],
     );
 
-    // Clean registry: profiles (CASCADE from tenants, but explicit for clarity)
-    await client.query(
-      `DELETE FROM public.profiles WHERE tenant_id = $1`,
+    // A profile is NOT deleted here, and that is a deliberate change of behaviour.
+    //
+    // Before tenant_memberships, one profile belonged to exactly one tenant, so
+    // deleting the tenant could delete the profile — and, because profiles.id
+    // references auth.users ON DELETE CASCADE, the user's login went with it.
+    //
+    // With memberships that is no longer true. A person in a forty-store chain
+    // has one profile and forty membership rows; removing them from one store
+    // must delete that store's membership and nothing else. Deleting the
+    // profile would cascade from auth.users and lock the person out of the
+    // other thirty-nine stores they still legitimately run.
+    //
+    // tenant_memberships.tenant_id is ON DELETE CASCADE, so the membership for
+    // this tenant disappears with the tenant row on its own. The only profile
+    // that should ever be removed is one with no memberships left anywhere,
+    // which is handled below.
+    const orphaned = await client.query<{ id: string }>(
+      `DELETE FROM public.profiles p
+        WHERE p.tenant_id = $1
+          AND NOT EXISTS (
+            SELECT 1 FROM public.tenant_memberships m WHERE m.profile_id = p.id
+          )
+        RETURNING p.id`,
       [tenantId],
     );
+
+    // Deleting a profile cascades to auth.users, so the account is destroyed
+    // too. Reported so the operator knows a login was removed, not just a row.
+    if (orphaned.rows.length > 0) {
+      console.warn(
+        JSON.stringify({
+          event: "warning",
+          type: "profile_deleted_no_memberships",
+          count: orphaned.rows.length,
+          tenantId,
+        }),
+      );
+    }
 
     // Clean registry: short codes + the tenant row, in ONE statement.
     //
@@ -95,9 +128,47 @@ export async function deprovisionTenant(
   });
 
   // --- 2. Delete Supabase Auth user (fire-and-forget, non-fatal) ---
+  // ONLY when the owner has no memberships left anywhere.
+  //
+  // This was unconditional, and with one profile per tenant that was correct:
+  // the owner of the only tenant was about to lose access to it, so deleting
+  // the login matched the intent.
+  //
+  // With memberships it is not. A person running a chain owns several tenants
+  // and has one login. Removing one store used to destroy the account and with
+  // it their access to every other store they legitimately run — a data-loss
+  // bug that only appears once the second tenant exists, which is exactly when
+  // it is least likely to be noticed.
+  //
+  // The check below mirrors the profile deletion above: the account goes when
+  // the last membership goes, and not before.
   ctx.waitUntil(
     (async () => {
       try {
+        const remaining = await withClient(env, async (client) => {
+          const res = await client.query<{ n: number }>(
+            `SELECT COUNT(*)::int AS n
+               FROM public.tenant_memberships m
+               JOIN public.tenants t ON t.id = m.tenant_id
+              WHERE m.profile_id = $1 AND t.is_active = true`,
+            [ownerUserId],
+          );
+          return res.rows[0]?.n ?? 0;
+        });
+
+        if (remaining > 0) {
+          console.warn(
+            JSON.stringify({
+              event: "warning",
+              type: "auth_user_kept_other_memberships",
+              ownerUserId,
+              remaining,
+              tenantId,
+            }),
+          );
+          return;
+        }
+
         const adminUrl = `${env.SUPABASE_URL}/auth/v1/admin/users/${ownerUserId}`;
         const response = await fetch(adminUrl, {
           method: "DELETE",

@@ -41,6 +41,7 @@ import m00007 from "../../supabase/migrations/00007_add_location_id_to_tenant_li
 import m00008 from "../../supabase/migrations/00008_add_is_gated_to_tenant_links.sql?raw";
 import m00009 from "../../supabase/migrations/00009_review_gate_schema.sql?raw";
 import m00010 from "../../supabase/migrations/00010_backfill_tenant_migration_version_2.sql?raw";
+import m00011 from "../../supabase/migrations/00011_tenant_memberships.sql?raw";
 
 interface Migration {
   version: number;
@@ -60,6 +61,7 @@ const MIGRATIONS: Migration[] = [
   { version: 8, name: "00008_add_is_gated_to_tenant_links", sql: m00008 },
   { version: 9, name: "00009_review_gate_schema", sql: m00009 },
   { version: 10, name: "00010_backfill_tenant_migration_version_2", sql: m00010 },
+  { version: 11, name: "00011_tenant_memberships", sql: m00011 },
 ];
 
 /** Strips `--` comments so a prose version number is never read as a claim. */

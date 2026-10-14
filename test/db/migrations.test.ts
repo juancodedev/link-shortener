@@ -42,6 +42,7 @@ import m00008 from "../../supabase/migrations/00008_add_is_gated_to_tenant_links
 import m00009 from "../../supabase/migrations/00009_review_gate_schema.sql?raw";
 import m00010 from "../../supabase/migrations/00010_backfill_tenant_migration_version_2.sql?raw";
 import m00011 from "../../supabase/migrations/00011_tenant_memberships.sql?raw";
+import m00012 from "../../supabase/migrations/00012_owner_delete_restrict.sql?raw";
 
 interface Migration {
   version: number;
@@ -62,6 +63,7 @@ const MIGRATIONS: Migration[] = [
   { version: 9, name: "00009_review_gate_schema", sql: m00009 },
   { version: 10, name: "00010_backfill_tenant_migration_version_2", sql: m00010 },
   { version: 11, name: "00011_tenant_memberships", sql: m00011 },
+  { version: 12, name: "00012_owner_delete_restrict", sql: m00012 },
 ];
 
 /** Strips `--` comments so a prose version number is never read as a claim. */
@@ -266,5 +268,41 @@ describe("migration safety", () => {
     ).toBeLessThan(
       MIGRATIONS.findIndex((m) => m.name === "00009_review_gate_schema")!,
     );
+  });
+});
+// ---------------------------------------------------------------------------
+// 00012 — an owner deletion must not take live businesses with it
+// ---------------------------------------------------------------------------
+
+describe("00012 owner_id delete rule", () => {
+  // Read from the real file rather than a paraphrase: the whole failure mode
+  // was a rule that looked safe in the schema and destroyed forty tenants.
+  const sql = m00012;
+
+  it("replaces the cascading rule with RESTRICT", () => {
+    expect(sql).toContain("ON DELETE RESTRICT");
+    // The dangerous rule may only appear inside the guard that detects it.
+    const restricts = sql.split("ON DELETE RESTRICT").length - 1;
+    expect(restricts).toBe(1);
+  });
+
+  it("guards the change so re-running is a no-op", () => {
+    // confdeltype 'c' is CASCADE; without the guard a second run would fail on
+    // a constraint that no longer exists under that name.
+    expect(sql).toContain("confdeltype = 'c'");
+    expect(sql).toContain("IF EXISTS");
+  });
+
+  it("does not silently orphan tenants the way SET NULL would", () => {
+    // SET NULL leaves the row serving with no owner, and DELETE /api/tenants
+    // authorizes on owner_id — an un-deletable, un-explainable tenant.
+    expect(sql).not.toContain("ON DELETE SET NULL");
+  });
+
+  // The schema was never the loss: {schema}.links has no FK to public.tenants.
+  // What disappears is short_code_registry, and with it every printed sticker.
+  it("is written for the registry, not for the links table", () => {
+    expect(sql).toContain("short_code_registry");
+    expect(sql).toContain("resolveRegistryEntry");
   });
 });

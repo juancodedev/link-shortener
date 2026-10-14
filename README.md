@@ -137,29 +137,106 @@ entry — `/:code` cannot match them.
 
 ## Routes
 
-| Method | Path | Auth | Handler |
-| --- | --- | --- | --- |
-| `GET` | `/` | public | Landing page |
-| `GET` | `/signup`, `/login`, `/reset-password`, `/auth/callback` | public | Auth pages |
-| `GET` | `/dashboard` | client-side only | Dashboard HTML |
-| `GET` | `/:code` | public | Redirect + click tracking (registered last) |
-| `POST` | `/api/links` | JWT + tenant | Create link |
-| `GET` | `/api/links` | JWT + tenant | List links |
-| `PATCH` | `/api/links/:id` | JWT + tenant | Update link |
-| `DELETE` | `/api/links/:id` | JWT + tenant | Delete link |
-| `GET` | `/api/links/:id/clicks` | JWT + tenant | Per-link analytics |
-| `POST` | `/api/links/batch` | JWT + tenant | Create up to 100 links in one call |
-| `POST` | `/api/tenants` | JWT | Create tenant |
-| `DELETE` | `/api/tenants/:id` | JWT (owner) | Delete tenant |
+Every route in the system, grouped by who is allowed to call it. The grouping is the point:
+each boundary below is a different authentication mechanism, not a different level of politeness.
+
+### Public — no credentials
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/` | Landing page |
+| `GET` | `/signup` | Signup page |
+| `GET` | `/login` | Login page |
+| `GET` | `/reset-password` | Password reset page |
+| `GET` | `/auth/callback` | Supabase OAuth/magic-link callback |
+| `GET` | `/dashboard` | Dashboard HTML — authentication deferred to the browser |
+| `POST` | `/api/gate` | Action screen: Google redirect, private feedback, optional rating |
+| `GET` | `/:code` | Short-link resolution, click tracking, action screen (registered last) |
+
+`/api/gate` is public by necessity. The person scanning a sticker is a **customer of the business,
+not a user of this dashboard** — requiring a JWT here would mean the product cannot work at all. It
+is the only write path that accepts anonymous callers, and it is rate limited per short code rather
+than per IP (a per-IP limit would punish a whole CGNAT range for one scanner's behaviour). See
+[Analytics](#analytics) for what that endpoint does and does not guarantee.
+
+`/dashboard` ships fully rendered HTML to any caller and defers authentication to client-side
+Supabase session checks. It is a shell, not a data leak: every figure it renders comes from an
+authenticated API route below.
 
 `/:code` is registered last and is a genuine catch-all: Hono resolves a registered static route
-ahead of a single-segment parameter, which is what keeps the auth pages and `/dashboard`
-reachable. The old `/r/:tenant/:code` form was removed — it had no remaining dependents, and
-keeping it would have left two live link formats and the slug-based resolution path in place.
-Links in the old format no longer resolve; print new ones.
+ahead of a single-segment parameter, which is what keeps `/dashboard` and the auth pages reachable.
+The old `/r/:tenant/:code` form was removed — it had no remaining dependents, and keeping it would
+have left two live link formats and the slug-based resolution path in place. **Links in the old
+format no longer resolve; print new ones.**
 
-The `/dashboard` route ships fully rendered HTML to any caller and defers authentication to
-client-side Supabase session checks in the browser.
+### Operator — `Authorization: Bearer $OPERATIONS_TOKEN`
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/ops/tenants` | List tenants with subscription status |
+| `POST` | `/api/ops/tenants/subscription` | Record a paid or lapsed subscription |
+
+**These never accept a customer JWT.** Billing is collected off-platform and recorded by an
+operator, so a route that accepted a customer token would let a client flip their own status to
+`active` and grant themselves service they did not pay for. The two credentials are not
+interchangeable and not composable.
+
+Every mutation flushes the tenant's `reg:{code}` KV entries so the change takes effect immediately.
+
+### Customer API — JWT + tenant in context
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/tenants` | List tenants this user belongs to (the switcher's data source) |
+| `POST` | `/api/links` | Create one link |
+| `GET` | `/api/links` | List the tenant's links |
+| `PATCH` | `/api/links/:id` | Update a link |
+| `DELETE` | `/api/links/:id` | Delete a link |
+| `GET` | `/api/links/:id/clicks` | Per-link analytics: country, device, source |
+| `POST` | `/api/links/batch` | Create up to 100 links in one call |
+| `GET` | `/api/clients/metrics` | Per-`client_ref` visitor rollup |
+| `GET` | `/api/review-gate/metrics` | Action-screen views, sentiment, derivation rate |
+
+Tenant-scoped routes run `auth` → `createTenantMembershipMiddleware` → handler. **That chain is
+load-bearing, not decorative.** The middleware puts the tenant's Postgres schema in context, and
+every query in those handlers qualifies against it. Registering any of these with `auth` alone would
+not merely return the wrong numbers — it would throw, and any later edit that made it tolerate an
+absent tenant would read across tenants.
+
+Select the tenant with the `X-Tenant-Slug` header. Without it these routes return `409
+tenant_required`.
+
+### Tenant administration — JWT, no tenant in context
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/tenants` | Create a tenant (registers an owner membership) |
+| `DELETE` | `/api/tenants/:id` | Delete a tenant |
+
+These deliberately skip the tenant middleware: a tenant cannot scope itself into context before it
+exists, and `DELETE` has to be reachable for a tenant you are trying to leave. Ownership for
+`DELETE` is verified inside the handler, not by the middleware.
+
+Deleting a tenant is refused while it still owns links, and while other members hold memberships on
+it. `tenants.owner_id` is `ON DELETE RESTRICT`, so deleting the owning Supabase Auth user is
+refused rather than silently cascading away a business's data.
+
+### Not in the system
+
+Stated explicitly so the absence reads as a decision rather than an oversight:
+
+- **No self-service billing endpoint.** A customer can read their own status through
+  `GET /api/tenants`, but only an operator can change it. See the operator boundary above.
+- **No billing webhook.** Payment is off-platform and recorded by an operator. Adding a webhook
+  means trusting a third party with the authority to grant service.
+- **No endpoint to fetch a single link.** `GET /api/links` plus a client-side filter covers every
+  current caller, and a per-link route is a second authorisation surface to keep correct.
+- **No pagination.** `GET /api/links` returns the tenant's full set. Fine at the scale this is
+  built for; **not** fine at thousands of links per tenant, where it becomes both a latency and a
+  memory problem. Add pagination before that, not after.
+- **No health-check endpoint.** `GET /` serves as the liveness probe.
+- **No rate limiting except `/api/gate`.** Every other route sits behind JWT auth, which is a much
+  stronger gate, but it is not a rate limit.
 
 ## Analytics
 

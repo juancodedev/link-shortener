@@ -5,7 +5,7 @@ import { customAlphabet } from "nanoid";
  * - 0 (zero) and O (capital o)
  * - I (capital i) and 1 (one) and l (lowercase L)
  *
- * 54 characters total. At length 7: ~54^7 ≈ 1.5 trillion combinations
+ * 57 characters total. At length 7: 57^7 ≈ 1.9 trillion combinations
  * — sufficient for global uniqueness.
  */
 const ALPHABET =

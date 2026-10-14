@@ -397,10 +397,10 @@ see, so it must not compete with the product for the first days of delivery.
 - [x] **T4.4 (backend)** `GET /api/tenants` (`listTenants`) + `createTenantMembershipMiddleware`
       selecting via `X-Tenant-Slug` or `?tenant=`. One membership resolves with no header, so
       single-store users need no client change.
-- [ ] **T4.4 (UI) — NOT DONE, and it breaks a real user.** The dashboard does not handle
-      **409 `tenant_required`**. Anyone in two locations gets an error instead of their panel.
-      The switcher must call `GET /api/tenants`, render the choice, and send the header on
-      every subsequent API call. **This is the only known broken path in the product.**
+- [x] **T4.4 (UI)** Shipped in #54. The dashboard reads the chosen location from `?tenant=` or
+      `localStorage`, sends `X-Tenant-Slug` on every call, and renders a picker on **409
+      `tenant_required`** showing each location's role. The choice survives a refresh — without
+      that, the user picks a store, reloads, and lands back on the error.
 - [x] **T4.5** Enforce per-store isolation: a membership in tenant A grants nothing in tenant B.
 
 ### Phase 5 — Subscriptions
@@ -736,10 +736,8 @@ Everything below was verified against the code, not carried over from memory.
 
 ### The one thing that is broken
 
-**T4.4 (UI) — the dashboard does not handle 409 `tenant_required`.** A user who belongs to
-two locations gets an API error instead of their panel. The backend correctly returns 409 and
-correctly refuses to guess which location was meant; the client was never taught to choose.
-Everything else in Phases 0–5 works.
+**Nothing is known broken.** The last one — the dashboard ignoring 409 `tenant_required`, which
+left multi-location users staring at an API error — was closed in #54.
 
 ### Deferred on purpose, with the reason
 

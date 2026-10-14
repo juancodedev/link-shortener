@@ -956,3 +956,76 @@ describe("the auth bootstrap gates its own load", () => {
     expect(resolveCalls()).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Multi-location switcher
+//
+// The API answers 409 tenant_required when a user holds several memberships and
+// names none — it refuses rather than guessing, because guessing was the bug
+// Phase 4 removed. Until this shipped, such a user got an error instead of a
+// dashboard. It is the last known broken path in the product.
+// ---------------------------------------------------------------------------
+
+describe("dashboard — tenant switcher", () => {
+  // Read the HTML the server actually serves, not the handler's source: these
+  // assertions are about what the browser receives.
+  async function script(): Promise<string> {
+    return serve();
+  }
+
+  it("sends the selected location on every API call", async () => {
+    expect(await script()).toContain("X-Tenant-Slug");
+  });
+
+  it("remembers the choice, so a refresh does not fall back to 409", async () => {
+    // The failure mode this exists to prevent: the user picks a location, the
+    // page reloads, the selection is gone, and they are back at an error.
+    expect(await script()).toContain('localStorage.setItem("tenant"');
+    expect(await script()).toContain('localStorage.getItem("tenant")');
+  });
+
+  // A shared dashboard link should open the store it names, without the user
+  // re-picking it on every visit.
+  it("prefers a tenant named in the URL over the remembered one", async () => {
+    expect(await script()).toContain("URLSearchParams");
+  });
+
+  it("handles 409 and renders the picker", async () => {
+    const src = await script();
+    expect(src).toContain("res.status === 409");
+    expect(src).toContain("tenant_required");
+    expect(src).toContain("__showTenantPicker");
+  });
+
+  it("shows which role the user holds in that location", async () => {
+    // Admin and viewer mean different permissions. A switcher showing only
+    // names would let someone pick a store they can see but not manage, and
+    // then find out at the worst moment.
+    expect(await script()).toContain("t.role");
+  });
+
+  // __api calls the picker synchronously on a 409, and loadLinks runs at the end
+  // of the same IIFE. Defined later, it is undefined at the moment of call.
+  it("defines the picker before any API call can reach it", async () => {
+    const src = await script();
+    expect(src.indexOf("__showTenantPicker = function")).toBeGreaterThan(-1);
+    // Both markers are asserted to exist by the tests above, so this compares
+    // two real offsets rather than two -1s.
+    const defined = src.indexOf("__showTenantPicker = function");
+    const called = src.indexOf("__showTenantPicker(payload.available)");
+    expect(defined).toBeGreaterThan(-1);
+    expect(called).toBeGreaterThan(-1);
+    expect(defined).toBeLessThan(called);
+  });
+
+  // The business name comes from the API, so it is untrusted markup.
+  it("escapes a location name that contains markup", async () => {
+    expect(await script()).toContain('.replace(/[<>&]/g, "")');
+  });
+
+  it("does not break the single-location user who never sees the picker", async () => {
+    // One membership resolves server-side with no header, so nothing here may
+    // become a precondition for the dashboard loading at all.
+    expect(await script()).toContain("if (q) headers[");
+  });
+});

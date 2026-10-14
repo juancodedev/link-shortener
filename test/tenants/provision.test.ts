@@ -32,7 +32,7 @@ describe("provisionTenant", () => {
     vi.resetAllMocks();
   });
 
-  it("creates tenant, profile, schema, and executes DDL in a transaction", async () => {
+  it("creates tenant, profile, schema, and executes DDL inside a real transaction", async () => {
     const executedQueries: string[] = [];
 
     vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) => {
@@ -61,17 +61,79 @@ describe("provisionTenant", () => {
     expect(result.tenantId).toBe("new-tenant-uuid");
     expect(result.schemaName).toMatch(/^tenant_[a-f0-9]{8}$/);
 
-    // Verify transaction steps
-    expect(executedQueries[0]).toContain("INSERT INTO public.tenants");
-    expect(executedQueries[1]).toContain("INSERT INTO public.profiles");
-    expect(executedQueries[2]).toContain("CREATE SCHEMA");
+    // The transaction must be opened before any write and closed after the
+    // last one. `withClient` alone does not give this — it only connects,
+    // runs, and ends. Without explicit BEGIN/COMMIT a DDL failure mid-way
+    // leaves a tenant row whose schema has no `links` table.
+    expect(executedQueries[0]!.trim().toUpperCase()).toBe("BEGIN");
+    expect(executedQueries[executedQueries.length - 1]!.trim().toUpperCase()).toBe("COMMIT");
+
+    // Verify the real statements ran, in order, inside the transaction.
+    const body = executedQueries.slice(1, -1);
+    expect(body[0]).toContain("INSERT INTO public.tenants");
+    expect(body[1]).toContain("INSERT INTO public.profiles");
+    expect(body[2]).toContain("CREATE SCHEMA");
 
     // DDL should include links table creation
-    const ddlStatements = executedQueries.slice(3);
+    const ddlStatements = body.slice(3);
     const allDdl = ddlStatements.join(" ");
     expect(allDdl).toContain("CREATE TABLE");
     expect(allDdl).toContain("links");
     expect(allDdl).toContain("_migrations");
+  });
+
+  it("rolls back and rethrows when a DDL statement fails", async () => {
+    const executedQueries: string[] = [];
+
+    vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) => {
+      return fn({
+        query: vi.fn().mockImplementation((sql: string) => {
+          executedQueries.push(sql);
+
+          // Fail partway through the DDL, after the tenant row is written.
+          if (sql.includes("CREATE TABLE") && sql.includes("links")) {
+            return Promise.reject(new Error("ddl blew up"));
+          }
+          if (sql.includes("INSERT INTO public.tenants")) {
+            return Promise.resolve({ rows: [{ id: "doomed-tenant-uuid", salt: "s" }] });
+          }
+          return Promise.resolve({ rows: [] });
+        }),
+      });
+    });
+
+    await expect(
+      provisionTenant(env, "user-123", "doomed-co", "Doomed Co"),
+    ).rejects.toThrow("ddl blew up");
+
+    // The whole point: the tenant row written before the failure must be undone.
+    expect(executedQueries[executedQueries.length - 1]!.trim().toUpperCase()).toBe("ROLLBACK");
+    expect(executedQueries.join(" ")).not.toContain("COMMIT");
+  });
+
+  it("still attempts a ROLLBACK when the rollback itself fails", async () => {
+    vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) => {
+      return fn({
+        query: vi.fn().mockImplementation((sql: string) => {
+          if (sql.trim().toUpperCase() === "ROLLBACK") {
+            return Promise.reject(new Error("connection already gone"));
+          }
+          if (sql.includes("CREATE TABLE") && sql.includes("links")) {
+            return Promise.reject(new Error("ddl blew up"));
+          }
+          if (sql.includes("INSERT INTO public.tenants")) {
+            return Promise.resolve({ rows: [{ id: "doomed-tenant-uuid", salt: "s" }] });
+          }
+          return Promise.resolve({ rows: [] });
+        }),
+      });
+    });
+
+    // A dead connection means there is nothing left to roll back; the original
+    // failure is what the caller needs to see, not the rollback's own error.
+    await expect(
+      provisionTenant(env, "user-123", "doomed-co", "Doomed Co"),
+    ).rejects.toThrow("ddl blew up");
   });
 
   it("generates a schema name with tenant_ prefix and 8 hex chars", async () => {
@@ -122,8 +184,14 @@ describe("provisionTenant", () => {
 
     await provisionTenant(env, "user-1", "ddl-co", "DDL Co");
 
-    // Find DDL statements (after INSERT tenants, INSERT profiles, CREATE SCHEMA)
-    const ddlCalls = queryCalls.slice(3);
+    // Find DDL statements (after BEGIN, INSERT tenants, INSERT profiles, CREATE SCHEMA)
+    const ddlCalls = queryCalls.filter(
+      (sql) =>
+        sql.includes("CREATE TABLE") ||
+        sql.includes("CREATE INDEX") ||
+        sql.includes("CREATE UNIQUE INDEX") ||
+        sql.includes("INSERT INTO"),
+    );
 
     // Should have at least: CREATE TABLE links, 3 indexes, CREATE TABLE _migrations, INSERT _migrations
     expect(ddlCalls.length).toBeGreaterThanOrEqual(6);
@@ -133,11 +201,8 @@ describe("provisionTenant", () => {
     expect(ddlCalls.some((c) => c.includes("_migrations"))).toBe(true);
   });
 
-  it("wraps all operations in a single transaction via withClient", async () => {
-    let withClientCalled = false;
-
+  it("uses one database connection for the whole provisioning run", async () => {
     vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) => {
-      withClientCalled = true;
       return fn({
         query: vi.fn().mockResolvedValue({ rows: [{ id: "uuid-1" }] }),
       });
@@ -145,8 +210,9 @@ describe("provisionTenant", () => {
 
     await provisionTenant(env, "user-x", "txn-co", "TXN Co");
 
-    expect(withClientCalled).toBe(true);
-    // withClient should be called exactly once (all ops in one transaction)
+    // One connection: the BEGIN ... COMMIT bracket has to hold a single
+    // session, so splitting the work across two clients would silently
+    // discard the transaction.
     expect(withClient).toHaveBeenCalledTimes(1);
   });
 });

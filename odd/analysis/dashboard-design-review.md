@@ -4,6 +4,9 @@
 **Date:** 2026-10-09
 **Scope:** `src/handlers/dashboard.ts`, the single server-rendered HTML string
 **Status:** documented for a future pass. Nothing here is implemented.
+**Correction (2026-10-14):** the measurement and the root-cause claim in
+[the bug section below](#bug-found-not-cosmetic) are both wrong. See
+`odd/tasks/one-action-per-row.md`, which re-measured it and fixed it. Read that first.
 
 ---
 
@@ -19,6 +22,19 @@ Two findings are measurements, not opinions. They are marked as such below.
 ---
 
 ## Bug found (not cosmetic)
+
+> **Superseded 2026-10-14 — do not act on this section.** It is kept because the
+> original defect was real and the fix is worth reading next to it, but both the
+> measurement and the cause below were wrong when re-checked in a real browser.
+> Corrected: `odd/tasks/one-action-per-row.md`.
+>
+> What was wrong: `.row-actions` *does* declare `flex-wrap: wrap`, so the
+> "cell that has no wrapping" claim is false — the wrapping is what stacked all
+> four buttons vertically. And the first button was not reachable either: measured
+> at 1582px in the real layout, **zero** of the four buttons was fully visible,
+> not one. The real cause is that the actions column is *last*, so auto table
+> layout pushes it off the right edge, and a 130px editable input was consuming
+> 25% of the available width to make the table too wide in the first place.
 
 **The action buttons are clipped. This is a functional defect, not a style preference.**
 

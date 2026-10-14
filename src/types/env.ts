@@ -92,6 +92,22 @@ export interface AppVars {
    * "allow", because the alternative is a screen that stops working.
    */
   GATE_LIMITER?: RateLimit;
+
+  /**
+   * Where a paused business is told to go to reactivate — an email address or
+   * an http(s) URL.
+   *
+   * Billing is collected off-platform, so there is no in-product checkout to
+   * send them to. This is the operator's contact and it is how the pause page
+   * gets its way out **without letting the customer reactivate themselves**:
+   * the `/api/ops` routes exist precisely so a customer cannot grant their own
+   * tenant `active`, and a checkout button here would be exactly that with
+   * extra steps around it.
+   *
+   * Optional because a deployment with no support address should still render a
+   * usable page — it omits the link rather than printing an empty `mailto:`.
+   */
+  BILLING_CONTACT?: string;
 }
 
 /**

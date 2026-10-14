@@ -50,6 +50,6 @@
     "SHORT_URL_DOMAIN": "shorter.juancode.dev",
     "ENVIRONMENT": "development",
     "MAX_ACTIVE_LINKS": "500",
-    "BILLING_CONTACT": "mailto:hola@juancode.dev"
+    "BILLING_CONTACT": "mailto:jmunoz@juancode.dev"
   }
 }

@@ -758,8 +758,13 @@ instead of silently reddening main. Worth retrying with a real fix, not by rever
 
 ### Configuration that is a placeholder
 
-`BILLING_CONTACT` is set to `mailto:hola@juancode.dev`. If that is not a real support address,
-the pause page sends customers somewhere wrong — verify before any paying customer sees it.
+`BILLING_CONTACT` is set to `mailto:jmunoz@juancode.dev` in `wrangler.jsonc`, confirmed working.
+It was briefly a placeholder that no inbox read; a pause page pointing at an address nobody
+monitors is worse than no link, since the owner believes the reactivation route exists.
+
+Test fixtures deliberately do **not** use the real address — they use `owner@example.test`,
+which RFC 2606 reserves. A live inbox in a fixture reads as a contact that might receive mail
+and makes the repo noisy to grep for real addresses.
 
 ### Housekeeping
 

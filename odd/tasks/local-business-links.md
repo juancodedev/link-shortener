@@ -400,7 +400,29 @@ see, so it must not compete with the product for the first days of delivery.
 
 ### Phase 5 — Subscriptions
 
-- [ ] **T5.1** Choose the billing provider for the target market. Not yet decided.
+- [x] **T5.1** Billing model decided: **per tag / per local, off-platform.**
+  **There is no payment provider and no gateway webhook.** The chain orders N
+  tags, we identify each tag to its local in the system, and they arrange
+  payment internally.
+
+  Consequences, recorded so they are not rediscovered later:
+
+  - **No `public.billing_accounts`.** A chain is N tenants owned by one profile
+    via `tenant_memberships`; `subscription_status` lives on `public.tenants`,
+    one per local, exactly as originally planned. "One subscription" means one
+    per tag sold, not one per chain.
+  - **T5.5 becomes a manual admin action**, not a webhook: marking a tenant paid
+    or past-due flushes its `reg:{code}` KV entries. Postgres remains the source
+    of truth; KV is a 24 h cache.
+  - **The risk inverts.** It is no longer "mis-bill a chain" but "one local stops
+    paying and its printed stickers must actually stop". That is precisely where
+    the TTL bug bites: a status written only to KV expires in 24 h, the JOIN
+    returns clean, and a **paused tenant silently resumes serving stickers** —
+    lost revenue and a broken promise at once.
+  - **`POST /api/links/batch` is single-tenant** (it runs behind
+    `tenantMembershipMiddleware`). A chain ordering tags across 40 sites issues
+    40 calls with a different `X-Tenant-Slug` each. A cross-tenant batch does
+    not exist and is not needed yet.
 - [ ] **T5.2** `subscription_status` on `public.tenants`, with webhook handling. **This column is
       the source of truth** — see the kill-switch design below.
 - [ ] **T5.3** Enforce on the redirect path. `is_active` and `subscription_status` mean different

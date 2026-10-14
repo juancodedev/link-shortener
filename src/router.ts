@@ -15,6 +15,7 @@ import { gateHandler } from "./handlers/gate";
 import { createLink, listLinks, updateLink, deleteLink, linkClicks } from "./api/links";
 import { createLinksBatch } from "./api/batch";
 import { listClientRefMetrics } from "./api/clients";
+import { reviewGateMetrics } from "./api/review-gate";
 import { createTenant, deleteTenant } from "./api/tenants";
 
 // ---------------------------------------------------------------------------
@@ -94,6 +95,11 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
   // there changed that response from a bare array into an envelope. See
   // src/api/clients.ts for the full reasoning.
   app.get("/api/clients/metrics", auth, userProfileTenantMiddleware, listClientRefMetrics);
+
+  // The action screen's three views in one response. They describe the same
+  // scans and the dashboard renders them on one screen, so fetching them
+  // separately would let the numbers disagree in front of the owner.
+  app.get("/api/review-gate/metrics", auth, userProfileTenantMiddleware, reviewGateMetrics);
 
   // Tenant provisioning: auth required, no tenant middleware (tenant doesn't exist yet)
   app.post("/api/tenants", auth, createTenant);

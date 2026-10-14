@@ -839,9 +839,10 @@ describe("loadLinks ordering against the auth bootstrap", () => {
   });
 
   it("issues the shipped endpoint set once the gate opens", async () => {
-    // The Phase 2 contract itself: links collection and the client_ref rollup,
-    // fetched together. Pinned here rather than inside the ordering tests so
-    // those stay independent of how many endpoints loadLinks asks for.
+    // The contract itself: the links collection, the client_ref rollup, and
+    // the review-gate panel, fetched together. Pinned here rather than inside
+    // the ordering tests so those stay independent of how many endpoints
+    // loadLinks asks for.
     const dash = await mountDashboard();
     dash.win.__api = recordingApi(dash.requests);
 
@@ -852,6 +853,7 @@ describe("loadLinks ordering against the auth bootstrap", () => {
     expect(dash.requests.map((r) => `${r.method} ${r.path}`)).toEqual([
       "GET /api/links",
       "GET /api/clients/metrics",
+      "GET /api/review-gate/metrics",
     ]);
   });
 

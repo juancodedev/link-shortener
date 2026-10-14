@@ -602,7 +602,29 @@ Nothing on the Phases 0–3 critical path is blocked. Work can start today.
   - T2.6 Both writes run inside `waitUntil`, so the customer never waits on a database write to
     reach Google.
   - T2.7 The private branch is the inline form on the screen itself.
-- [ ] Phase 3 — metrics
+- [x] **Phase 3 — metrics: work unit A complete** (queries + endpoint). `547 tests / 25 files`.
+  - `src/analytics/review-gate.ts` — action split + derivation rate, per-location rollup,
+    hourly peaks.
+  - `GET /api/review-gate/metrics` serves all three in ONE response. They describe the same
+    scans and the dashboard renders them on one screen; three fetches would let the numbers
+    disagree in front of the owner.
+  - `MIN_RATED_SAMPLE = 5`. Below it no average is published at all, and the sentiment gap is
+    null unless BOTH branches clear the floor. The constant ships in the response so the
+    "sample too small" label on the dashboard cannot drift from the rule that produces it.
+- [x] **Phase 3 — complete.** `568 tests / 26 files`, typecheck clean.
+  - `src/handlers/gate-panel.ts` — the panel as a pure payload-in/HTML-out function, kept out
+    of the 800-line `dashboard.ts` so it can be tested and read.
+  - **Every helper is nested inside the function**, because it is shipped to the browser via
+    `Function.prototype.toString()`. A module-scope reference throws `ReferenceError` in the
+    browser while every module test passes — the module scope exists under Vitest and not in a
+    `<script>`. `test/handlers/gate-panel.test.ts` rebuilds the function from its own source with
+    nothing else in scope, so that failure mode cannot come back.
+  - The panel degrades to hidden rather than failing the dashboard: the owner who has not
+    activated a gated link has no rows, and failing the whole screen over an empty panel would
+    be wrong. The other two fetches stay all-or-nothing.
+  - The peak chart is CSS bars, not a charting library — this screen is screenshotted and
+    forwarded as the monthly report, and a canvas renders as a blank box in a headless
+    screenshot.
 - [ ] Phase 4 — multi-site RBAC
 - [ ] Phase 5 — subscriptions
 

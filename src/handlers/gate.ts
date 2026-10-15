@@ -195,6 +195,12 @@ export const gateHandler: Handler<{
 
   const linkId = entry.linkId ?? "";
 
+  // Resolved BEFORE the rating row is written, because that row is what the
+  // per-location rollup groups on. A link attached to a location records it; a
+  // link with none records null and surfaces as "not assigned" rather than
+  // vanishing.
+  const locationId = await locationFor(c.env, entry, input.code);
+
   // The rating row is written for both branches: it is what the derivation rate
   // and the sentiment gap are computed from. `action_taken` is the measured
   // fact; `rating` is the optional signal beside it.
@@ -203,18 +209,19 @@ export const gateHandler: Handler<{
       await client.query(
         `INSERT INTO analytics.tag_ratings
            (tenant_id, link_id, location_id, rating, action_taken)
-         VALUES ($1, $2, NULL, $3, $4)`,
-        [entry.tenantId, linkId, input.rating, input.action],
+         VALUES ($1, $2, $3, $4, $5)`,
+        [entry.tenantId, linkId, locationId, input.rating, input.action],
       );
 
       if (input.action === "internal_feedback") {
         await client.query(
           `INSERT INTO analytics.tag_feedback
              (tenant_id, link_id, location_id, rating, comment, customer_contact)
-           VALUES ($1, $2, NULL, $3, $4, $5)`,
+           VALUES ($1, $2, $3, $4, $5, $6)`,
           [
             entry.tenantId,
             linkId,
+            locationId,
             input.rating,
             input.comment.trim(),
             input.contact.trim() || null,
@@ -261,6 +268,47 @@ export const gateHandler: Handler<{
  * the action screen embedded it in the page, and this read exists so a caller
  * that never rendered the screen still gets a working URL.
  */
+/**
+ * Reads the link's location so the scan can be attributed to a table or zone.
+ *
+ * Separate from `destinationFor` on purpose, even though both read the same
+ * row. The Google branch never needs this, and a query it does not use is a
+ * round trip it does not pay: a customer who taps "leave a review" is on the
+ * happy path and should not wait on Postgres to learn something the answer
+ * does not contain.
+ *
+ * Failure is swallowed and reported as null. A scan that cannot be attributed
+ * is still a scan — recording it unattributed beats dropping it, which is
+ * exactly how the rollup's totals drifted from the tenant-wide total before.
+ */
+async function locationFor(
+  env: AppEnv,
+  entry: { schemaName: string; subdomain: string },
+  code: string,
+): Promise<string | null> {
+  try {
+    return await withClient(env, async (client) => {
+      const table = qualifyTable(entry.schemaName, "links");
+      const res = await client.query<{ location_id: string | null }>(
+        `SELECT location_id FROM ${table} WHERE short_code = $1 LIMIT 1`,
+        [code],
+      );
+      return res.rows[0]?.location_id ?? null;
+    });
+  } catch (err) {
+    console.error(
+      JSON.stringify({
+        event: "error",
+        type: "gate_location_failed",
+        message: err instanceof Error ? err.message : String(err),
+        tenant: entry.subdomain,
+        code,
+      }),
+    );
+    return null;
+  }
+}
+
 async function destinationFor(
   env: AppEnv,
   entry: { schemaName: string; linkId: string | null },
@@ -272,8 +320,15 @@ async function destinationFor(
       // that gets spliced into SQL anywhere in this codebase, and the repo's
       // own convention is to route it through the validating helper every time.
       const table = qualifyTable(entry.schemaName, "links");
-      const res = await client.query<{ original_url: string }>(
-        `SELECT original_url FROM ${table} WHERE short_code = $1 LIMIT 1`,
+      // location_id rides along for the same reason: this is the link row for
+      // the scanned code, and the location is what the scan gets attributed to.
+      // It is already attached to the link — reading it here is what makes the
+      // per-location rollup mean anything.
+      const res = await client.query<{
+        original_url: string | null;
+        location_id: string | null;
+      }>(
+        `SELECT original_url, location_id FROM ${table} WHERE short_code = $1 LIMIT 1`,
         [code],
       );
       return res.rows[0]?.original_url ?? null;

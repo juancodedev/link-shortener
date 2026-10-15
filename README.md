@@ -206,6 +206,132 @@ absent tenant would read across tenants.
 Select the tenant with the `X-Tenant-Slug` header. Without it these routes return `409
 tenant_required`.
 
+### Walkthrough: manufacture a pack of review cards
+
+The product is a printed object. A card is **manufactured before its destination exists**: the owner
+creates the batch, the designer prints each short code as a QR, and the real review URL is loaded
+later. Everything below is what that flow needs.
+
+#### 1. Get a token and name your tenant
+
+```bash
+# Log in through the dashboard at /login and grab the access token, or:
+TOKEN=$(curl -s -X POST "$SUPABASE_URL/auth/v1/token?grant_type=password" \
+  -H "apikey: $SUPABASE_ANON_KEY" -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com","password":"..."}' | jq -r .access_token)
+
+curl -s "$BASE/api/tenants" -H "Authorization: Bearer $TOKEN"
+```
+
+Every write below needs `X-Tenant-Slug`. Without it these routes return `409 tenant_required`.
+
+```bash
+export SLUG="acme"          # the subdomain from /api/tenants
+```
+
+#### 2. Create the pack
+
+Ten links, no destination, gate on. `is_gated: true` is what makes a scan record which path the
+customer took — **without it the customer is forwarded straight to the destination and the
+satisfaction panel stays at zero forever.**
+
+```bash
+curl -s -X POST "$BASE/api/links/batch" \
+  -H "Authorization: Bearer $TOKEN" -H "X-Tenant-Slug: $SLUG" \
+  -H "Content-Type: application/json" \
+  -d '{"links":[
+        {"is_gated":true,"client_ref":"mesa-1"},
+        {"is_gated":true,"client_ref":"mesa-1"},
+        {"is_gated":true,"client_ref":"mesa-1"},
+        {"is_gated":true,"client_ref":"mesa-1"},
+        {"is_gated":true,"client_ref":"mesa-1"}
+      ]}'
+```
+
+The response reports one result per input, positionally aligned:
+
+```json
+{
+  "created": 5,
+  "failed": 0,
+  "results": [
+    { "index": 0, "status": 201,
+      "link": { "id": "…", "short_code": "X4tonhH", "short_url": "https://…/X4tonhH",
+                "original_url": null, "client_ref": "mesa-1",
+                "is_gated": true, "location_id": null, "created_at": "…" } }
+  ]
+}
+```
+
+`201` when every item succeeded, `207` when partial. A pack of stickers is worthless if one bad row
+loses the other nine, so **always check `failed`** rather than the status code alone.
+
+The `short_code` in each result is what goes on the sticker. It is **immutable** — renaming it would
+break every card already in the world — and the QR must encode the `short_url` as a single
+percent-encoding, or it decodes to `https%3A%2F%2F…` and scanning leads nowhere.
+
+#### 3. Attach a location (optional but this is the table you sell)
+
+`public.locations` backs the per-location rollup — "which tables actually convert". Create one per
+table or zone:
+
+```sql
+INSERT INTO public.locations (tenant_id, name, slug)
+VALUES ('<tenant-id>', 'Mesa 1', 'mesa-1')
+RETURNING id;
+```
+
+Then attach the links to it, either at creation (`location_id` on each batch item) or afterwards:
+
+```bash
+curl -s -X PATCH "$BASE/api/links/<link-id>" \
+  -H "Authorization: Bearer $TOKEN" -H "X-Tenant-Slug: $SLUG" \
+  -H "Content-Type: application/json" \
+  -d '{"location_id":"<location-id>"}'
+```
+
+A location belonging to another tenant is rejected with `400`. A valid uuid is not automatically
+yours — attaching someone else's would attribute your scans to their numbers.
+
+#### 4. Load the destinations, whenever they are settled
+
+```bash
+curl -s -X PATCH "$BASE/api/links/<link-id>" \
+  -H "Authorization: Bearer $TOKEN" -H "X-Tenant-Slug: $SLUG" \
+  -H "Content-Type: application/json" \
+  -d '{"original_url":"https://g.page/<review-id>"}'
+```
+
+This invalidates the redirect cache. **Skipping it leaves the sticker serving the previous
+destination for up to 24 hours** — the owner pastes the card, the customer scans, and gets the old
+target with no error anywhere.
+
+Send `null` or `""` to clear it back to unconfigured. A wrong destination is worse than an absent
+one: absent reaches a page that says so, wrong forwards customers somewhere unintended with no signal
+at all.
+
+`short_code` cannot be changed — `PATCH` rejects `slug` with `slug_immutable`, including when the
+rename rides alongside a valid destination load.
+
+#### 5. Before a card is configured
+
+Scanning a card with no destination serves a **200** page saying the card is real and simply has
+nothing behind it yet. Not a 404: a 404 reads as "this product is broken", and the correct response
+to that is to abandon the batch. The page shows the `client_ref` and the short code, because that is
+how whoever scans it identifies which card is unconfigured.
+
+#### Field reference for these two endpoints
+
+| Field | Create | Update | Notes |
+| --- | --- | --- | --- |
+| `original_url` | optional | yes, and nullable | A value that is supplied is validated. `null`/`""` clears. |
+| `slug` | optional | **rejected** | Immutable once printed. 3–32 chars, `[A-Za-z0-9_-]`. |
+| `client_ref` | optional | yes | Max 200 chars, **not** truncated. No uniqueness: N cards may share one. |
+| `is_gated` | optional | yes | Must be a boolean. Required for the satisfaction panel to record anything. |
+| `location_id` | optional | yes, and nullable | Must belong to the tenant. Backs the per-location rollup. |
+| `title` | optional | yes | Max 200 chars. |
+| `expires_at` | optional | — | |
+
 ### Tenant administration — JWT, no tenant in context
 
 | Method | Path | Purpose |
@@ -300,8 +426,10 @@ public.profiles          id → auth.users, tenant_id, role (owner | admin | mem
 public.short_code_registry short_code (PK) → tenants.id (CASCADE), link_id, created_at
 analytics.link_clicks    id, tenant_id, link_id, ip_hash, user_agent_summary,
                          device_type, country_code, referrer, referrer_source, created_at
-{tenant}.links           id, original_url, short_code, title, clicks_count,
-                         is_active, expires_at, created_at, updated_at
+public.locations         id, tenant_id (CASCADE), name, slug, is_active, created_at
+{tenant}.links           id, original_url (NULLABLE), short_code, title, client_ref,
+                         location_id, is_gated, clicks_count, is_active, expires_at,
+                         created_at, updated_at
 ```
 
 `public.short_code_registry` has RLS enabled with **no** policy for `anon`/`authenticated`, so a
@@ -312,9 +440,18 @@ The `{tenant}.links` DDL lives in two places that must stay in sync:
 `supabase/migrations/tenant/001_create_links.sql` and the inline template in
 `src/tenants/provision.ts`.
 
-Active links are capped at **30 per tenant** (`MAX_ACTIVE_LINKS` in `src/api/links.ts`).
+Active links are capped per tenant by `MAX_ACTIVE_LINKS` (default `1000` in `src/api/links.ts`,
+overridden to `500` in `wrangler.jsonc`). The error message always reports the cap **actually in
+force**, so an operator who raised the limit still reads the real number rather than a stale constant.
 
-Short codes are random (`nanoid`), not caller-supplied, and never equal a reserved app route.
+**Card stock counts against that cap.** `is_active` defaults to `true`, so a link created without a
+destination is active from the moment it exists — which is what makes manufacturing cards before their
+destinations possible at all. Manufacturing several hundred cards therefore consumes the whole budget
+before any of them is configured. Whether the cap *should* count unconfigured links is open; see
+`odd/tasks/card-stock-destination-optional-links.md`.
+
+Short codes are random (`nanoid`), not caller-supplied, and never equal a reserved app route. A
+caller-supplied `slug` is also accepted for pre-printed tags — see the walkthrough below.
 
 ## Caching
 

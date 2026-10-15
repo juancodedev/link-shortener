@@ -737,6 +737,31 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
     </div>
 
     <script>
+      /**
+       * The esbuild runtime shim.
+       *
+       * \`renderGatePanel.toString()\` below serialises the ALREADY-BUNDLED
+       * function, because the Worker this handler ships in was compiled by
+       * esbuild with \`keepNames: true\` — which rewrites every named function
+       * inside the body to a \`__name(fn, "fn")\` statement. Those statements
+       * ride along in the stringified source and then execute HERE.
+       *
+       * \`__name\` is defined at the top of the Worker bundle, in module scope,
+       * so it does not exist in this page. Without this line the very first
+       * call throws \`ReferenceError: __name is not defined\` and the gate panel
+       * never renders.
+       *
+       * This is the same helper, byte for byte, that esbuild's own browser
+       * runtime declares. It is not a no-op shim: function declarations already
+       * carry their own \`.name\`, but an arrow assigned to a variable does not,
+       * so this preserves the names esbuild is preserving for a reason.
+       *
+       * \`var\`, not \`const\`, to match esbuild: the call sites are inside the
+       * panel body and must resolve through the global object.
+       */
+      var __name = (target, value) =>
+        Object.defineProperty(target, "name", { value, configurable: true });
+
       const renderGatePanel = ${renderGatePanel.toString()};
       /**
        * Readiness gate for the auth bootstrap.

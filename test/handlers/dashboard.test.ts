@@ -1029,3 +1029,85 @@ describe("dashboard — tenant switcher", () => {
     expect(await script()).toContain("if (q) headers[");
   });
 });
+
+// ---------------------------------------------------------------------------
+// The esbuild runtime guard.
+//
+// `dashboard.ts` ships `renderGatePanel` to the browser by inlining its source
+// with `Function.prototype.toString()`. That source is NOT the source in this
+// repository: the Worker is compiled by esbuild with `keepNames: true` before
+// `.toString()` ever runs, and esbuild rewrites every named function inside a
+// body into a `__name(fn, "fn")` statement. Those statements travel inside the
+// stringified function and then execute in the page.
+//
+// `__name` is defined at the top of the Worker bundle — module scope — so it
+// never reaches the page, and the first call throws
+// `ReferenceError: __name is not defined`. The gate panel silently fails to
+// render.
+//
+// The rehydration test in `gate-panel.test.ts` cannot catch this: Vitest runs
+// the module unbundled, so `.toString()` there returns clean source and every
+// helper looks self-contained. These tests reproduce the shipped, bundled
+// shape instead.
+// ---------------------------------------------------------------------------
+
+describe("the dashboard declares the esbuild runtime its injected panel calls", () => {
+  /** Everything the page declares before the panel binding — its whole scope. */
+  async function panelPreamble(): Promise<string> {
+    const script = await clientScript();
+    const anchor = script.indexOf("const renderGatePanel =");
+    if (anchor < 0) throw new Error("renderGatePanel binding not found");
+    return script.slice(0, anchor);
+  }
+
+  /**
+   * The preamble with comments stripped.
+   *
+   * The shipped script documents the shim at length, so a substring search for
+   * `__name` matches the prose and proves nothing. Only executable code counts.
+   */
+  async function panelPreambleCode(): Promise<string> {
+    return (await panelPreamble()).replace(/\/\*[\s\S]*?\*\//g, "");
+  }
+
+  it("declares __name before the panel that calls it", async () => {
+    expect(await panelPreambleCode()).toMatch(/\bvar __name\b/);
+  });
+
+  it("runs a panel body carrying keepNames output", async () => {
+    const preamble = await panelPreambleCode();
+
+    // A body in the exact shape esbuild emits: a function declaration followed
+    // by the __name statement that pins its name. Building it here and running
+    // it there is what the browser does, one page-load later.
+    //
+    // Both halves go into ONE function scope on purpose. The shim is a bare
+    // `var`, so like a classic <script> it lands on the global object and the
+    // panel body resolves it through that. A bare `new Function` reproduces the
+    // classic-script scope exactly — which is the only reason it is safe to
+    // ship this pattern at all.
+    // eslint-disable-next-line no-new-func
+    const build = new Function(`${preamble}
+      const renderGatePanel = function (payload) {
+        function escapeHtml(raw) { return raw; }
+        __name(escapeHtml, "escapeHtml");
+        return typeof escapeHtml;
+      };
+      return renderGatePanel;
+    `);
+
+    const panel = build() as (p: unknown) => string;
+    expect(panel({})).toBe("function");
+  });
+
+  it("declares the helper as a var, so the body resolves it as a global", async () => {
+    // A `const` at the top of a classic script does NOT become a global
+    // property, and the panel body is a different function. `var` is what makes
+    // the lookup work; this pins that choice so it is not "cleaned up" later.
+    const code = await panelPreambleCode();
+    expect(code).toMatch(/\bvar __name\b/);
+    expect(code).not.toMatch(/\bconst __name\b/);
+  });
+});
+
+// ---------------------------------------------------------------------------

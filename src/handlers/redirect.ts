@@ -163,14 +163,16 @@ export const redirectHandler: Handler<{
       const rows = await withClient(env, async (client) => {
         const table = qualifyTable(schemaName, "links");
         const query = `
-          SELECT id, original_url, is_active, expires_at, is_gated
+          SELECT id, original_url, client_ref, is_active, expires_at, is_gated
           FROM ${table}
           WHERE short_code = $1
           LIMIT 1
         `;
         const res = await client.query<{
           id: string;
-          original_url: string;
+          // nullable: card stock has no destination yet
+          original_url: string | null;
+          client_ref: string | null;
           is_active: boolean;
           expires_at: string | null;
           is_gated: boolean | null;
@@ -196,9 +198,60 @@ export const redirectHandler: Handler<{
       redirectUrl = row.original_url;
       isGated = row.is_gated === true;
 
+      // --- 3a. Card stock: real, active, and not yet configured ---
+      //
+      // Checked AFTER the lifecycle tests above, because an inactive or expired
+      // card must keep reporting that regardless of its destination. An
+      // unconfigured card is neither inactive nor expired — `is_active` is true
+      // from the moment the card exists, which is what makes manufacturing it
+      // before its destination possible at all.
+      //
+      // Returns BEFORE the cache write below, deliberately. Caching
+      // `original_url = null` would store an entry the cache reader cannot
+      // represent, and the card's next scan would either throw on JSON.parse or
+      // be served a stale destination if one was ever set. Leaving it uncached
+      // costs one indexed lookup per scan on a link that nobody is scanning yet
+      // — and the owner loading a destination invalidates nothing here because
+      // nothing was written.
+      if (redirectUrl === null) {
+        console.log(
+          JSON.stringify({
+            event: "redirect",
+            code,
+            tenant: slug,
+            cacheHit,
+            durationMs: Date.now() - startTime,
+            status: 200,
+            state: "card_not_configured",
+          }),
+        );
+
+        return new Response(
+          renderCardNotConfigured({
+            businessName: displayName || slug,
+            code,
+            clientRef: row.client_ref,
+            billingContact: env.BILLING_CONTACT,
+          }),
+          {
+            status: 200,
+            headers: {
+              "Content-Type": "text/html; charset=utf-8",
+              // Card stock changes the moment a destination is loaded, and this
+              // page must not outlive that change in anything in between.
+              "Cache-Control": "no-store, max-age=0",
+            },
+          },
+        );
+      }
+
       // --- 4. Populate KV cache (fire-and-forget via waitUntil) ---
+      //
+      // `redirectUrl`, not `row.original_url`: the branch above proved it is a
+      // string, and naming it that way makes the guarantee the compiler checks
+      // rather than one a future edit can quietly break.
       const cacheValue: CachedLink = {
-        url: row.original_url,
+        url: redirectUrl,
         isActive: row.is_active,
         expiresAt: row.expires_at,
         linkId: row.id,
@@ -410,4 +463,121 @@ function safeContactHref(contact?: string): string | null {
     return value;
   }
   return null;
+}
+
+/**
+ * Shown when someone scans a card that exists but has no destination yet.
+ *
+ * WHY THIS IS A PAGE AND NOT A 404
+ *
+ * Card stock is manufactured in advance: the owner creates the batch, the
+ * designer prints the QRs, and the destination is loaded later. The designer
+ * WILL scan a card in between — it is the first thing anyone does. A 404 there
+ * reads as "this product is broken", and the correct response to that is to
+ * abandon the batch. A page that says "this card is real, it just isn't
+ * configured yet" reads as the tool working.
+ *
+ * The same page is the recovery path for a destination that was loaded and
+ * later found wrong. Destinations rot, and a printed card cannot be reprinted,
+ * so "we can fix this, here is who to tell" has to be reachable from the card
+ * itself.
+ *
+ * IT IS NOT AN ERROR, AND IT IS NOT A 404
+ *
+ * The link is ACTIVE — `is_active` defaults true from the moment the card
+ * exists, which is the whole point of manufacturing it before its destination.
+ * So this is a plain 200 render. A customer must never see a stack trace, and a
+ * designer must never see a bare status code with nothing to act on.
+ *
+ * THE STYLING IS THE SITE'S, NOT A NEW ONE
+ *
+ * Same token vocabulary the dashboard established: uncoated kraft, the printed
+ * tag as a lighter surface, terracotta as the accent. A page a customer lands
+ * on from a sticker has to look like the same product as the dashboard the
+ * owner manages it from, and it has to look deliberate — this is the first and
+ * often only thing a stranger from the product ever sees.
+ *
+ * `client_ref` is shown because it is the only thing that identifies WHICH
+ * card is unconfigured, and telling the designer "this one" without a handle
+ * makes the page useless to them. It is tenant-scoped free text the owner typed
+ * themselves, carries no personal data, and is omitted entirely when unset.
+ */
+export function renderCardNotConfigured(params: {
+  businessName: string;
+  code: string;
+  clientRef?: string | null;
+  billingContact?: string;
+}): string {
+  const name = escapeHtml(params.businessName);
+  const code = escapeHtml(params.code);
+  // Escaped at the boundary, not trusted: client_ref is owner-typed text and
+  // this page is rendered to whoever scanned the card, including the public.
+  const ref = params.clientRef ? escapeHtml(params.clientRef) : "";
+  const href = safeContactHref(params.billingContact);
+
+  const contact = href
+    ? `<p>Si ya deber&iacute;a estar activas, avisanos y lo revisamos.</p>
+       <a class="cta" href="${href}">Avisar que esta tarjeta no funciona</a>`
+    : `<p>Si ya deber&iacute;a estar activas, avisanos y lo revisamos.</p>`;
+
+  const refLine = ref
+    ? `<small>Tarjeta <code>${ref}</code> &middot; c&oacute;digo <code>${code}</code></small>`
+    : `<small>C&oacute;digo <code>${code}</code></small>`;
+
+  return `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- A card mid-manufacture is not a page anyone should index, and the code is
+     guessable from a printed sticker. -->
+<meta name="robots" content="noindex, nofollow">
+<title>${name}</title>
+<style>
+  :root {
+    --kraft: #f4f1ea;
+    --sticker: #fbf9f5;
+    --edge: #ddd6c8;
+    --edge-strong: #c4bba9;
+    --ink: #2b2622;
+    --ink-soft: #6b625a;
+    --ink-faint: #8d847a;
+    --tag: #a8482a;
+    --tag-deep: #8a3a1f;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 2.5rem 1.25rem;
+         background: var(--kraft); color: var(--ink);
+         display: flex; align-items: center; justify-content: center;
+         min-height: 100vh; }
+  main { max-width: 30rem; width: 100%; background: var(--sticker);
+         border: 1px solid var(--edge); border-radius: 12px; padding: 2rem 1.75rem;
+         box-shadow: 0 1px 2px rgba(43, 38, 34, 0.05); }
+  .tag { display: inline-block; padding: .25rem .6rem; margin-bottom: 1rem;
+         font-size: .75rem; letter-spacing: .04em; text-transform: uppercase;
+         color: var(--tag); background: rgba(168, 72, 42, .1);
+         border: 1px solid rgba(168, 72, 42, .25); border-radius: 999px; }
+  h1 { font-size: 1.2rem; margin: 0 0 .75rem; font-weight: 600; }
+  p { font-size: .95rem; line-height: 1.6; margin: 0 0 .85rem; color: var(--ink-soft); }
+  a.cta { display: inline-block; margin-top: .25rem; padding: .7rem 1.1rem;
+          background: var(--tag); color: #fff; border-radius: 8px;
+          text-decoration: none; font-size: .95rem; }
+  a.cta:hover { background: var(--tag-deep); }
+  small { display: block; margin-top: 1.5rem; padding-top: 1rem;
+          border-top: 1px solid var(--edge); font-size: .85rem; color: var(--ink-faint); }
+  code { font-family: ui-monospace, monospace; font-size: .85rem; background: var(--kraft);
+         padding: .1rem .35rem; border-radius: 4px; color: var(--ink-soft); }
+</style>
+</head>
+<body>
+<main>
+  <span class="tag">Sin configurar</span>
+  <h1>${name}</h1>
+  <p>Esta tarjeta todav&iacute;a no tiene una p&aacute;gina asignada.</p>
+  <p>Es una tarjeta real y est&aacute; funcionando &mdash; lo que falta es el enlace que tiene que abrir. Si est&aacute;s aqu&iacute; prob&aacute;ndola, todav&iacute;a no hay nada que ver.</p>
+  ${contact}
+  ${refLine}
+</main>
+</body>
+</html>`;
 }

@@ -150,15 +150,39 @@ unconfigured links is **not decided here** and is recorded as open below.
 
 ## Tasks
 
-- [ ] **T1** — `original_url` nullable in both DDL copies, plus migration `00015` for existing tenants
-- [ ] **T2** — `createLinkCore` accepts a missing destination; a supplied one is still validated
-- [ ] **T3** — `updateLink` accepts `original_url`, including clearing it; `slug` stays rejected
-- [ ] **T4** — `redirectHandler` serves the designed not-configured page for a null destination
-- [ ] **T5** — full suite green, each task verified green on its own tree
+- [x] **T1** — `original_url` nullable in both DDL copies, plus migration `00015` for existing tenants — `f1fb09c`
+- [x] **T2** — `createLinkCore` accepts a missing destination; a supplied one is still validated — `cc515d8`
+- [x] **T3** — `updateLink` accepts `original_url`, including clearing it; `slug` stays rejected — `045dea6`
+- [x] **T4** — `redirectHandler` serves the designed not-configured page for a null destination — `cce9790`
+- [x] **T5** — the create form can manufacture one — `757d5d7`
 
 ## Verification evidence
 
-Populated per task below as each closes.
+Suite: **741 passed / 741**, 31 files, exit 0. `tsc --noEmit` clean.
+
+Every task was verified RED before it was verified GREEN — each guard was
+reverted in place and the failing test names recorded:
+
+| Reverted | Fails |
+|---|---|
+| template back to `NOT NULL` (the half-applied migration) | 1 |
+| `createLinkCore` treating a missing URL as absent-forever | 4 of 7 new |
+| `updateLink` validation branch | 4 |
+| the redirect cache invalidation alone | 1 |
+| the not-configured branch | 9 of 14 new |
+| lifecycle ordering (the check before 410) | 5 pre-existing |
+| `required` on the form field | 1 |
+| sending `""` instead of omitting the key | 1 |
+
+Two of these are the shape of failure worth naming, because a reviewer should
+know they were checked separately:
+
+- **The cache invalidation is its own test.** Removing it leaves every other
+  test green and produces a link that looks correct while serving the previous
+  destination for 24 hours.
+- **Lifecycle ordering is its own test.** Moving the not-configured check above
+  the inactive/expired checks breaks 5 pre-existing tests, so the placement is
+  load-bearing rather than a matter of taste.
 
 ## Open questions
 

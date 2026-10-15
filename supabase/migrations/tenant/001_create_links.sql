@@ -4,9 +4,21 @@
 -- All statements use IF NOT EXISTS for idempotent execution.
 
 -- Links table: one row per shortened URL
+--
+-- original_url is NULLABLE on purpose. Card stock is manufactured before its
+-- destination exists: the owner creates a batch of links, the designer prints
+-- the short_code as a QR, and the real destination is loaded later. A row with
+-- a NULL original_url is that state, and it is ACTIVE from creation — scanning
+-- it reaches the not-configured page, not a 404.
+--
+-- This makes the field optional, never unchecked: a value that IS supplied is
+-- validated by validateUrl before it reaches this column.
+--
+-- short_code stays NOT NULL. It is what gets printed, so it exists from the
+-- moment the card does.
 CREATE TABLE IF NOT EXISTS {schema}.links (
     id           UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-    original_url TEXT NOT NULL,
+    original_url TEXT,                              -- NULL = not configured yet
     short_code   TEXT NOT NULL,
     title        TEXT,                              -- Optional display name
     client_ref   TEXT,                              -- User-defined CRM identifier; NULL = no client

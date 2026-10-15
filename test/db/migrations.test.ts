@@ -45,6 +45,7 @@ import m00011 from "../../supabase/migrations/00011_tenant_memberships.sql?raw";
 import m00012 from "../../supabase/migrations/00012_owner_delete_restrict.sql?raw";
 import m00013 from "../../supabase/migrations/00013_subscription_status.sql?raw";
 import m00014 from "../../supabase/migrations/00014_subscription_updated_at.sql?raw";
+import m00015 from "../../supabase/migrations/00015_original_url_nullable.sql?raw";
 
 interface Migration {
   version: number;
@@ -68,6 +69,7 @@ const MIGRATIONS: Migration[] = [
   { version: 12, name: "00012_owner_delete_restrict", sql: m00012 },
   { version: 13, name: "00013_subscription_status", sql: m00013 },
   { version: 14, name: "00014_subscription_updated_at", sql: m00014 },
+  { version: 15, name: "00015_original_url_nullable", sql: m00015 },
 ];
 
 /** Strips `--` comments so a prose version number is never read as a claim. */

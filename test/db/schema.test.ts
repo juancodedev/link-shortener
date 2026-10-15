@@ -8,6 +8,7 @@ import locationsMigration from "../../supabase/migrations/00006_locations.sql?ra
 import locationIdAlterMigration from "../../supabase/migrations/00007_add_location_id_to_tenant_links.sql?raw";
 import isGatedAlterMigration from "../../supabase/migrations/00008_add_is_gated_to_tenant_links.sql?raw";
 import reviewGateMigration from "../../supabase/migrations/00009_review_gate_schema.sql?raw";
+import originalUrlNullableMigration from "../../supabase/migrations/00015_original_url_nullable.sql?raw";
 import { TENANT_DDL } from "../../src/tenants/provision";
 
 // ---------------------------------------------------------------------------
@@ -191,6 +192,71 @@ describe("tenant 001_create_links template", () => {
     expect(tenantLinksMigration).toMatch(
       /CREATE\s+INDEX\s+IF\s+NOT\s+EXISTS\s+idx_links_client_ref[\s\S]*?links\s*\(\s*client_ref\s*\)/i,
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // original_url is optional (card stock)
+  //
+  // The single most dangerous version of this change is a half-applied one:
+  // the template says nullable and an already-provisioned tenant still says
+  // NOT NULL, so creating card stock works on new tenants and fails on every
+  // real one. The 00015 block below and these two assertions are what stop
+  // that from being discovered by a customer.
+  // -------------------------------------------------------------------------
+
+  it("declares original_url without NOT NULL, so card stock can exist", () => {
+    const columnLine = tenantLinksMigration
+      .split("\n")
+      .find((l) => /original_url\s+TEXT/i.test(l))!;
+    expect(columnLine).toBeTruthy();
+    expect(columnLine).not.toMatch(/NOT\s+NULL/i);
+  });
+
+  it("still requires short_code, which is what actually gets printed", () => {
+    // Relaxing original_url must not quietly relax the code on the sticker.
+    const columnLine = tenantLinksMigration
+      .split("\n")
+      .find((l) => /short_code\s+TEXT/i.test(l))!;
+    expect(columnLine).toMatch(/NOT\s+NULL/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 00015_original_url_nullable — existing-tenant ALTER
+// ---------------------------------------------------------------------------
+
+describe("00015_original_url_nullable migration", () => {
+  it("drops NOT NULL per tenant rather than editing the create template", () => {
+    // Editing 001_create_links.sql only reaches tenants provisioned AFTER the
+    // change. Every deployed tenant needs its own ALTER.
+    expect(originalUrlNullableMigration).toMatch(
+      /ALTER\s+TABLE[\s\S]*?ALTER\s+COLUMN\s+original_url\s+DROP\s+NOT\s+NULL/i,
+    );
+  });
+
+  it("discovers concrete schema names from the tenant registry", () => {
+    expect(originalUrlNullableMigration).toMatch(/public\.tenants/i);
+    expect(originalUrlNullableMigration).toMatch(/schema_name/i);
+    expect(originalUrlNullableMigration).toMatch(/EXECUTE\s+format/i);
+  });
+
+  it("skips a tenant with no links table instead of aborting every other one", () => {
+    expect(originalUrlNullableMigration).toMatch(/CONTINUE\s+WHEN[\s\S]*?to_regclass/i);
+  });
+
+  it("records its version in each tenant's own _migrations table", () => {
+    expect(originalUrlNullableMigration).toMatch(/_migrations/i);
+    expect(originalUrlNullableMigration).toContain("00015_original_url_nullable");
+  });
+
+  it("does not backfill a placeholder destination", () => {
+    // A placeholder is worse than none: it forwards customers somewhere real and
+    // is indistinguishable from a genuine destination once written.
+    const src = originalUrlNullableMigration
+      .split("\n")
+      .map((l) => l.replace(/--.*$/, ""))
+      .join("\n");
+    expect(src).not.toMatch(/UPDATE\s/i);
   });
 });
 

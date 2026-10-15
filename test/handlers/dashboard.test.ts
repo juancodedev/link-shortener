@@ -1111,3 +1111,100 @@ describe("the dashboard declares the esbuild runtime its injected panel calls", 
 });
 
 // ---------------------------------------------------------------------------
+// The QR encoding guard.
+//
+// The QR image is fetched from a third-party service with the URL as a query
+// parameter, so the URL gets percent-encoded for transport. The service decodes
+// that parameter once and encodes whatever it finds inside the QR image.
+//
+// That makes the round trip exact only if the payload is encoded ONCE. The
+// handler encoded twice — once at the click handler and again inside showQR —
+// so the image encoded `https%3A%2F%2F...` and scanning a sticker led nowhere.
+// The bug was invisible in the UI: the caption under the image decoded its way
+// back to a correct-looking URL, so the only place the wrong bytes appeared was
+// the one place that mattered.
+//
+// These tests drive the SERVED click handler against the SERVED showQR and read
+// the query parameter the way the service does, so the assertion is about the
+// bytes the QR will actually carry.
+// ---------------------------------------------------------------------------
+
+const SHORT_URL = "https://shorter.juancode.dev/X4tonhH";
+
+describe("the QR image encodes the short URL, not its encoded form", () => {
+  /**
+   * Drives the REAL click handler against the REAL showQR and reports the bytes
+   * the QR image will carry.
+   *
+   * Both halves matter. The double encode was split across them — the click
+   * handler encoded, and showQR encoded again — so testing showQR in isolation
+   * passes against the shipped bug. Only the whole path, handler included,
+   * shows the payload the QR service actually receives.
+   */
+  async function clickQr(rawUrl: string) {
+    const script = await clientScript();
+
+    const written: Record<string, any> = {
+      "qr-img": { src: "" },
+      "qr-url": { textContent: "" },
+      "qr-modal": { classList: { remove: () => {} } },
+    };
+    const document = { getElementById: (id: string) => written[id] };
+
+    // The other actions are never reached, so their helpers are deliberately
+    // absent — an undefined identifier only throws on the branch that uses it.
+    // eslint-disable-next-line no-new-func
+    const onLinksTableClick = new Function(
+      "document",
+      `${extractFunction(script, "showQR")}\n${extractFunction(script, "onLinksTableClick")}\nreturn onLinksTableClick;`,
+    )(document);
+
+    const el = { dataset: { action: "qr", url: rawUrl } };
+    onLinksTableClick({
+      target: { closest: (sel: string) => (sel === "[data-action]" ? el : null) },
+      // Forwarded verbatim to showQR, which stops the row's own click handler.
+      stopPropagation: () => {},
+    });
+
+    return {
+      // Exactly what the QR service receives as `data`, after its own decode.
+      qrPayload: new URL(written["qr-img"].src).searchParams.get("data"),
+      caption: written["qr-url"].textContent,
+      rawSrc: written["qr-img"].src,
+    };
+  }
+
+  it("round-trips a plain short URL through the query parameter", async () => {
+    const { qrPayload } = await clickQr(SHORT_URL);
+    expect(qrPayload).toBe(SHORT_URL);
+  });
+
+  it("shows the same bytes the QR encodes", async () => {
+    // The print-sheet handoff reads #qr-url. If the caption and the payload can
+    // disagree, the owner copies one string and prints a QR carrying another.
+    const { qrPayload, caption } = await clickQr(SHORT_URL);
+    expect(caption).toBe(qrPayload);
+  });
+
+  it("still encodes reserved characters so the query parameter survives", async () => {
+    // One layer of encoding is not the same as none: a bare `&` or `#` in the
+    // payload would terminate the parameter or start a fragment.
+    const awkward = "https://shorter.juancode.dev/a?b=1&c=2#frag";
+    const { qrPayload, rawSrc } = await clickQr(awkward);
+
+    expect(qrPayload).toBe(awkward);
+    expect(rawSrc).toContain("%26");
+  });
+
+  it("does not double-encode at the click handler", async () => {
+    // The regression, stated at the source: the payload is already encoded by
+    // the time showQR encodes it a second time.
+    const script = await clientScript();
+    expect(script).not.toMatch(/showQR\(\s*encodeURIComponent/);
+  });
+
+  it("never decodes in showQR, which would throw on a literal %", async () => {
+    const src = extractFunction(await clientScript(), "showQR");
+    expect(src).not.toContain("decodeURIComponent");
+  });
+});

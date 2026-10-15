@@ -1029,3 +1029,182 @@ describe("dashboard — tenant switcher", () => {
     expect(await script()).toContain("if (q) headers[");
   });
 });
+
+// ---------------------------------------------------------------------------
+// The esbuild runtime guard.
+//
+// `dashboard.ts` ships `renderGatePanel` to the browser by inlining its source
+// with `Function.prototype.toString()`. That source is NOT the source in this
+// repository: the Worker is compiled by esbuild with `keepNames: true` before
+// `.toString()` ever runs, and esbuild rewrites every named function inside a
+// body into a `__name(fn, "fn")` statement. Those statements travel inside the
+// stringified function and then execute in the page.
+//
+// `__name` is defined at the top of the Worker bundle — module scope — so it
+// never reaches the page, and the first call throws
+// `ReferenceError: __name is not defined`. The gate panel silently fails to
+// render.
+//
+// The rehydration test in `gate-panel.test.ts` cannot catch this: Vitest runs
+// the module unbundled, so `.toString()` there returns clean source and every
+// helper looks self-contained. These tests reproduce the shipped, bundled
+// shape instead.
+// ---------------------------------------------------------------------------
+
+describe("the dashboard declares the esbuild runtime its injected panel calls", () => {
+  /** Everything the page declares before the panel binding — its whole scope. */
+  async function panelPreamble(): Promise<string> {
+    const script = await clientScript();
+    const anchor = script.indexOf("const renderGatePanel =");
+    if (anchor < 0) throw new Error("renderGatePanel binding not found");
+    return script.slice(0, anchor);
+  }
+
+  /**
+   * The preamble with comments stripped.
+   *
+   * The shipped script documents the shim at length, so a substring search for
+   * `__name` matches the prose and proves nothing. Only executable code counts.
+   */
+  async function panelPreambleCode(): Promise<string> {
+    return (await panelPreamble()).replace(/\/\*[\s\S]*?\*\//g, "");
+  }
+
+  it("declares __name before the panel that calls it", async () => {
+    expect(await panelPreambleCode()).toMatch(/\bvar __name\b/);
+  });
+
+  it("runs a panel body carrying keepNames output", async () => {
+    const preamble = await panelPreambleCode();
+
+    // A body in the exact shape esbuild emits: a function declaration followed
+    // by the __name statement that pins its name. Building it here and running
+    // it there is what the browser does, one page-load later.
+    //
+    // Both halves go into ONE function scope on purpose. The shim is a bare
+    // `var`, so like a classic <script> it lands on the global object and the
+    // panel body resolves it through that. A bare `new Function` reproduces the
+    // classic-script scope exactly — which is the only reason it is safe to
+    // ship this pattern at all.
+    // eslint-disable-next-line no-new-func
+    const build = new Function(`${preamble}
+      const renderGatePanel = function (payload) {
+        function escapeHtml(raw) { return raw; }
+        __name(escapeHtml, "escapeHtml");
+        return typeof escapeHtml;
+      };
+      return renderGatePanel;
+    `);
+
+    const panel = build() as (p: unknown) => string;
+    expect(panel({})).toBe("function");
+  });
+
+  it("declares the helper as a var, so the body resolves it as a global", async () => {
+    // A `const` at the top of a classic script does NOT become a global
+    // property, and the panel body is a different function. `var` is what makes
+    // the lookup work; this pins that choice so it is not "cleaned up" later.
+    const code = await panelPreambleCode();
+    expect(code).toMatch(/\bvar __name\b/);
+    expect(code).not.toMatch(/\bconst __name\b/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The QR encoding guard.
+//
+// The QR image is fetched from a third-party service with the URL as a query
+// parameter, so the URL gets percent-encoded for transport. The service decodes
+// that parameter once and encodes whatever it finds inside the QR image.
+//
+// That makes the round trip exact only if the payload is encoded ONCE. The
+// handler encoded twice — once at the click handler and again inside showQR —
+// so the image encoded `https%3A%2F%2F...` and scanning a sticker led nowhere.
+// The bug was invisible in the UI: the caption under the image decoded its way
+// back to a correct-looking URL, so the only place the wrong bytes appeared was
+// the one place that mattered.
+//
+// These tests drive the SERVED click handler against the SERVED showQR and read
+// the query parameter the way the service does, so the assertion is about the
+// bytes the QR will actually carry.
+// ---------------------------------------------------------------------------
+
+const SHORT_URL = "https://shorter.juancode.dev/X4tonhH";
+
+describe("the QR image encodes the short URL, not its encoded form", () => {
+  /**
+   * Drives the REAL click handler against the REAL showQR and reports the bytes
+   * the QR image will carry.
+   *
+   * Both halves matter. The double encode was split across them — the click
+   * handler encoded, and showQR encoded again — so testing showQR in isolation
+   * passes against the shipped bug. Only the whole path, handler included,
+   * shows the payload the QR service actually receives.
+   */
+  async function clickQr(rawUrl: string) {
+    const script = await clientScript();
+
+    const written: Record<string, any> = {
+      "qr-img": { src: "" },
+      "qr-url": { textContent: "" },
+      "qr-modal": { classList: { remove: () => {} } },
+    };
+    const document = { getElementById: (id: string) => written[id] };
+
+    // The other actions are never reached, so their helpers are deliberately
+    // absent — an undefined identifier only throws on the branch that uses it.
+    // eslint-disable-next-line no-new-func
+    const onLinksTableClick = new Function(
+      "document",
+      `${extractFunction(script, "showQR")}\n${extractFunction(script, "onLinksTableClick")}\nreturn onLinksTableClick;`,
+    )(document);
+
+    const el = { dataset: { action: "qr", url: rawUrl } };
+    onLinksTableClick({
+      target: { closest: (sel: string) => (sel === "[data-action]" ? el : null) },
+      // Forwarded verbatim to showQR, which stops the row's own click handler.
+      stopPropagation: () => {},
+    });
+
+    return {
+      // Exactly what the QR service receives as `data`, after its own decode.
+      qrPayload: new URL(written["qr-img"].src).searchParams.get("data"),
+      caption: written["qr-url"].textContent,
+      rawSrc: written["qr-img"].src,
+    };
+  }
+
+  it("round-trips a plain short URL through the query parameter", async () => {
+    const { qrPayload } = await clickQr(SHORT_URL);
+    expect(qrPayload).toBe(SHORT_URL);
+  });
+
+  it("shows the same bytes the QR encodes", async () => {
+    // The print-sheet handoff reads #qr-url. If the caption and the payload can
+    // disagree, the owner copies one string and prints a QR carrying another.
+    const { qrPayload, caption } = await clickQr(SHORT_URL);
+    expect(caption).toBe(qrPayload);
+  });
+
+  it("still encodes reserved characters so the query parameter survives", async () => {
+    // One layer of encoding is not the same as none: a bare `&` or `#` in the
+    // payload would terminate the parameter or start a fragment.
+    const awkward = "https://shorter.juancode.dev/a?b=1&c=2#frag";
+    const { qrPayload, rawSrc } = await clickQr(awkward);
+
+    expect(qrPayload).toBe(awkward);
+    expect(rawSrc).toContain("%26");
+  });
+
+  it("does not double-encode at the click handler", async () => {
+    // The regression, stated at the source: the payload is already encoded by
+    // the time showQR encodes it a second time.
+    const script = await clientScript();
+    expect(script).not.toMatch(/showQR\(\s*encodeURIComponent/);
+  });
+
+  it("never decodes in showQR, which would throw on a literal %", async () => {
+    const src = extractFunction(await clientScript(), "showQR");
+    expect(src).not.toContain("decodeURIComponent");
+  });
+});

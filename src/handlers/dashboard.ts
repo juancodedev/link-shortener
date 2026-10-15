@@ -737,6 +737,31 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
     </div>
 
     <script>
+      /**
+       * The esbuild runtime shim.
+       *
+       * \`renderGatePanel.toString()\` below serialises the ALREADY-BUNDLED
+       * function, because the Worker this handler ships in was compiled by
+       * esbuild with \`keepNames: true\` — which rewrites every named function
+       * inside the body to a \`__name(fn, "fn")\` statement. Those statements
+       * ride along in the stringified source and then execute HERE.
+       *
+       * \`__name\` is defined at the top of the Worker bundle, in module scope,
+       * so it does not exist in this page. Without this line the very first
+       * call throws \`ReferenceError: __name is not defined\` and the gate panel
+       * never renders.
+       *
+       * This is the same helper, byte for byte, that esbuild's own browser
+       * runtime declares. It is not a no-op shim: function declarations already
+       * carry their own \`.name\`, but an arrow assigned to a variable does not,
+       * so this preserves the names esbuild is preserving for a reason.
+       *
+       * \`var\`, not \`const\`, to match esbuild: the call sites are inside the
+       * panel body and must resolve through the global object.
+       */
+      var __name = (target, value) =>
+        Object.defineProperty(target, "name", { value, configurable: true });
+
       const renderGatePanel = ${renderGatePanel.toString()};
       /**
        * Readiness gate for the auth bootstrap.
@@ -925,7 +950,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
             copyUrl(el.dataset.url, el);
             break;
           case "qr":
-            showQR(encodeURIComponent(el.dataset.url), e);
+            showQR(el.dataset.url, e);
             break;
           case "metrics":
             showMetrics(el.dataset.id, el.dataset.code, e);
@@ -1211,10 +1236,28 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         }
       }
 
+      /**
+       * Opens the QR modal for a short URL.
+       *
+       * Takes the URL RAW and encodes exactly once, right here, because this
+       * is the only place that builds a query string. The call site used to
+       * encode too, and that second layer is what shipped: the QR image
+       * encoded \`https%3A%2F%2F…\` instead of \`https://…\`, so scanning a sticker
+       * landed nowhere. Two encodes and one decode is not a transformation, it
+       * is a coin flip.
+       *
+       * The displayed text is the raw url, NOT a decoded one. Decoding here
+       * would only exist to undo the call site's encode; with that gone, a
+       * \`decodeURIComponent\` on a plain URL is not a no-op — it throws on a
+       * literal \`%\`.
+       *
+       * This is also what makes the print-sheet handoff honest: #qr-url holds
+       * the same bytes the QR encodes, so the copy button cannot drift.
+       */
       function showQR(url, e) {
         e.stopPropagation();
         document.getElementById("qr-img").src = "https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=" + encodeURIComponent(url);
-        document.getElementById("qr-url").textContent = decodeURIComponent(url);
+        document.getElementById("qr-url").textContent = url;
         document.getElementById("qr-modal").classList.remove("hidden");
       }
 

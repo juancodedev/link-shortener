@@ -37,11 +37,19 @@ function mockDb(rows: unknown[][] = [[], []]) {
 }
 
 /**
- * The default row set: an empty tag_ratings/feedback write, then the
- * destination read. A test asserting on the write passes its own rows.
+ * The default row set, in the order the handler now queries.
+ *
+ * The location read comes FIRST — it has to, because the rating row is written
+ * with the location it resolved, and that row is what the per-location rollup
+ * groups on. Then the destination read, which only the Google branch performs.
+ *
+ * Every row carries both columns because the handler selects both: a test that
+ * omitted `location_id` would have the read return undefined and the scan would
+ * be recorded unattributed, which is the very state this change removes.
  */
 const DESTINATION_ROWS = [
-  [{ original_url: GOOGLE_URL }],
+  [{ original_url: GOOGLE_URL, location_id: null }],
+  [{ original_url: GOOGLE_URL, location_id: null }],
 ];
 
 function mockContext(body: string, formType = "application/x-www-form-urlencoded") {
@@ -407,5 +415,162 @@ describe("POST /api/gate rate limiting", () => {
     await flush();
 
     expect(calls).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scan attribution (location_id)
+//
+// `tag_ratings.location_id` existed with a partial index and the panel groups
+// on it, and the write hardcoded NULL — so every scan landed in "not assigned"
+// and the per-location rollup, which is the table the product is sold on, could
+// never answer "which tables actually convert".
+//
+// The link already carried its location. Nothing read it on the scan path.
+// ---------------------------------------------------------------------------
+
+describe("a scan is attributed to the link's location", () => {
+  /**
+   * Serves one scan, routing each statement by its SQL rather than by call
+   * order.
+   *
+   * The queue-based `mockDb` above is fine for the older tests but cannot
+   * express this path: the handler reads a location, writes a rating, and then
+   * — only on the Google branch — reads the destination, and the writes consume
+   * queue entries too. Ordering the fixture by hand would make a test depend on
+   * how many statements each branch happens to take, which is the coupling the
+   * API tests already avoid by routing on SQL text.
+   */
+  async function scan(
+    opts: { locationId?: string | null; destination?: string | null; body?: string } = {},
+  ) {
+    const calls: { sql: string; params: unknown[] }[] = [];
+    vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) =>
+      fn({
+        query: vi.fn().mockImplementation(async (sql: string, params: unknown[] = []) => {
+          calls.push({ sql, params });
+          if (/SELECT location_id/i.test(sql)) {
+            return {
+              rows: [{ location_id: opts.locationId ?? null }],
+              rowCount: 1,
+            };
+          }
+          if (/SELECT original_url/i.test(sql)) {
+            return {
+              rows: [{ original_url: opts.destination ?? GOOGLE_URL }],
+              rowCount: 1,
+            };
+          }
+          return { rows: [], rowCount: 1 };
+        }),
+      }),
+    );
+
+    const { c, jsonFn, flush } = mockContext(
+      opts.body ?? "code=abc1234&action_taken=google_redirect&rating=5",
+    );
+
+    await gateHandler(c as any);
+    await flush();
+
+    return { calls, jsonFn };
+  }
+
+  /** The tag_ratings INSERT, by shape rather than by call order. */
+  function ratingWrite(calls: { sql: string; params: unknown[] }[]) {
+    return calls.find((q) => /INSERT INTO analytics\.tag_ratings/i.test(q.sql))!;
+  }
+
+  it("writes the link's location onto the rating row", async () => {
+    const { calls } = await scan({ locationId: "loc-mesa-1" });
+
+    expect(ratingWrite(calls).params).toContain("loc-mesa-1");
+  });
+
+  it("reads the location before writing the rating, because the write needs it", async () => {
+    const { calls } = await scan({ locationId: "loc-1" });
+
+    // Ordering is load-bearing, not incidental: the location must exist before
+    // the row that carries it is written.
+    const locationRead = calls.findIndex((q) =>
+      /SELECT location_id/i.test(q.sql),
+    );
+    const write = calls.findIndex((q) => /INSERT INTO analytics\.tag_ratings/i.test(q.sql));
+    expect(locationRead).toBeGreaterThanOrEqual(0);
+    expect(write).toBeGreaterThan(locationRead);
+  });
+
+  it("records the location on the private-feedback row too", async () => {
+    const { calls } = await scan({
+      locationId: "loc-1",
+      body: "code=abc1234&action_taken=internal_feedback&rating=2&comment=malo",
+    });
+
+    const feedback = calls.find((q) =>
+      /INSERT INTO analytics\.tag_feedback/i.test(q.sql),
+    )!;
+    expect(feedback.params).toContain("loc-1");
+  });
+
+  it("records NULL when the link has no location, rather than dropping the scan", async () => {
+    // Unattached is a real state. A scan that cannot be attributed is still a
+    // scan, and the rollup's totals must agree with the tenant-wide total.
+    const { calls } = await scan({ locationId: null });
+
+    expect(ratingWrite(calls).params).toContain(null);
+    expect(ratingWrite(calls)).toBeDefined();
+  });
+
+  it("still returns the destination verbatim, whatever the location says", async () => {
+    // The Google branch must not be conditioned on anything read from the link
+    // beyond the destination itself.
+    const { jsonFn } = await scan({ locationId: "loc-1" });
+
+    expect(jsonFn).toHaveBeenCalledWith({ redirectUrl: GOOGLE_URL }, 200);
+  });
+
+  it("records the scan even when the location lookup fails", async () => {
+    // A scan that cannot be attributed must still count. Swallowing the failure
+    // and writing null is the difference between a degraded rollup and a hole in
+    // the data.
+    const calls: { sql: string; params: unknown[] }[] = [];
+    vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) =>
+      fn({
+        query: vi.fn().mockImplementation(async (sql: string, params: unknown[] = []) => {
+          calls.push({ sql, params });
+          if (/SELECT location_id/i.test(sql)) {
+            throw new Error("location lookup exploded");
+          }
+          if (/SELECT original_url/i.test(sql)) {
+            return { rows: [{ original_url: GOOGLE_URL }], rowCount: 1 };
+          }
+          return { rows: [], rowCount: 1 };
+        }),
+      }),
+    );
+
+    const { c, jsonFn, flush } = mockContext(
+      "code=abc1234&action_taken=google_redirect&rating=5",
+    );
+
+    await gateHandler(c as any);
+    await flush();
+
+    expect(ratingWrite(calls)).toBeDefined();
+    // And the customer still reaches Google: the failure is in attribution, not
+    // in the path they asked for.
+    expect(jsonFn).toHaveBeenCalledWith({ redirectUrl: GOOGLE_URL }, 200);
+  });
+
+  it("does not read the location when the private branch needs no destination", async () => {
+    // A customer who chose to leave private feedback is already on a page that
+    // does not navigate. Reading a destination they will never use is a round
+    // trip taken for nothing.
+    const { calls } = await scan({
+      locationId: "loc-1",
+      body: "code=abc1234&action_taken=internal_feedback&rating=1&comment=x",
+    });
+
+    expect(calls.some((q) => /SELECT original_url/i.test(q.sql))).toBe(false);
   });
 });

@@ -107,11 +107,72 @@ export interface MappedError {
 }
 
 /**
+ * Postgres SQLSTATE codes this system can produce from a caller's own input.
+ *
+ * These are not server faults. Each one means the database refused something
+ * the caller sent, which is a 4xx with an explanation — reporting them as a 500
+ * tells an operator their server is down when it is running fine and their
+ * request is wrong.
+ *
+ *   23502 not_null_violation   — a required value was absent
+ *   23503 foreign_key_violation — a referenced row does not exist
+ *   23505 unique_violation      — a uniqueness rule refused the row
+ *
+ * The constraint NAME is what makes the message specific. Postgres puts it in
+ * `err.constraint`, which is why these are keyed on that rather than on the
+ * message text: the name is stable across driver versions, the prose is not.
+ */
+const CONSTRAINT_STATUS: Record<string, { status: number; code: string }> = {
+  // The one that mattered. A card without a destination is legitimate ONLY
+  // after 00015 has been applied; before it, every card-stock create lands here
+  // and was being reported as "internal_error", which reads as a dead server
+  // rather than as an unapplied migration.
+  links_original_url_not_null: {
+    status: 409,
+    code: "schema_not_migrated",
+  },
+  idx_locations_tenant_slug: { status: 409, code: "slug_taken" },
+};
+
+/**
+ * Recognises a database constraint failure, if this throw is one.
+ *
+ * Duck-typed on `code` because `pg` errors are not an importable class the
+ * middleware should depend on, and on `constraint` because that is the only
+ * stable identifier. Returns null for anything else, so the caller falls through
+ * to the 500 it would have returned anyway.
+ */
+function asConstraintViolation(
+  err: unknown,
+): { status: number; code: string; constraint: string } | null {
+  if (err === null || typeof err !== "object") return null;
+  const e = err as { code?: unknown; constraint?: unknown; message?: unknown };
+
+  // 23xxx is the integrity-constraint class in SQLSTATE. Checking the prefix
+  // rather than the exact code means an unlisted constraint is still reported
+  // as a caller error rather than as a server fault.
+  if (typeof e.code !== "string" || !e.code.startsWith("23")) return null;
+
+  const constraint = typeof e.constraint === "string" ? e.constraint : "";
+  const known = CONSTRAINT_STATUS[constraint];
+  if (known) return { ...known, constraint };
+
+  // A recognised integrity violation with no specific mapping still describes a
+  // bad request, not a broken server.
+  return {
+    status: 409,
+    code: "constraint_violation",
+    constraint,
+  };
+}
+
+/**
  * Maps a thrown value to its HTTP status and response body.
  *
- * Known `AppError` subclasses map to their declared status; anything else is
- * an opaque 500. Pure — no logging, no context, no I/O — so the mapping is
- * directly unit-testable and cannot accidentally leak a stack trace.
+ * Known `AppError` subclasses map to their declared status; database integrity
+ * violations map to a 4xx that names the constraint; anything else is an opaque
+ * 500. Pure — no logging, no context, no I/O — so the mapping is directly
+ * unit-testable and cannot accidentally leak a stack trace.
  */
 export function mapError(err: unknown): MappedError {
   if (err instanceof AppError) {
@@ -120,6 +181,26 @@ export function mapError(err: unknown): MappedError {
       body: { error: err.message, code: err.code },
       type: err.name,
       message: err.message,
+    };
+  }
+
+  const violation = asConstraintViolation(err);
+  if (violation) {
+    // The constraint name is safe to surface: it is part of this system's own
+    // schema, not user data, and it is the difference between "something is
+    // wrong" and "this specific migration has not been applied".
+    return {
+      status: violation.status,
+      body: {
+        error:
+          violation.code === "schema_not_migrated"
+            ? "this tenant's schema does not yet allow a link with no destination; apply migration 00015"
+            : `constraint ${violation.constraint} rejected the request`,
+        code: violation.code,
+      },
+      type: "ConstraintViolation",
+      message:
+        err instanceof Error ? err.message : `constraint ${violation.constraint}`,
     };
   }
 

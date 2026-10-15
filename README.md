@@ -194,6 +194,9 @@ Every mutation flushes the tenant's `reg:{code}` KV entries so the change takes 
 | `DELETE` | `/api/links/:id` | Delete a link |
 | `GET` | `/api/links/:id/clicks` | Per-link analytics: country, device, source |
 | `POST` | `/api/links/batch` | Create up to 100 links in one call |
+| `GET` | `/api/locations` | List locations (tables, zones) with a link count each |
+| `POST` | `/api/locations` | Create one location |
+| `PATCH` | `/api/locations/:id` | Rename a location or switch it off |
 | `GET` | `/api/clients/metrics` | Per-`client_ref` visitor rollup |
 | `GET` | `/api/review-gate/metrics` | Action-screen views, sentiment, derivation rate |
 
@@ -275,11 +278,20 @@ percent-encoding, or it decodes to `https%3A%2F%2F…` and scanning leads nowher
 `public.locations` backs the per-location rollup — "which tables actually convert". Create one per
 table or zone:
 
-```sql
-INSERT INTO public.locations (tenant_id, name, slug)
-VALUES ('<tenant-id>', 'Mesa 1', 'mesa-1')
-RETURNING id;
+```bash
+curl -s -X POST "$BASE/api/locations" \
+  -H "Authorization: Bearer $TOKEN" -H "X-Tenant-Slug: $SLUG" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Mesa 1"}'
 ```
+
+The slug is derived from the name, so `"Mesa Ñoqui"` becomes `mesa-noqui` — accents are folded, not
+dropped. Supply one explicitly to override it. A duplicate slug is a `409`, never a silent suffix:
+`mesa-1` and `mesa-1-2` are indistinguishable to whoever chooses between them months later.
+
+A location's `slug` is **immutable** (`slug_immutable` on `PATCH`) — it appears on printed material
+next to the short code, so renaming it would orphan whatever the designer already produced. Renaming
+the `name` and switching `is_active` off are both allowed.
 
 Then attach the links to it, either at creation (`location_id` on each batch item) or afterwards:
 

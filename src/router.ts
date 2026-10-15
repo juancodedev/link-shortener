@@ -15,6 +15,7 @@ import { gateHandler } from "./handlers/gate";
 import { createLink, listLinks, updateLink, deleteLink, linkClicks } from "./api/links";
 import { createLinksBatch } from "./api/batch";
 import { listClientRefMetrics } from "./api/clients";
+import { listLocations, createLocation, updateLocation } from "./api/locations";
 import { reviewGateMetrics } from "./api/review-gate";
 import { createTenant, deleteTenant, listTenants } from "./api/tenants";
 import { listTenantSubscriptions, setTenantSubscription } from "./handlers/ops";
@@ -96,6 +97,14 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
   // there changed that response from a bare array into an envelope. See
   // src/api/clients.ts for the full reasoning.
   app.get("/api/clients/metrics", auth, tenantMembershipMiddleware, listClientRefMetrics);
+
+  // Locations — one table, one zone, one wall. The same chain as every other
+  // tenant-scoped route above, for the same reason: the links COUNT is a
+  // correlated subquery against the tenant's own schema, so omitting the
+  // middleware would not merely return wrong numbers, it would throw.
+  app.get("/api/locations", auth, tenantMembershipMiddleware, listLocations);
+  app.post("/api/locations", auth, tenantMembershipMiddleware, createLocation);
+  app.patch("/api/locations/:id", auth, tenantMembershipMiddleware, updateLocation);
 
   // The action screen's three views in one response. They describe the same
   // scans and the dashboard renders them on one screen, so fetching them

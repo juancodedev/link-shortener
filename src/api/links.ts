@@ -273,7 +273,8 @@ async function deleteRegistryRow(env: AppEnv, shortCode: string): Promise<void> 
 export interface CreatedLinkResource {
   id: string;
   short_code: string;
-  original_url: string;
+  /** `null` when the link is card stock: created, printed, destination not loaded yet. */
+  original_url: string | null;
   short_url: string;
   title: string | null;
   expires_at: string | null;
@@ -283,7 +284,14 @@ export interface CreatedLinkResource {
 
 /** A validated request to create one link. */
 export interface CreateLinkInput {
-  original_url: string;
+  /**
+   * Optional. Omit it to create card stock — a link that exists, is active and
+   * is ready to print, but has nowhere to forward a customer yet.
+   *
+   * A value that IS supplied is validated exactly as before. This makes the
+   * field optional, never unchecked.
+   */
+  original_url?: string;
   title?: string;
   expires_at?: string;
   client_ref?: string;
@@ -329,9 +337,47 @@ export async function createLinkCore({
 }: CreateLinkCoreArgs): Promise<CreatedLinkResource> {
   const { title, expires_at, client_ref } = input;
 
-  // --- 1. original_url is required ---
-  if (!input.original_url || typeof input.original_url !== "string") {
-    throw new ValidationError("original_url is required", "invalid_request");
+  // --- 0. The payload itself must be a link ---
+  //
+  // Placed before every field check because `original_url` becoming optional
+  // removed the check that was implicitly rejecting garbage. A batch item of
+  // "not-an-object" used to fail because it had no `original_url`; with the
+  // field optional it would quietly become card stock, and an import script
+  // would report success for a row nobody described.
+  //
+  // `null` and `[]` are rejected here too. `(item ?? {})` in the batch path
+  // turns an explicit null into `{}`, which IS a valid card-stock request, so
+  // the guard has to be on the shape rather than on a missing key.
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    throw new ValidationError("link must be an object", "invalid_request");
+  }
+
+  // --- 1. original_url is optional ---
+  //
+  // ABSENT means card stock: a link that exists, is active, and is ready to
+  // print, with nowhere to forward a customer yet. That is a real state, not a
+  // caller mistake — the owner creates the batch, the designer prints the QR,
+  // and the destination is loaded later.
+  //
+  // Present-but-wrong-type is still an error. Silently reading `12345` as
+  // "absent" would create a link whose destination nobody ever typed, and the
+  // owner would only find out when a customer scans the card.
+  //
+  // The length bound is deliberately not duplicated here. An absent URL has no
+  // length, and a supplied one is bounded by validateUrl below.
+  if (
+    input.original_url !== undefined &&
+    input.original_url !== null &&
+    typeof input.original_url !== "string"
+  ) {
+    throw new ValidationError("original_url must be a string", "invalid_request");
+  }
+  if (typeof input.original_url === "string" && input.original_url === "") {
+    // Empty string is how an HTML form posts a blank required field. Treating
+    // it as absent is what lets the dashboard create card stock without a
+    // second dialect for "blank"; treating it as a URL would send validateUrl
+    // a relative path and reject a legitimate request.
+    input = { ...input, original_url: undefined };
   }
 
   // client_ref is optional free text the user types to correlate the link with
@@ -368,16 +414,24 @@ export async function createLinkCore({
   }
 
   // --- 3. Validate URL (open-redirect protection) ---
-  let original_url = input.original_url;
-  const urlResult = validateUrl(original_url);
-  if (!urlResult.valid) {
-    throw new ValidationError(
-      `Invalid URL: ${urlResult.error}`,
-      urlResult.error ?? "invalid_url",
-    );
+  //
+  // Only when one was supplied. Card stock skips this entirely, which is the
+  // point: there is nothing to protect against, because there is no destination
+  // to be redirected to. The moment a destination is loaded it goes through
+  // validateUrl like any other, so making the field optional never makes it
+  // unvalidated.
+  let original_url: string | null = null;
+  if (input.original_url !== undefined) {
+    const urlResult = validateUrl(input.original_url);
+    if (!urlResult.valid) {
+      throw new ValidationError(
+        `Invalid URL: ${urlResult.error}`,
+        urlResult.error ?? "invalid_url",
+      );
+    }
+    // Use normalized URL (with https:// prepended if missing)
+    original_url = urlResult.normalized ?? input.original_url;
   }
-  // Use normalized URL (with https:// prepended if missing)
-  original_url = urlResult.normalized ?? original_url;
 
   // --- 4. Count active links (configured cap, T3.1) ---
   const countRow = await withClient(env, async (client) => {

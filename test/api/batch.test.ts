@@ -165,7 +165,9 @@ function mockBatchDb(opts: {
               {
                 id,
                 short_code: code,
-                original_url: url,
+                // Card stock binds null here; String() would report "null" and
+                // hide the very state these tests are about.
+                original_url: params[0] ?? null,
                 title: params[2] ?? null,
                 client_ref: params[4] ?? null,
                 created_at: "2026-01-01T00:00:00Z",
@@ -509,5 +511,145 @@ describe("POST /api/links/batch is registered on the tenant-scoped chain", () =>
     const paths = appRoutes().map((r) => r.path);
     expect(paths.indexOf("/api/links/batch")).toBeGreaterThanOrEqual(0);
     expect(paths.indexOf("/api/links/batch")).toBeLessThan(paths.indexOf("/:code"));
+  });
+});
+// ---------------------------------------------------------------------------
+// Card stock: links created before their destination exists
+//
+// The manufacturing flow is a batch: the owner creates N links carrying no
+// destination, the designer prints each short_code as a QR, and the real URL is
+// loaded later. These tests pin the two halves of that promise — the batch
+// succeeds without a destination, and it does NOT stop validating one.
+// ---------------------------------------------------------------------------
+
+describe("card stock (destination optional)", () => {
+  it("creates a link with no destination at all", async () => {
+    const calls = mockBatchDb();
+
+    const { c, jsonFn } = mockContext({
+      body: { links: [{ client_ref: "mesa-1" }] },
+    });
+
+    await createLinksBatch(c as any);
+
+    const body = jsonFn.mock.calls[0]![0] as any;
+    expect(body.created).toBe(1);
+    expect(body.failed).toBe(0);
+    expect(body.results[0].link.original_url).toBeNull();
+    expect(body.results[0].link.short_code).toBeTruthy();
+    expect(body.results[0].link.short_url).toContain(body.results[0].link.short_code);
+  });
+
+  it("creates N card-stock links in one batch", async () => {
+    // Distinct codes, because two identical QRs on two cards is the failure
+    // this whole feature exists to avoid. The suite-wide stub returns a
+    // constant, so this overrides it for the one assertion that needs variety.
+    let n = 0;
+    vi.mocked(generateShortCode).mockImplementation(() => `code${++n}`);
+    mockBatchDb();
+
+    const { c, jsonFn } = mockContext({
+      body: { links: Array.from({ length: 10 }, () => ({ client_ref: "pack" })) },
+    });
+
+    await createLinksBatch(c as any);
+
+    const body = jsonFn.mock.calls[0]![0] as any;
+    expect(body.created).toBe(10);
+    expect(body.failed).toBe(0);
+
+    // Every one must carry a distinct, PRINTABLE code — that is the whole point
+    // of the batch. A duplicate here would put two identical QRs on two cards.
+    const codes = body.results.map((r: any) => r.link.short_code);
+    expect(new Set(codes).size).toBe(10);
+  });
+
+  it("mixes configured links and card stock in one batch", async () => {
+    mockBatchDb();
+
+    const { c, jsonFn } = mockContext({
+      body: {
+        links: [
+          item({ original_url: "https://a.example" }),
+          { client_ref: "pending" },
+        ],
+      },
+    });
+
+    await createLinksBatch(c as any);
+
+    const body = jsonFn.mock.calls[0]![0] as any;
+    expect(body.created).toBe(2);
+    // Normalised on the way in, exactly as before this change.
+    expect(body.results[0].link.original_url).toBe("https://a.example/");
+    expect(body.results[1].link.original_url).toBeNull();
+  });
+
+  it("treats an empty original_url as absent, not as a relative URL", async () => {
+    // The dashboard form posts "" for a blank required field. Reading that as a
+    // URL would send validateUrl a relative path and reject a legitimate
+    // card-stock request.
+    mockBatchDb();
+
+    const { c, jsonFn } = mockContext({
+      body: { links: [{ original_url: "", client_ref: "blank" }] },
+    });
+
+    await createLinksBatch(c as any);
+
+    const body = jsonFn.mock.calls[0]![0] as any;
+    expect(body.created).toBe(1);
+    expect(body.results[0].link.original_url).toBeNull();
+  });
+
+  it("still rejects a destination that is present and invalid", async () => {
+    // Optional must never mean unchecked. A malformed destination is still a
+    // caller bug, and letting it through would create a link that 302s to
+    // nowhere once a customer scans the card.
+    mockBatchDb();
+
+    const { c, jsonFn } = mockContext({
+      body: { links: [{ original_url: "javascript:alert(1)" }] },
+    });
+
+    await createLinksBatch(c as any);
+
+    const body = jsonFn.mock.calls[0]![0] as any;
+    expect(body.created).toBe(0);
+    expect(body.failed).toBe(1);
+    expect(body.results[0].status).toBe(400);
+  });
+
+  it("still rejects a non-string destination rather than reading it as absent", async () => {
+    mockBatchDb();
+
+    const { c, jsonFn } = mockContext({
+      body: { links: [{ original_url: 12345 }] },
+    });
+
+    await createLinksBatch(c as any);
+
+    const body = jsonFn.mock.calls[0]![0] as any;
+    expect(body.created).toBe(0);
+    expect(body.results[0].status).toBe(400);
+  });
+
+  it("still rejects a garbage item rather than making card stock of it", async () => {
+    // The regression this feature invites: with original_url optional, ANY item
+    // lacking that key becomes a valid card-stock link, so an import typo would
+    // be reported as success for a row nobody described.
+    mockBatchDb();
+
+    const { c, jsonFn } = mockContext({
+      body: { links: [item(), "not-an-object", []] },
+    });
+
+    await createLinksBatch(c as any);
+
+    const body = jsonFn.mock.calls[0]![0] as any;
+    expect(body.created).toBe(1);
+    expect(body.failed).toBe(2);
+    expect(body.results[1].status).toBe(400);
+    expect(body.results[2].status).toBe(400);
   });
 });

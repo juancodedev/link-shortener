@@ -455,7 +455,10 @@ describe("error handling through the real app", () => {
 
     expect(res.status).toBe(400);
     await expect(res.json()).resolves.toEqual({
-      error: "original_url is required",
+      // Was "original_url is required", which was never true: 12345 was
+      // PRESENT, and said nothing about whether a URL is required. The field
+      // is optional now, so this reports the actual defect instead.
+      error: "original_url must be a string",
       code: "invalid_request",
     });
   });

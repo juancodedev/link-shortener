@@ -194,6 +194,8 @@ Every mutation flushes the tenant's `reg:{code}` KV entries so the change takes 
 | `DELETE` | `/api/links/:id` | Delete a link |
 | `GET` | `/api/links/:id/clicks` | Per-link analytics: country, device, source |
 | `POST` | `/api/links/batch` | Create up to 100 links in one call |
+| `GET` | `/api/links/:id/qr.svg` | One card's QR, as a print-ready SVG |
+| `POST` | `/api/links/qr-sheet.zip` | A batch of cards as a ZIP: one SVG per card plus `links.csv` |
 | `GET` | `/api/locations` | List locations (tables, zones) with a link count each |
 | `POST` | `/api/locations` | Create one location |
 | `PATCH` | `/api/locations/:id` | Rename a location or switch it off |

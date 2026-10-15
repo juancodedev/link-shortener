@@ -89,6 +89,92 @@ describe("mapError", () => {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // Database integrity violations
+  //
+  // These arrived in production as `500 internal_error` with the log line
+  // "null value in column original_url ... violates not-null constraint" — a
+  // server that was running perfectly, refusing a card because migration 00015
+  // had not been applied. An operator reading "internal_error" checks their
+  // infrastructure. An operator reading "apply migration 00015" fixes it in one
+  // step.
+  //
+  // The distinction is not cosmetic: it is the difference between a five-minute
+  // fix and a false alarm during business hours.
+  // -------------------------------------------------------------------------
+
+  it("maps an unapplied 00015 to a 409 that names the migration", () => {
+    // The exact shape observed in production.
+    const pgError = Object.assign(
+      new Error('null value in column "original_url" of relation "links" violates not-null constraint'),
+      { code: "23502", constraint: "links_original_url_not_null" },
+    );
+
+    expect(mapError(pgError)).toMatchObject({
+      status: 409,
+      body: { code: "schema_not_migrated" },
+      type: "ConstraintViolation",
+    });
+  });
+
+  it("tells the caller which migration to apply", () => {
+    const pgError = Object.assign(new Error("..."), {
+      code: "23502",
+      constraint: "links_original_url_not_null",
+    });
+
+    // The whole point: a response that says what to do, not just what failed.
+    expect(mapError(pgError).body.error).toMatch(/00015/);
+  });
+
+  it("keeps the underlying message in the log only, never in the body", () => {
+    const pgError = Object.assign(
+      new Error('null value in column "original_url" ...'),
+      { code: "23502", constraint: "links_original_url_not_null" },
+    );
+
+    // REQ-O001: no internals in a response body.
+    const mapped = mapError(pgError);
+    expect(mapped.body.error).not.toMatch(/null value in column/);
+    expect(mapped.message).toMatch(/null value in column/);
+  });
+
+  it("maps an unlisted integrity violation to a 4xx, not a 500", () => {
+    // "A valid uuid is not enough" — the server is fine, the request is not.
+    const pgError = Object.assign(new Error("..."), {
+      code: "23503",
+      constraint: "some_fk",
+    });
+
+    expect(mapError(pgError).status).toBe(409);
+  });
+
+  it("maps a unique violation on a location slug to slug_taken", () => {
+    const pgError = Object.assign(new Error("..."), {
+      code: "23505",
+      constraint: "idx_locations_tenant_slug",
+    });
+
+    expect(mapError(pgError)).toMatchObject({
+      status: 409,
+      body: { code: "slug_taken" },
+    });
+  });
+
+  it("still returns an opaque 500 for a genuine server fault", () => {
+    // A connection failure or a bug is NOT a caller error. This mapping must not
+    // become a blanket 409 that hides real outages.
+    expect(mapError(new Error("ECONNREFUSED"))).toMatchObject({
+      status: 500,
+      body: { error: "internal_error", code: "internal_error" },
+    });
+  });
+
+  it("does not mistake a string that looks like a code for a violation", () => {
+    expect(mapError({ code: "23502" })).toMatchObject({ status: 409 });
+    expect(mapError({ message: "23502" })).toMatchObject({ status: 500 });
+  });
+
   it("maps ConflictError to 409", () => {
     expect(
       mapError(new ConflictError("Already taken", "subdomain_taken")),

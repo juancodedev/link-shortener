@@ -142,6 +142,15 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       color: var(--ink-label);
       margin-bottom: 0.25rem;
     }
+    /* Qualifies the field above it, in the token layer's own faint ink — the
+       same step the placeholders use, because it is the same register: a hint,
+       not content. */
+    .field-help {
+      margin: -0.5rem 0 1rem;
+      font-size: 0.813rem;
+      line-height: 1.5;
+      color: var(--ink-faint);
+    }
     input, select {
       width: 100%;
       padding: 0.5rem 0.75rem;
@@ -621,7 +630,21 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       <h3>Create Short Link</h3>
       <form id="create-form">
         <label for="url">Destination URL</label>
-        <input type="text" id="url" placeholder="example.com or https://..." required>
+        <!--
+          NOT required.
+
+          Card stock is manufactured before its destination exists: the owner
+          creates the link, the designer prints the short_code as a QR, and the
+          real URL is loaded later. \`required\` would block that at the
+          browser and leave the API able to do something the form cannot reach.
+
+          The field stays first and stays labelled. Leaving it blank is a
+          deliberate act, not a default, and the help text says what it means —
+          an accidental empty submit should not silently create a card that
+          points nowhere.
+        -->
+        <input type="text" id="url" placeholder="example.com or https://...">
+        <p class="field-help">Leave empty to create a card first and add its destination later. Until you do, its QR opens a \"not configured\" page.</p>
         <label for="slug">Custom short code (optional)</label>
         <!--
           Pre-printed tags. A sticker is printed ONCE and lives in the world for
@@ -826,8 +849,14 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           // not lean on that when it can simply omit the key.
           const slugValue = document.getElementById("slug").value.trim();
 
+          // A blank destination is OMITTED, not sent as "". The server treats "" as
+          // absent too, but omitting states the intent at the boundary rather
+          // than relying on a coercion the reader has to go and find. This is
+          // what makes card stock creatable from the form.
+          const urlValue = document.getElementById("url").value.trim();
+
           const res = await window.__api("POST", "/api/links", {
-            original_url: document.getElementById("url").value,
+            ...(urlValue ? { original_url: urlValue } : {}),
             title: document.getElementById("title").value || undefined,
             slug: slugValue || undefined,
           });
@@ -844,7 +873,12 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           document.getElementById("title").value = "";
           document.getElementById("slug").value = "";
           msg.className = "message success";
-          msg.textContent = "Link created! Copied to clipboard.";
+          // A card and a link are different objects, and saying "Link created!" for one
+          // that has nowhere to point yet is a small lie the owner discovers
+          // later, when a customer scans the sticker. Name the state instead.
+          msg.textContent = data.original_url
+            ? "Link created! Copied to clipboard."
+            : "Card created! Its QR opens a 'not configured' page until you add a destination.";
           navigator.clipboard.writeText(data.short_url);
           loadLinks();
         } catch (err) {

@@ -22,7 +22,7 @@ import { buildQuery } from "../db/schema";
 export const TENANT_DDL = `
 CREATE TABLE IF NOT EXISTS {schema}.links (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  original_url TEXT NOT NULL,
+  original_url TEXT,
   short_code TEXT NOT NULL,
   title TEXT,
   client_ref TEXT,

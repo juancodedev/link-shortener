@@ -2125,3 +2125,182 @@ describe("updateLink cannot change a slug", () => {
     expect(jsonFn).toHaveBeenCalledWith({ ok: true });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Loading a destination onto card stock (T3)
+//
+// The manufacturing flow depends on this working AFTER the sticker is printed:
+// create N links, print the QRs, then load the real destinations. `short_code`
+// stays immutable — it is what is on the sticker — and only the destination
+// behind it is editable.
+// ---------------------------------------------------------------------------
+
+describe("original_url on updateLink", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(generateShortCode).mockReturnValue("abc1234");
+    mockCacheDefaults();
+  });
+
+  it("loads a destination onto a link that has none", async () => {
+    const calls = mockRecordingDb([
+      [{ short_code: "abc1234", is_active: true }],
+    ]);
+
+    const { c, jsonFn } = mockContext({
+      params: { id: "link-uuid" },
+      body: { original_url: "https://g.page/ACME/review" },
+    });
+
+    await updateLink(c as any);
+
+    const update = calls.find((q) => /^UPDATE/i.test(q.sql.trim()))!;
+    expect(update.sql).toMatch(/original_url\s*=/);
+    expect(update.params).toContain("https://g.page/ACME/review");
+    expect(jsonFn).toHaveBeenCalledWith({ ok: true });
+  });
+
+  it("rejects a scheme-less destination, exactly as creation does", async () => {
+    const { c } = mockContext({
+      params: { id: "link-uuid" },
+      body: { original_url: "g.page/ACME/review" },
+    });
+
+    // Creation refuses a scheme-less URL rather than assuming https, and the
+    // open-redirect guard must not be weaker on the late path than the
+    // original one. Card stock makes this path reachable at a moment the owner
+    // did not choose, so a typo here is likelier, not less.
+    await expect(updateLink(c as any)).rejects.toThrow(ValidationError);
+    expect(withClient).not.toHaveBeenCalled();
+  });
+
+  it("clears a destination back to unconfigured with null", async () => {
+    const calls = mockRecordingDb([
+      [{ short_code: "abc1234", is_active: true }],
+    ]);
+
+    const { c, jsonFn } = mockContext({
+      params: { id: "link-uuid" },
+      body: { original_url: null },
+    });
+
+    await updateLink(c as any);
+
+    const update = calls.find((q) => /^UPDATE/i.test(q.sql.trim()))!;
+    // Inlined, so it must not consume a bind slot or shift the WHERE id.
+    expect(update.sql).toMatch(/original_url = NULL/);
+    expect(update.sql).toMatch(/WHERE id = \$1\b/);
+    expect(update.params).toEqual(["link-uuid"]);
+    expect(jsonFn).toHaveBeenCalledWith({ ok: true });
+  });
+
+  it("treats an empty string as clear, because the form posts a blank field", async () => {
+    const calls = mockRecordingDb([
+      [{ short_code: "abc1234", is_active: true }],
+    ]);
+
+    const { c } = mockContext({
+      params: { id: "link-uuid" },
+      body: { original_url: "" },
+    });
+
+    await updateLink(c as any);
+
+    const update = calls.find((q) => /^UPDATE/i.test(q.sql.trim()))!;
+    expect(update.sql).toMatch(/original_url = NULL/);
+  });
+
+  it("still rejects a destination that is present and unsafe", async () => {
+    // A late-loaded destination goes through the same open-redirect guard as a
+    // created one. Card stock makes this path reachable at a time the owner did
+    // not choose, so the guard cannot be the weaker one.
+    const { c } = mockContext({
+      params: { id: "link-uuid" },
+      body: { original_url: "javascript:alert(1)" },
+    });
+
+    await expect(updateLink(c as any)).rejects.toThrow(ValidationError);
+    expect(withClient).not.toHaveBeenCalled();
+  });
+
+  it("rejects a wrong-typed destination rather than silently dropping it", async () => {
+    const { c } = mockContext({
+      params: { id: "link-uuid" },
+      body: { original_url: 12345 },
+    });
+
+    await expect(updateLink(c as any)).rejects.toThrow(ValidationError);
+    expect(withClient).not.toHaveBeenCalled();
+  });
+
+  it("STILL rejects a slug — immutability of the printed code is untouched", async () => {
+    // The regression this feature invites: relaxing the destination and quietly
+    // relaxing the code with it. The code is what is on the sticker.
+    const { c } = mockContext({
+      params: { id: "link-uuid" },
+      body: { slug: "renamed" },
+    });
+
+    await expect(updateLink(c as any)).rejects.toThrow(ValidationError);
+    expect(withClient).not.toHaveBeenCalled();
+  });
+
+  it("rejects a rename even when it rides alongside a destination load", async () => {
+    const { c } = mockContext({
+      params: { id: "link-uuid" },
+      body: { slug: "renamed", original_url: "https://g.page/x" },
+    });
+
+    await expect(updateLink(c as any)).rejects.toThrow(ValidationError);
+    // Half-applied is the shape to avoid: the destination must not land while
+    // the rename is refused.
+    expect(withClient).not.toHaveBeenCalled();
+  });
+
+  it("invalidates the redirect cache, or the sticker serves the old destination", async () => {
+    // The cache stores the DESTINATION for 24h. Load a new one and skip this,
+    // and the owner pastes the sticker, the customer scans, and gets the
+    // previous target with no error anywhere.
+    mockRecordingDb([[{ short_code: "abc1234", is_active: true }]]);
+
+    const { c, waitUntilFn } = mockContext({
+      params: { id: "link-uuid" },
+      body: { original_url: "https://g.page/new" },
+    });
+
+    await updateLink(c as any);
+
+    expect(invalidateCachedUrl).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      "abc1234",
+    );
+    await Promise.all(waitUntilFn.mock.calls.map((p: any) => p));
+  });
+
+  it("loads a destination and a client_ref together, as the dashboard does", async () => {
+    const calls = mockRecordingDb([
+      [{ short_code: "abc1234", is_active: true }],
+    ]);
+
+    const { c } = mockContext({
+      params: { id: "link-uuid" },
+      body: { original_url: "https://g.page/x", client_ref: "ACME-1" },
+    });
+
+    await updateLink(c as any);
+
+    const update = calls.find((q) => /^UPDATE/i.test(q.sql.trim()))!;
+    expect(update.sql).toMatch(/original_url\s*=/);
+    expect(update.sql).toMatch(/client_ref\s*=/);
+    // Order follows the SET clause, not the request body: client_ref is
+    // pushed before original_url. Asserted exactly rather than with
+    // toContain, because a positional bind list is what a future reordering
+    // would silently break — the id must stay last, after both fields.
+    expect(update.params).toEqual([
+      "ACME-1",
+      "https://g.page/x",
+      "link-uuid",
+    ]);
+  });
+});

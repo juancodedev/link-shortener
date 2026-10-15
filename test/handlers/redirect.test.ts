@@ -38,6 +38,7 @@ import { withClient } from "../../src/db/client";
 import {
   getCachedUrl,
   getCachedRegistryEntry,
+  setCachedUrl,
   setCachedRegistryEntry,
 } from "../../src/cache/shortcode";
 import { trackClick } from "../../src/analytics/tracker";
@@ -827,4 +828,185 @@ describe("pause page — reactivation path", () => {
     }
   });
 });
+});
+
+// ---------------------------------------------------------------------------
+// Card stock on scan (T4)
+//
+// A manufactured card is ACTIVE and has no destination. Someone scanning it is
+// usually the designer, mid-batch, and the correct outcome is a page that says
+// so — not a 404, which reads as a broken product and is the reason a batch
+// gets abandoned.
+// ---------------------------------------------------------------------------
+
+describe("scanning a card that has no destination yet", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    // An earlier describe installs a module-level spy on resolveRegistryEntry
+    // and never restores it. clearAllMocks() resets what that spy was told to
+    // return, NOT which functions are still spied, so the stale `past_due`
+    // answer survives into this block and every scan becomes a 402. Restoring
+    // here is what makes these tests independent of the ones above them.
+    vi.restoreAllMocks();
+    vi.mocked(getCachedRegistryEntry).mockResolvedValue(null);
+    vi.mocked(getCachedUrl).mockResolvedValue(null);
+    vi.mocked(trackClick).mockResolvedValue(undefined);
+  });
+
+
+  /**
+   * Serves a card whose link row carries no original_url.
+   *
+   * The not-configured branch returns a raw `Response`, so it is observable
+   * only through the promise the handler returns — not through `c.json` or
+   * `c.redirect`. Reading the wrong one is how a test would end up asserting
+   * on undefined and blaming the page.
+   */
+  async function scanUnconfigured(over: Record<string, unknown> = {}) {
+    mockColdPath({ links: [linkRow({ original_url: null, ...over })] });
+
+    const { c, waitUntilFn } = mockContext({});
+    const response = (await redirectHandler(c as any)) as Response;
+    await Promise.all(waitUntilFn.mock.calls.map((p: any) => p));
+
+    return { response, status: response.status, body: await response.text() };
+  }
+
+  it("serves a page, not a 404", async () => {
+    const { status } = await scanUnconfigured();
+
+    // 404 here is the bug this whole branch exists to prevent.
+    expect(status).toBe(200);
+  });
+
+  it("never redirects the customer anywhere", async () => {
+    const { response, body } = await scanUnconfigured();
+
+    // A card with no destination has nothing to forward to, so there is no
+    // Location header and no script that navigates.
+    expect(response.headers.get("Location")).toBeNull();
+    expect(body).not.toMatch(/location\.href\s*=/i);
+    expect(body).not.toContain("http-equiv=\"refresh\"");
+  });
+
+  it("says the card is real and simply not configured", async () => {
+    const { body } = await scanUnconfigured();
+
+    expect(body).toContain("Sin configurar");
+    // The reassuring half matters as much as the factual half: whoever is
+    // holding this card needs to believe the card itself is fine.
+    expect(body).toContain("tarjeta real");
+  });
+
+  it("never leaks undefined or null into the rendered page", async () => {
+    const { body } = await scanUnconfigured();
+
+    // A visible "undefined" or "null" is the tell that a template was filled
+    // from a field that does not exist on this branch.
+    expect(body).not.toMatch(/>\s*(undefined|null)\s*</);
+    expect(body).not.toContain("undefined");
+  });
+
+  it("shows the short code so the owner can find the card", async () => {
+    const { body } = await scanUnconfigured();
+
+    expect(body).toContain("abc123");
+  });
+
+  it("shows client_ref when set, because it is how the card is identified", async () => {
+    const { body } = await scanUnconfigured({ client_ref: "MESA-7" });
+
+    expect(body).toContain("MESA-7");
+  });
+
+  it("omits the client_ref line's value when the owner has not set one", async () => {
+    const { body } = await scanUnconfigured({ client_ref: null });
+
+    // The code is still shown, so the page is never anonymous — it just does
+    // not render an empty element.
+    expect(body).toContain("abc123");
+    expect(body).not.toMatch(/<code>\s*<\/code>/);
+  });
+
+  it("escapes a client_ref carrying markup", async () => {
+    const { body } = await scanUnconfigured({
+      client_ref: '<img src=x onerror=alert(1)>',
+    });
+
+    // This page is rendered to whoever scanned the card, including the public.
+    expect(body).not.toContain("<img src=x");
+    expect(body).toContain("&lt;img");
+  });
+
+  it("marks itself noindex, so a half-manufactured card is never indexed", async () => {
+    const { body } = await scanUnconfigured();
+
+    expect(body).toContain('name="robots" content="noindex, nofollow"');
+  });
+
+  it("sends no-store, so a card cannot be pinned unconfigured by a CDN", async () => {
+    const { response } = await scanUnconfigured();
+
+    // The page must not outlive the moment a destination is loaded.
+    expect(response.headers.get("Cache-Control")).toContain("no-store");
+  });
+
+  it("does not cache the null destination in KV", async () => {
+    mockColdPath({ links: [linkRow({ original_url: null })] });
+    const { c, waitUntilFn } = mockContext({});
+
+    await redirectHandler(c as any);
+    await Promise.all(waitUntilFn.mock.calls.map((p: any) => p));
+
+    // A cached `null` is unreadable by the cache reader and, worse, could be
+    // served as a stale destination once one is loaded.
+    expect(setCachedUrl).not.toHaveBeenCalled();
+  });
+
+  it("still 302s normally once a destination exists", async () => {
+    mockColdPath({ links: [linkRow({ original_url: "https://g.page/x" })] });
+    const { c, redirectFn } = mockContext({});
+
+    await redirectHandler(c as any);
+
+    expect(redirectFn).toHaveBeenCalledWith("https://g.page/x", 302);
+  });
+
+  it("does not show the not-configured page for an INACTIVE card", async () => {
+    // Lifecycle wins. An unconfigured card that was also switched off reports
+    // the switch, not the missing destination.
+    mockColdPath({ links: [linkRow({ original_url: null, is_active: false })] });
+    const { c, jsonFn } = mockContext({});
+
+    await redirectHandler(c as any);
+
+    expect(jsonFn).toHaveBeenCalledWith({ error: "link_inactive" }, 410);
+  });
+
+  it("does not show the not-configured page for an EXPIRED card", async () => {
+    mockColdPath({
+      links: [
+        linkRow({
+          original_url: null,
+          expires_at: new Date(Date.now() - 86_400_000).toISOString(),
+        }),
+      ],
+    });
+    const { c, jsonFn } = mockContext({});
+
+    await redirectHandler(c as any);
+
+    expect(jsonFn).toHaveBeenCalledWith({ error: "link_expired" }, 410);
+  });
+
+  it("still 404s a code that does not exist at all", async () => {
+    // Unconfigured and absent are different facts. Collapsing them would tell a
+    // stranger that a card exists when none does.
+    mockDb({ registry: [], links: [] });
+    const { c, jsonFn } = mockContext({});
+
+    await redirectHandler(c as any);
+
+    expect(jsonFn).toHaveBeenCalledWith({ error: "not_found" }, 404);
+  });
 });

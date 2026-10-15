@@ -1208,3 +1208,70 @@ describe("the QR image encodes the short URL, not its encoded form", () => {
     expect(src).not.toContain("decodeURIComponent");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Creating card stock from the form (T4 UI)
+//
+// The API can create a destination-less link. If the form still says
+// `required`, that capability is unreachable by the person who needs it, and
+// the API is right for no one. These tests pin the two halves of the form —
+// that the browser does not block an empty destination, and that the handler
+// omits the key rather than sending a blank one.
+// ---------------------------------------------------------------------------
+
+describe("the create form can manufacture card stock", () => {
+  it("does not mark the destination as required", async () => {
+    const html = await serve();
+
+    // `required` would block the exact flow this feature exists for, in the
+    // one place the owner actually types.
+    expect(html).not.toMatch(/<input[^>]*id="url"[^>]*\brequired\b/);
+  });
+
+  it("keeps the destination field, labelled and first", async () => {
+    const html = await serve();
+
+    // Optional must not mean hidden or deprioritised — creating a normal link
+    // is the common case and must stay the obvious one.
+    expect(html).toContain('<label for="url">Destination URL</label>');
+    expect(html).toContain('id="url"');
+  });
+
+  it("says what an empty destination produces", async () => {
+    const html = await serve();
+
+    // A blank submit that silently creates a card pointing nowhere is the
+    // accident this helps avoid, so the consequence is stated on the form.
+    expect(html).toContain("field-help");
+    expect(html).toContain("later");
+  });
+
+  it("omits original_url entirely when the field is blank", async () => {
+    const script = await clientScript();
+
+    // Sending "" would rely on a server-side coercion the reader has to go and
+    // find. Omitting states the intent at the boundary.
+    expect(script).toContain("...(urlValue ? { original_url: urlValue } : {})");
+  });
+
+  it("trims the destination before sending it", async () => {
+    const script = await clientScript();
+
+    expect(script).toContain('getElementById("url").value.trim()');
+  });
+
+  it("distinguishes a card from a link in the confirmation", async () => {
+    const script = await clientScript();
+
+    // "Link created!" for a link with no destination is a small lie the owner
+    // discovers later, when a customer scans the sticker.
+    expect(script).toContain("Card created!");
+    expect(script).toContain("data.original_url");
+  });
+
+  it("still clears the destination field after creating", async () => {
+    const script = await clientScript();
+
+    expect(script).toContain('document.getElementById("url").value = ""');
+  });
+});

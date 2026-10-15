@@ -273,7 +273,8 @@ async function deleteRegistryRow(env: AppEnv, shortCode: string): Promise<void> 
 export interface CreatedLinkResource {
   id: string;
   short_code: string;
-  original_url: string;
+  /** `null` when the link is card stock: created, printed, destination not loaded yet. */
+  original_url: string | null;
   short_url: string;
   title: string | null;
   expires_at: string | null;
@@ -283,7 +284,14 @@ export interface CreatedLinkResource {
 
 /** A validated request to create one link. */
 export interface CreateLinkInput {
-  original_url: string;
+  /**
+   * Optional. Omit it to create card stock — a link that exists, is active and
+   * is ready to print, but has nowhere to forward a customer yet.
+   *
+   * A value that IS supplied is validated exactly as before. This makes the
+   * field optional, never unchecked.
+   */
+  original_url?: string;
   title?: string;
   expires_at?: string;
   client_ref?: string;
@@ -329,9 +337,47 @@ export async function createLinkCore({
 }: CreateLinkCoreArgs): Promise<CreatedLinkResource> {
   const { title, expires_at, client_ref } = input;
 
-  // --- 1. original_url is required ---
-  if (!input.original_url || typeof input.original_url !== "string") {
-    throw new ValidationError("original_url is required", "invalid_request");
+  // --- 0. The payload itself must be a link ---
+  //
+  // Placed before every field check because `original_url` becoming optional
+  // removed the check that was implicitly rejecting garbage. A batch item of
+  // "not-an-object" used to fail because it had no `original_url`; with the
+  // field optional it would quietly become card stock, and an import script
+  // would report success for a row nobody described.
+  //
+  // `null` and `[]` are rejected here too. `(item ?? {})` in the batch path
+  // turns an explicit null into `{}`, which IS a valid card-stock request, so
+  // the guard has to be on the shape rather than on a missing key.
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    throw new ValidationError("link must be an object", "invalid_request");
+  }
+
+  // --- 1. original_url is optional ---
+  //
+  // ABSENT means card stock: a link that exists, is active, and is ready to
+  // print, with nowhere to forward a customer yet. That is a real state, not a
+  // caller mistake — the owner creates the batch, the designer prints the QR,
+  // and the destination is loaded later.
+  //
+  // Present-but-wrong-type is still an error. Silently reading `12345` as
+  // "absent" would create a link whose destination nobody ever typed, and the
+  // owner would only find out when a customer scans the card.
+  //
+  // The length bound is deliberately not duplicated here. An absent URL has no
+  // length, and a supplied one is bounded by validateUrl below.
+  if (
+    input.original_url !== undefined &&
+    input.original_url !== null &&
+    typeof input.original_url !== "string"
+  ) {
+    throw new ValidationError("original_url must be a string", "invalid_request");
+  }
+  if (typeof input.original_url === "string" && input.original_url === "") {
+    // Empty string is how an HTML form posts a blank required field. Treating
+    // it as absent is what lets the dashboard create card stock without a
+    // second dialect for "blank"; treating it as a URL would send validateUrl
+    // a relative path and reject a legitimate request.
+    input = { ...input, original_url: undefined };
   }
 
   // client_ref is optional free text the user types to correlate the link with
@@ -368,16 +414,24 @@ export async function createLinkCore({
   }
 
   // --- 3. Validate URL (open-redirect protection) ---
-  let original_url = input.original_url;
-  const urlResult = validateUrl(original_url);
-  if (!urlResult.valid) {
-    throw new ValidationError(
-      `Invalid URL: ${urlResult.error}`,
-      urlResult.error ?? "invalid_url",
-    );
+  //
+  // Only when one was supplied. Card stock skips this entirely, which is the
+  // point: there is nothing to protect against, because there is no destination
+  // to be redirected to. The moment a destination is loaded it goes through
+  // validateUrl like any other, so making the field optional never makes it
+  // unvalidated.
+  let original_url: string | null = null;
+  if (input.original_url !== undefined) {
+    const urlResult = validateUrl(input.original_url);
+    if (!urlResult.valid) {
+      throw new ValidationError(
+        `Invalid URL: ${urlResult.error}`,
+        urlResult.error ?? "invalid_url",
+      );
+    }
+    // Use normalized URL (with https:// prepended if missing)
+    original_url = urlResult.normalized ?? input.original_url;
   }
-  // Use normalized URL (with https:// prepended if missing)
-  original_url = urlResult.normalized ?? original_url;
 
   // --- 4. Count active links (configured cap, T3.1) ---
   const countRow = await withClient(env, async (client) => {
@@ -670,6 +724,7 @@ export const updateLink: Handler<{
     is_active?: boolean;
     title?: string;
     client_ref?: string;
+    original_url?: string | null;
     slug?: unknown;
   };
   try {
@@ -685,6 +740,39 @@ export const updateLink: Handler<{
       "slug cannot be changed: a link's URL is immutable once printed",
       "slug_immutable",
     );
+  }
+
+  // --- original_url: the editable half ---
+  //
+  // `short_code` is immutable above, and this is the distinction the whole
+  // card-stock feature rests on. The code is what is PRINTED, so it exists from
+  // the moment the card does and can never change. The destination is what is
+  // BEHIND the code, and nothing physical depends on it — which is exactly why
+  // it can be loaded late, corrected, or cleared back to unconfigured without
+  // touching a single sticker in the world.
+  //
+  // Empty string and null both mean "back to not configured". That is not
+  // leniency for its own sake: a destination that is wrong is worse than one
+  // that is absent, because absent reaches a page that says so while wrong
+  // forwards customers somewhere unintended with no signal at all.
+  if (body.original_url !== undefined) {
+    if (body.original_url === null || body.original_url === "") {
+      body.original_url = null;
+    } else if (typeof body.original_url !== "string") {
+      throw new ValidationError(
+        "original_url must be a string or null",
+        "invalid_request",
+      );
+    } else {
+      const result = validateUrl(body.original_url);
+      if (!result.valid) {
+        throw new ValidationError(
+          `Invalid URL: ${result.error}`,
+          result.error ?? "invalid_url",
+        );
+      }
+      body.original_url = result.normalized ?? body.original_url;
+    }
   }
 
   // Reject a wrong-typed client_ref up front rather than silently ignoring it:
@@ -729,6 +817,14 @@ export const updateLink: Handler<{
       sets.push(`client_ref = $${vals.length + 1}`);
       vals.push(body.client_ref);
     }
+    // Explicit null clears back to unconfigured. Takes no bind param, so it
+    // must not consume a slot — the same rule client_ref follows.
+    if (body.original_url === null) {
+      sets.push(`original_url = NULL`);
+    } else if (typeof body.original_url === "string") {
+      sets.push(`original_url = $${vals.length + 1}`);
+      vals.push(body.original_url);
+    }
 
     if (sets.length === 0) {
       throw new ValidationError("No fields to update", "invalid_request");
@@ -747,7 +843,13 @@ export const updateLink: Handler<{
   if (rows.length === 0) throw new NotFoundError("Link not found", "not_found");
 
   // Invalidate KV cache on status change
-  if (typeof body.is_active === "boolean") {
+  //
+  // original_url joins this list for the same reason is_active is on it, and
+  // it matters more here: the cache stores the DESTINATION, with a 24h TTL.
+  // Load a destination onto a card and the redirect keeps serving the previous
+  // one for up to a day, so the owner pastes the sticker, the customer scans,
+  // and nothing happens — with no error anywhere to explain it.
+  if (typeof body.is_active === "boolean" || body.original_url !== undefined) {
     c.executionCtx.waitUntil(
       invalidateCachedUrl(c.env, tenant.tenantSlug, rows[0]!.short_code).catch(() => {}),
     );

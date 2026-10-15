@@ -73,6 +73,7 @@ vi.mock("../../src/middleware/tenant", () => ({
 
 import { withClient } from "../../src/db/client";
 import { generateShortCode } from "../../src/utils/short-code";
+import { setCachedUrl } from "../../src/cache/shortcode";
 import { createLinksBatch, MAX_BATCH_SIZE } from "../../src/api/batch";
 import { createApp } from "../../src/router";
 
@@ -134,7 +135,13 @@ function mockBatchDb(opts: {
   perTenantCollisions?: string[];
   /** short_code values whose registry claim loses the global PRIMARY KEY. */
   takenCodes?: string[];
+  /** location ids `SELECT id FROM public.locations` resolves as this tenant's. */
+  ownedLocations?: string[];
+  /** location ids the lookup returns nothing for — wrong tenant, or deleted. */
+  unknownLocations?: string[];
 } = {}) {
+  const owned = new Set(opts.ownedLocations ?? []);
+  const unknown = new Set(opts.unknownLocations ?? []);
   const perTenant = new Set(opts.perTenantCollisions ?? []);
   const taken = new Set(opts.takenCodes ?? []);
   const calls: { sql: string; params: unknown[] }[] = [];
@@ -144,6 +151,15 @@ function mockBatchDb(opts: {
     fn({
       query: vi.fn().mockImplementation(async (sql: string, params: unknown[] = []) => {
         calls.push({ sql, params });
+
+        if (sql.includes("public.locations")) {
+          const id = String(params[0]);
+          if (unknown.has(id)) return { rows: [], rowCount: 0 };
+          if (owned.has(id)) return { rows: [{ id }], rowCount: 1 };
+          // Unlisted ids resolve as absent, which is what an unconfigured
+          // tenant's location table looks like.
+          return { rows: [], rowCount: 0 };
+        }
 
         if (sql.includes("SELECT COUNT")) {
           return { rows: [{ count: String(opts.activeCount ?? 0) }], rowCount: 1 };
@@ -170,6 +186,8 @@ function mockBatchDb(opts: {
                 original_url: params[0] ?? null,
                 title: params[2] ?? null,
                 client_ref: params[4] ?? null,
+                is_gated: params[5] ?? false,
+                location_id: params[6] ?? null,
                 created_at: "2026-01-01T00:00:00Z",
               },
             ],
@@ -651,5 +669,194 @@ describe("card stock (destination optional)", () => {
     expect(body.failed).toBe(2);
     expect(body.results[1].status).toBe(400);
     expect(body.results[2].status).toBe(400);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The review gate and the location
+//
+// Until now `is_gated` shipped as a column in 00008 and was read by the
+// redirect on every scan, and NOTHING could write it. The satisfaction panel
+// reads `analytics.tag_ratings`, and the only thing that writes that table is
+// the gate — so with no way to set the flag, the panel was decorative and
+// would have read zero forever no matter how many stickers were printed.
+//
+// `location_id` is the same shape of gap: the per-location rollup is what the
+// product is sold on, and it groups on this column.
+// ---------------------------------------------------------------------------
+
+describe("the review gate and the location", () => {
+  beforeEach(() => {
+    // clearAllMocks, NOT resetAllMocks — see the note above: resetAllMocks
+    // strips the mocked module implementations the batch path depends on.
+    vi.clearAllMocks();
+    vi.mocked(generateShortCode).mockReturnValue("gen1234");
+  });
+
+  it("creates a gated link that will actually open the gate", async () => {
+    const calls = mockBatchDb();
+
+    const { c, jsonFn } = mockContext({
+      body: { links: [{ original_url: "https://g.page/x", is_gated: true }] },
+    });
+
+    await createLinksBatch(c as any);
+
+    const insert = calls.find((q) => /INSERT INTO.*links/i.test(q.sql))!;
+    expect(insert.params).toContain(true);
+
+    // Read back, so a caller need not trust that a 201 meant it worked.
+    const body = jsonFn.mock.calls[0]![0] as any;
+    expect(body.results[0].link.is_gated).toBe(true);
+  });
+
+  it("carries is_gated into the KV entry that the redirect reads", async () => {
+    // Without this the redirect 302s straight past the gate for 24h on a warm
+    // cache: the link looks created, scans record nothing, the panel stays
+    // empty, and no error appears anywhere.
+    mockBatchDb();
+
+    const { c } = mockContext({
+      body: { links: [{ original_url: "https://g.page/x", is_gated: true }] },
+    });
+
+    await createLinksBatch(c as any);
+
+    const payload = JSON.parse(vi.mocked(setCachedUrl).mock.calls[0]![3] as string);
+    expect(payload.isGated).toBe(true);
+  });
+
+  it("binds false, not null, when the gate was not requested", async () => {
+    const calls = mockBatchDb();
+
+    const { c } = mockContext({
+      body: { links: [{ original_url: "https://a.example" }] },
+    });
+
+    await createLinksBatch(c as any);
+
+    // is_gated is NOT NULL DEFAULT false. Binding null would let the column
+    // take its default and make "off" indistinguishable from "not asked".
+    const insert = calls.find((q) => /INSERT INTO.*links/i.test(q.sql))!;
+    expect(insert.params).toContain(false);
+  });
+
+  it("attaches a link to a location the tenant owns", async () => {
+    const calls = mockBatchDb({ ownedLocations: ["loc-1"] });
+
+    const { c, jsonFn } = mockContext({
+      body: {
+        links: [{ original_url: "https://g.page/x", location_id: "loc-1" }],
+      },
+    });
+
+    await createLinksBatch(c as any);
+
+    const insert = calls.find((q) => /INSERT INTO.*links/i.test(q.sql))!;
+    expect(insert.params).toContain("loc-1");
+
+    const body = jsonFn.mock.calls[0]![0] as any;
+    expect(body.results[0].link.location_id).toBe("loc-1");
+  });
+
+  it("creates a card that is gated AND attached, which is the real workflow", async () => {
+    const calls = mockBatchDb({ ownedLocations: ["loc-1"] });
+
+    const { c, jsonFn } = mockContext({
+      body: {
+        links: [{ is_gated: true, location_id: "loc-1", client_ref: "mesa-1" }],
+      },
+    });
+
+    await createLinksBatch(c as any);
+
+    const insert = calls.find((q) => /INSERT INTO.*links/i.test(q.sql))!;
+    expect(insert.params).toContain(true);
+    expect(insert.params).toContain("loc-1");
+
+    const body = jsonFn.mock.calls[0]![0] as any;
+    expect(body.created).toBe(1);
+    expect(body.results[0].link.is_gated).toBe(true);
+    expect(body.results[0].link.location_id).toBe("loc-1");
+  });
+
+  it("builds a pack of gated cards across several locations", async () => {
+    const calls = mockBatchDb({ ownedLocations: ["loc-1", "loc-2"] });
+
+    const { c, jsonFn } = mockContext({
+      body: {
+        links: [
+          { is_gated: true, location_id: "loc-1" },
+          { is_gated: true, location_id: "loc-1" },
+          { is_gated: true, location_id: "loc-2" },
+        ],
+      },
+    });
+
+    await createLinksBatch(c as any);
+
+    const body = jsonFn.mock.calls[0]![0] as any;
+    expect(body.created).toBe(3);
+    // Two tables, two locations — the per-location rollup can now answer
+    // "which tables actually convert", which is what the product is sold on.
+    expect(body.results.filter((r: any) => r.link.location_id === "loc-1")).toHaveLength(2);
+    expect(body.results.filter((r: any) => r.link.location_id === "loc-2")).toHaveLength(1);
+    expect(calls.length).toBeGreaterThan(0);
+  });
+
+  it("refuses a location the tenant does not own", async () => {
+    // A valid uuid belonging to another tenant would attribute THIS tenant's
+    // scans to THEIR numbers.
+    mockBatchDb({ unknownLocations: ["loc-other"] });
+
+    const { c, jsonFn } = mockContext({
+      body: {
+        links: [{ original_url: "https://g.page/x", location_id: "loc-other" }],
+      },
+    });
+
+    await createLinksBatch(c as any);
+
+    const body = jsonFn.mock.calls[0]![0] as any;
+    expect(body.created).toBe(0);
+    expect(body.results[0].status).toBe(400);
+  });
+
+  it("refuses a wrong-typed gate rather than silently leaving it off", async () => {
+    // `is_gated: "yes"` returning 201 would leave the owner believing the gate
+    // is on while customers are forwarded past it and nothing records.
+    mockBatchDb();
+
+    const { c, jsonFn } = mockContext({
+      body: { links: [{ original_url: "https://g.page/x", is_gated: "yes" }] },
+    });
+
+    await createLinksBatch(c as any);
+
+    const body = jsonFn.mock.calls[0]![0] as any;
+    expect(body.created).toBe(0);
+    expect(body.results[0].status).toBe(400);
+  });
+
+  it("reports which items failed rather than aborting the whole pack", async () => {
+    mockBatchDb({ unknownLocations: ["loc-other"] });
+
+    const { c, jsonFn } = mockContext({
+      body: {
+        links: [
+          { is_gated: true },
+          { is_gated: true, location_id: "loc-other" },
+          { is_gated: true },
+        ],
+      },
+    });
+
+    await createLinksBatch(c as any);
+
+    // A pack of stickers is worthless if one bad row loses the other nine.
+    const body = jsonFn.mock.calls[0]![0] as any;
+    expect(body.created).toBe(2);
+    expect(body.failed).toBe(1);
+    expect(body.results[1].status).toBe(400);
   });
 });

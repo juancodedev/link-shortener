@@ -280,6 +280,9 @@ export interface CreatedLinkResource {
   expires_at: string | null;
   client_ref: string | null;
   created_at: string;
+  /** Whether the review gate is on. Read back so a caller need not assume. */
+  is_gated: boolean;
+  location_id: string | null;
 }
 
 /** A validated request to create one link. */
@@ -295,6 +298,27 @@ export interface CreateLinkInput {
   title?: string;
   expires_at?: string;
   client_ref?: string;
+  /**
+   * Open the review gate on this link.
+   *
+   * This is the difference between a link that forwards a customer straight to
+   * their destination and one that asks which path they took. WITHOUT it the
+   * customer is 302'd away in a single hop, nothing is ever recorded, and the
+   * satisfaction panel stays at zero forever — there is no code path that
+   * produces the numbers otherwise.
+   *
+   * The column shipped in 00008 and the redirect has always read it, but until
+   * now nothing could write it: the panel was decorative.
+   */
+  is_gated?: boolean;
+  /**
+   * Attach this link to a location — one table, one zone, one sticker.
+   *
+   * The per-location rollup is what the product is sold on ("which tables
+   * actually convert"), and it groups on this id. A link with no location still
+   * counts toward the tenant-wide totals; it just cannot be attributed.
+   */
+  location_id?: string;
   /** Optional caller-chosen slug — for pre-printed tags. See D1/D2. */
   slug?: string;
 }
@@ -392,6 +416,43 @@ export async function createLinkCore({
       `client_ref must be at most ${MAX_CLIENT_REF_LENGTH} characters`,
       "invalid_request",
     );
+  }
+
+  // --- 1b. The review gate and the location ---
+  //
+  // Both are booleans/uuids rather than free text, so the only thing worth
+  // checking is the TYPE. A caller that sends `is_gated: "yes"` and receives a
+  // 201 would believe the gate is on while customers are being forwarded
+  // straight past it and nothing is ever recorded — the numbers would silently
+  // stay at zero, which is exactly the failure this exists to make reachable.
+  if (input.is_gated !== undefined && typeof input.is_gated !== "boolean") {
+    throw new ValidationError("is_gated must be a boolean", "invalid_request");
+  }
+  if (
+    input.location_id !== undefined &&
+    input.location_id !== null &&
+    typeof input.location_id !== "string"
+  ) {
+    throw new ValidationError("location_id must be a string", "invalid_request");
+  }
+
+  // Ownership is verified BEFORE the insert rather than trusted: a location id
+  // is a uuid and therefore safe to interpolate, but "valid uuid" is not
+  // "yours". Attaching another tenant's location would attribute this
+  // tenant's scans to their numbers.
+  let locationId: string | null = null;
+  if (typeof input.location_id === "string" && input.location_id !== "") {
+    const found = await withClient(env, async (client) => {
+      const res = await client.query<{ id: string }>(
+        `SELECT id FROM public.locations WHERE id = $1 AND tenant_id = $2`,
+        [input.location_id, tenant.tenantId],
+      );
+      return res.rows[0];
+    });
+    if (!found) {
+      throw new ValidationError("location not found", "invalid_request");
+    }
+    locationId = found.id;
   }
 
   // --- 2. Caller-supplied slug (D2), validated before any SQL runs ---
@@ -495,11 +556,23 @@ export async function createLinkCore({
       const table = qualifyTable(tenant.schemaName, "links");
 
       const inserted = await client.query<LinkRow>(
-        `INSERT INTO ${table} (original_url, short_code, title, expires_at, client_ref)
-         VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO ${table}
+           (original_url, short_code, title, expires_at, client_ref, is_gated, location_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (short_code) DO NOTHING
          RETURNING id, short_code, original_url, title, client_ref, created_at`,
-        [original_url, shortCode, title ?? null, expires_at ?? null, client_ref ?? null],
+        [
+          original_url,
+          shortCode,
+          title ?? null,
+          expires_at ?? null,
+          client_ref ?? null,
+          // NOT NULL DEFAULT false, so an omitted flag must bind an explicit
+          // boolean rather than null — otherwise the column takes its default
+          // and the caller cannot tell "off" from "not asked".
+          input.is_gated ?? false,
+          locationId,
+        ],
       );
 
       // No rows → this tenant already uses the code.
@@ -555,6 +628,11 @@ export async function createLinkCore({
     isActive: true,
     expiresAt: expires_at ?? null,
     linkId: linkRow.id,
+    // The redirect reads isGated from the cache on a warm hit and the DB only
+    // on a miss. Omitting it here means a freshly created gated link 302s
+    // straight past its own gate for 24h: it looks created, every scan records
+    // nothing, the panel stays empty, and no error appears anywhere.
+    isGated: input.is_gated === true,
   });
 
   waitUntil(
@@ -596,6 +674,11 @@ export async function createLinkCore({
     expires_at: expires_at ?? null,
     client_ref: linkRow.client_ref ?? null,
     created_at: linkRow.created_at,
+    // Reported rather than assumed: a caller that asked for the gate needs to
+    // read back that it is on, not trust that a 201 meant it worked. The same
+    // reason a batch item returns its own code instead of a positional guess.
+    is_gated: input.is_gated === true,
+    location_id: locationId,
   };
 }
 
@@ -725,6 +808,8 @@ export const updateLink: Handler<{
     title?: string;
     client_ref?: string;
     original_url?: string | null;
+    is_gated?: boolean;
+    location_id?: string | null;
     slug?: unknown;
   };
   try {
@@ -740,6 +825,47 @@ export const updateLink: Handler<{
       "slug cannot be changed: a link's URL is immutable once printed",
       "slug_immutable",
     );
+  }
+
+  // --- is_gated and location_id ---
+  //
+  // Both are editable after creation, and both need the cache invalidated when
+  // they change — see the invalidation call below.
+  //
+  // `is_gated` is deliberately editable even though it changes what a customer
+  // sees. Turning a gate ON after the fact is how an existing sticker starts
+  // recording; turning it OFF is how a business that stopped asking retires
+  // one. The immutability rule covers the CODE, not this.
+  if (body.is_gated !== undefined) {
+    if (typeof body.is_gated !== "boolean") {
+      throw new ValidationError("is_gated must be a boolean", "invalid_request");
+    }
+  }
+
+  // Empty string and null both clear the location, matching original_url: a
+  // link can be unattached, and that has to be expressible.
+  let locationId: string | null | undefined;
+  if (body.location_id !== undefined) {
+    if (body.location_id === null || body.location_id === "") {
+      locationId = null;
+    } else if (typeof body.location_id !== "string") {
+      throw new ValidationError("location_id must be a string or null", "invalid_request");
+    } else {
+      // Ownership verified here for the same reason as creation: a valid uuid
+      // that belongs to another tenant would attribute this tenant's scans to
+      // their numbers.
+      const found = await withClient(c.env, async (client) => {
+        const res = await client.query<{ id: string }>(
+          `SELECT id FROM public.locations WHERE id = $1 AND tenant_id = $2`,
+          [body.location_id, c.get("tenant").tenantId],
+        );
+        return res.rows[0];
+      });
+      if (!found) {
+        throw new ValidationError("location not found", "invalid_request");
+      }
+      locationId = found.id;
+    }
   }
 
   // --- original_url: the editable half ---
@@ -825,6 +951,20 @@ export const updateLink: Handler<{
       sets.push(`original_url = $${vals.length + 1}`);
       vals.push(body.original_url);
     }
+    // is_gated is NOT NULL, so a "clear" would be a constraint violation. Only
+    // a boolean is written, and only when one was actually sent — omitting the
+    // field must leave the current setting alone rather than resetting it.
+    if (typeof body.is_gated === "boolean") {
+      sets.push(`is_gated = $${vals.length + 1}`);
+      vals.push(body.is_gated);
+    }
+    // location_id takes NULL like original_url, so it follows the same rule.
+    if (locationId === null) {
+      sets.push(`location_id = NULL`);
+    } else if (locationId !== undefined) {
+      sets.push(`location_id = $${vals.length + 1}`);
+      vals.push(locationId);
+    }
 
     if (sets.length === 0) {
       throw new ValidationError("No fields to update", "invalid_request");
@@ -849,7 +989,12 @@ export const updateLink: Handler<{
   // Load a destination onto a card and the redirect keeps serving the previous
   // one for up to a day, so the owner pastes the sticker, the customer scans,
   // and nothing happens — with no error anywhere to explain it.
-  if (typeof body.is_active === "boolean" || body.original_url !== undefined) {
+  if (
+    typeof body.is_active === "boolean" ||
+    body.original_url !== undefined ||
+    typeof body.is_gated === "boolean" ||
+    locationId !== undefined
+  ) {
     c.executionCtx.waitUntil(
       invalidateCachedUrl(c.env, tenant.tenantSlug, rows[0]!.short_code).catch(() => {}),
     );

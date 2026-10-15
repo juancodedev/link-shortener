@@ -724,6 +724,7 @@ export const updateLink: Handler<{
     is_active?: boolean;
     title?: string;
     client_ref?: string;
+    original_url?: string | null;
     slug?: unknown;
   };
   try {
@@ -739,6 +740,39 @@ export const updateLink: Handler<{
       "slug cannot be changed: a link's URL is immutable once printed",
       "slug_immutable",
     );
+  }
+
+  // --- original_url: the editable half ---
+  //
+  // `short_code` is immutable above, and this is the distinction the whole
+  // card-stock feature rests on. The code is what is PRINTED, so it exists from
+  // the moment the card does and can never change. The destination is what is
+  // BEHIND the code, and nothing physical depends on it — which is exactly why
+  // it can be loaded late, corrected, or cleared back to unconfigured without
+  // touching a single sticker in the world.
+  //
+  // Empty string and null both mean "back to not configured". That is not
+  // leniency for its own sake: a destination that is wrong is worse than one
+  // that is absent, because absent reaches a page that says so while wrong
+  // forwards customers somewhere unintended with no signal at all.
+  if (body.original_url !== undefined) {
+    if (body.original_url === null || body.original_url === "") {
+      body.original_url = null;
+    } else if (typeof body.original_url !== "string") {
+      throw new ValidationError(
+        "original_url must be a string or null",
+        "invalid_request",
+      );
+    } else {
+      const result = validateUrl(body.original_url);
+      if (!result.valid) {
+        throw new ValidationError(
+          `Invalid URL: ${result.error}`,
+          result.error ?? "invalid_url",
+        );
+      }
+      body.original_url = result.normalized ?? body.original_url;
+    }
   }
 
   // Reject a wrong-typed client_ref up front rather than silently ignoring it:
@@ -783,6 +817,14 @@ export const updateLink: Handler<{
       sets.push(`client_ref = $${vals.length + 1}`);
       vals.push(body.client_ref);
     }
+    // Explicit null clears back to unconfigured. Takes no bind param, so it
+    // must not consume a slot — the same rule client_ref follows.
+    if (body.original_url === null) {
+      sets.push(`original_url = NULL`);
+    } else if (typeof body.original_url === "string") {
+      sets.push(`original_url = $${vals.length + 1}`);
+      vals.push(body.original_url);
+    }
 
     if (sets.length === 0) {
       throw new ValidationError("No fields to update", "invalid_request");
@@ -801,7 +843,13 @@ export const updateLink: Handler<{
   if (rows.length === 0) throw new NotFoundError("Link not found", "not_found");
 
   // Invalidate KV cache on status change
-  if (typeof body.is_active === "boolean") {
+  //
+  // original_url joins this list for the same reason is_active is on it, and
+  // it matters more here: the cache stores the DESTINATION, with a 24h TTL.
+  // Load a destination onto a card and the redirect keeps serving the previous
+  // one for up to a day, so the owner pastes the sticker, the customer scans,
+  // and nothing happens — with no error anywhere to explain it.
+  if (typeof body.is_active === "boolean" || body.original_url !== undefined) {
     c.executionCtx.waitUntil(
       invalidateCachedUrl(c.env, tenant.tenantSlug, rows[0]!.short_code).catch(() => {}),
     );

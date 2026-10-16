@@ -179,7 +179,7 @@ function buildFeedbackQuery(
         LEFT JOIN ${linksTable} l ON l.id = f.link_id
         LEFT JOIN public.locations loc ON loc.id = f.location_id
        WHERE ${clauses.join(" AND ")}
-       ORDER BY f.scanned_at DESC
+       ORDER BY f.scanned_at DESC, f.id DESC
        LIMIT $${params.length}`,
     params,
   };
@@ -194,12 +194,20 @@ function toFeedbackRow(row: Record<string, unknown>): FeedbackRow {
     comment: String(row.comment ?? ""),
     rating: row.rating === null || row.rating === undefined ? null : Number(row.rating),
     customer_contact: row.customer_contact === null ? null : String(row.customer_contact),
-    scanned_at: new Date(String(row.scanned_at)).toISOString(),
+    // The driver hands timestamptz back as a Date. String() on a Date drops
+    // the milliseconds, so it is used as is; only a string is parsed.
+    scanned_at: (row.scanned_at instanceof Date
+      ? row.scanned_at
+      : new Date(String(row.scanned_at))
+    ).toISOString(),
     short_code: row.short_code === null ? null : String(row.short_code),
     client_ref: row.client_ref === null ? null : String(row.client_ref),
     location_name: row.location_name === null ? null : String(row.location_name),
   };
 }
+
+const SINCE_MIN_YEAR = 2000;
+const SINCE_MAX_YEAR = 9999;
 
 type FilterResult =
   | { ok: true; filters: FeedbackFilters }
@@ -231,6 +239,13 @@ function readFilters(url: URL): FilterResult {
   if (sinceRaw !== undefined) {
     const parsed = new Date(sinceRaw);
     if (Number.isNaN(parsed.getTime())) return { ok: false, error: "invalid_since" };
+    // Bounded to four-digit years. Outside them toISOString emits a signed
+    // six-digit year (`+010000-01-01`), which is not a date anyone meant and
+    // not a format worth betting the database parses the same way.
+    const year = parsed.getUTCFullYear();
+    if (year < SINCE_MIN_YEAR || year > SINCE_MAX_YEAR) {
+      return { ok: false, error: "invalid_since" };
+    }
     since = parsed.toISOString();
   }
 

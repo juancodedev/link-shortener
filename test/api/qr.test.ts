@@ -438,6 +438,20 @@ describe("the sheet manifest carries the feedback address", () => {
 
     expect(row).toContain('"Sala ""VIP"""');
   });
+
+  it.each(["=cmd", "-A12", "+1", "@SUM(A1)"])(
+    "writes a client_ref like %s as text, with a leading quote",
+    async (clientRef) => {
+      // Intentional: the manifest goes through the shared CSV writer, so a value
+      // a spreadsheet would run as a formula opens as text instead. "-A12" is a
+      // plausible table name and still gets the quote — that is the price of a
+      // rule a spreadsheet cannot be talked out of.
+      const res = await buildZip([sheetRow({ client_ref: clientRef })]);
+      const row = (await zipText(res, "links.csv")).trim().split("\n")[1]!;
+
+      expect(row.split(",")[3]).toBe(`'${clientRef}`);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------

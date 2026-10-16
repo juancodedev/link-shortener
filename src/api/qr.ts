@@ -449,6 +449,13 @@ export const batchQrSheet: Handler<{
   //
   // Escaped because a comma in a value silently shifts every later column, and
   // a designer would read a shifted sheet as a wrong sheet.
+  //
+  // Through the shared writer on purpose, which also neutralises formulas: a
+  // client_ref or address starting with = + - @ tab or CR is written with a
+  // leading `'`. That is a visible change for a value like "-A12", and it is
+  // the intended one — the sheet is opened in a spreadsheet, and a cell that
+  // runs as a formula there is the CSV-injection hole (OWASP) whatever column
+  // it sits in.
   const lines = rows.map((r, i) =>
     [
       `card-${String(i + 1).padStart(3, "0")}.svg`,

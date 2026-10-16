@@ -100,6 +100,24 @@ line budget per slice, so one PR is expected.
   like `renderGatePanel`; HTML-escaped customer text; empty state; truncation
   note; CSV export via `window.__api` + Blob. Tests in `test/handlers`.
   Route: delegated writer (2+ non-trivial files).
+- [x] **T3 — Address reliability review findings.** Native review lineage
+  `review-8beff90efc750482` approved the feature (medium risk, reliability
+  lens) with five non-blocking findings, all fixed:
+  - [x] W1 — the dashboard export checks `res.ok` before `res.blob()`; a
+    refused export shows "Could not export: …" in the card and downloads
+    nothing. `loadFeedbackInbox` checks `res.ok` before rendering. The export
+    handler is now a named `exportFeedbackCsv(btn, msg)` so it can be run
+    against stubs in a behavioural test.
+  - [x] W2 — `links.csv` neutralising formula-like `client_ref` /
+    `feedback_email` with a leading `'` is kept on purpose (OWASP CSV
+    injection); pinned by a test and explained in `src/api/qr.ts`.
+  - [x] W3 — `toFeedbackRow` uses a driver `Date` directly, keeping
+    milliseconds; only strings are parsed.
+  - [x] S1 — `ORDER BY f.scanned_at DESC, f.id DESC`, a stable order for
+    comments in the same instant.
+  - [x] S2 — `since` is bounded to years 2000..9999; outside is the existing
+    400 `invalid_since`.
+  Route: single bounded writer (2+ non-trivial files).
 
 ## Progress
 
@@ -114,6 +132,11 @@ line budget per slice, so one PR is expected.
   before it. `npx tsc --noEmit` clean; `npx vitest run` 38 files / 992 tests
   passed. Commit: the `feat(dashboard): show customer feedback inbox with CSV
   export` work unit that follows `bc2df80`.
+- T3: RED observed first for W1, W3, S1 and S2 (9 failing in
+  `test/handlers/dashboard.test.ts` and `test/api/review-gate.test.ts`), then
+  GREEN. W2 is a pin of existing behaviour, so it passed on first run by
+  design. `npx tsc --noEmit` clean; `npx vitest run` 38 files / 1003 tests
+  passed. Commit: `fix(feedback): harden inbox export and feedback row mapping`.
 - Auth finding: `window.__api` sends `Authorization: Bearer <token>` and
   `X-Tenant-Slug`; there is no cookie session. The export therefore downloads
   via `window.__api` + Blob + object URL, and reads `X-Truncated` to tell the

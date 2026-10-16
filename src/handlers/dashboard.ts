@@ -1093,6 +1093,10 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         if (!body) return;
         try {
           const res = await window.__api("GET", "/api/review-gate/feedback");
+          // Checked before the body is read as an inbox: a 401 or 500 is JSON
+          // too, and rendering it would either throw somewhere inside the
+          // renderer or, worse, draw an empty inbox that looks like no one wrote.
+          if (!res.ok) throw new Error("feedback inbox: HTTP " + res.status);
           body.innerHTML = renderFeedbackInbox(await res.json());
         } catch (err) {
           body.innerHTML = '<p class="gate-empty">Could not load comments.</p>';
@@ -1113,14 +1117,22 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
        * The server cannot say "truncated" inside the CSV without corrupting
        * it, so it says so in X-Truncated, and this says it to the owner.
        */
-      document.getElementById("feedback-export").addEventListener("click", async (e) => {
-        const btn = e.currentTarget;
-        const msg = document.getElementById("feedback-export-msg");
+      async function exportFeedbackCsv(btn, msg) {
         btn.disabled = true;
         msg.className = "message";
         msg.textContent = "";
         try {
           const res = await window.__api("GET", "/api/review-gate/feedback.csv");
+          // A refused export answers with a JSON error body. Read as a blob it
+          // would download as customer-feedback.csv and look like a file, so
+          // the status is checked first and the owner is told instead.
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            msg.className = "message error";
+            msg.textContent = "Could not export: " +
+              (body.detail || body.error || "HTTP " + res.status);
+            return;
+          }
           const blob = await res.blob();
           const href = URL.createObjectURL(blob);
           const a = document.createElement("a");
@@ -1145,7 +1157,10 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         } finally {
           btn.disabled = false;
         }
-      });
+      }
+
+      document.getElementById("feedback-export").addEventListener("click", (e) =>
+        exportFeedbackCsv(e.currentTarget, document.getElementById("feedback-export-msg")));
 
       document.getElementById("feedback-email-save").addEventListener("click", async () => {
         const input = document.getElementById("feedback-email");

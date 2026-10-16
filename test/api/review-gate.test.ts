@@ -272,9 +272,23 @@ describe("review-gate feedback list", () => {
       client_ref: "mesa-4",
       location_name: "Terraza",
     });
-    expect(calls[0]!.sql).toMatch(/ORDER BY f\.scanned_at DESC/);
+    // The id breaks ties: two comments in the same instant must come back in
+    // the same order on every read, or the list and the export disagree.
+    expect(calls[0]!.sql).toMatch(/ORDER BY f\.scanned_at DESC, f\.id DESC/);
     expect(body.truncated).toBe(false);
     expect(body.limit).toBe(FEEDBACK_PAGE_SIZE);
+  });
+
+  it("keeps the milliseconds when the driver returns scanned_at as a Date", async () => {
+    // node-postgres hands timestamptz back as a Date. Going through String()
+    // renders it without milliseconds, so two comments a few ms apart would
+    // collapse to the same second.
+    mockFeedbackDb([feedbackRow({ scanned_at: new Date("2026-10-14T20:15:00.123Z") })]);
+    const { c, jsonFn } = feedbackContext();
+
+    await listFeedback(c as any, vi.fn() as any);
+
+    expect((jsonFn.mock.calls[0]![0] as any).feedback[0].scanned_at).toBe("2026-10-14T20:15:00.123Z");
   });
 
   it("keeps a comment with no rating and no location", async () => {
@@ -343,6 +357,8 @@ describe("review-gate feedback list", () => {
     ["location_id=1;DROP TABLE x", "invalid_location_id"],
     ["since=yesterday-ish", "invalid_since"],
     ["since=2026-13-45", "invalid_since"],
+    ["since=1999-12-31", "invalid_since"],
+    ["since=%2B010000-01-01", "invalid_since"],
   ])("rejects %s with 400 before touching the database", async (query, error) => {
     mockFeedbackDb([]);
     const { c } = feedbackContext(`https://api.test/api/review-gate/feedback?${query}`);

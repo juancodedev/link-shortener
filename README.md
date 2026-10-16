@@ -150,6 +150,7 @@ each boundary below is a different authentication mechanism, not a different lev
 | `GET` | `/reset-password` | Password reset page |
 | `GET` | `/auth/callback` | Supabase OAuth/magic-link callback |
 | `GET` | `/dashboard` | Dashboard HTML — authentication deferred to the browser |
+| `GET` | `/setup/:code` | Card quick setup: destination + client ref for one card — authentication deferred to the browser |
 | `POST` | `/api/gate` | Action screen: Google redirect, private feedback, optional rating |
 | `GET` | `/:code` | Short-link resolution, click tracking, action screen (registered last) |
 

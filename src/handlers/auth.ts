@@ -167,6 +167,18 @@ function htmlShell(title: string, body: string, supabaseUrl: string, supabaseAno
 </html>`;
 }
 
+/**
+ * The only return paths the login page will follow after signing in.
+ *
+ * Deliberately narrow: card quick setup (`/setup/:code`) is the one flow that
+ * sends a browser here and needs it back. An open `next` would make the login
+ * page an open redirect, and `/:code` must never be a target — it is the page
+ * that sends a logged-in browser to setup, so returning there could loop.
+ * Anchored and charset-limited, so `//host`, schemes, `..` segments and query
+ * strings all fail.
+ */
+export const SAFE_NEXT_PATH = /^\/setup\/[A-Za-z0-9_-]+$/;
+
 // ---------------------------------------------------------------------------
 // Sign-up page
 // ---------------------------------------------------------------------------
@@ -313,7 +325,11 @@ export const loginHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }> = 
 
         msg.className = "message success";
         msg.textContent = "Logged in! Redirecting...";
-        setTimeout(() => { window.location.href = "/"; }, 1000);
+        // Return path, honoured only when it is a card setup page — see
+        // SAFE_NEXT_PATH. Anything else falls back to the default.
+        const next = new URL(window.location.href).searchParams.get("next");
+        const target = next && /${SAFE_NEXT_PATH.source}/.test(next) ? next : "/";
+        setTimeout(() => { window.location.href = target; }, 1000);
       } catch (err) {
         msg.className = "message error";
         msg.textContent = err instanceof Error ? err.message : "Login failed";

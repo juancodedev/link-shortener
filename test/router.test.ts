@@ -168,7 +168,7 @@ describe("flat short link routing", () => {
     const paths = app.routes.map((r) => r.path);
     const catchAll = paths.indexOf("/:code");
 
-    for (const path of ["/signup", "/login", "/reset-password", "/auth/callback", "/dashboard", "/"]) {
+    for (const path of ["/signup", "/login", "/reset-password", "/auth/callback", "/dashboard", "/setup/:code", "/"]) {
       expect(paths.indexOf(path)).toBeGreaterThanOrEqual(0);
       expect(paths.indexOf(path)).toBeLessThan(catchAll);
     }
@@ -203,6 +203,16 @@ describe("flat short link routing", () => {
 
     expect(res.status).toBe(200);
     expect(await res.text()).toContain(marker);
+    expect(withClient).not.toHaveBeenCalled();
+  });
+
+  it("serves the card setup page without touching the registry", async () => {
+    const app = createApp(testEnv());
+    const res = await app.request("/setup/ywaoSiE", { method: "GET" }, testEnv(), executionCtx);
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect(await res.text()).toContain("<code>ywaoSiE</code>");
     expect(withClient).not.toHaveBeenCalled();
   });
 

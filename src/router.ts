@@ -11,6 +11,7 @@ import { landingHandler } from "./handlers/landing";
 import { redirectHandler } from "./handlers/redirect";
 import { signupHandler, loginHandler, resetPasswordHandler, authCallbackHandler } from "./handlers/auth";
 import { dashboardHandler } from "./handlers/dashboard";
+import { setupHandler } from "./handlers/setup";
 import { gateHandler } from "./handlers/gate";
 import {
   createLink,
@@ -114,6 +115,12 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
 
   // Dashboard (authenticated via client-side Supabase session)
   app.get("/dashboard", dashboardHandler);
+
+  // Card quick setup. Authenticated the same way as the dashboard: the page is
+  // public HTML and its script carries the session. Two segments, so it cannot
+  // be shadowed by `/:code`, but it is registered here with the other pages
+  // all the same.
+  app.get("/setup/:code", setupHandler);
 
   // -----------------------------------------------------------------------
   // API routes (authenticated)

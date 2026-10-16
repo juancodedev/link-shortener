@@ -175,7 +175,7 @@ export function resolveMaxActiveLinks(
  * reject an over-long value instead, and do so on create as well as update
  * (`title` is only capped on update — that gap is pre-existing).
  */
-const MAX_CLIENT_REF_LENGTH = 200;
+export const MAX_CLIENT_REF_LENGTH = 200;
 
 /**
  * Maximum retries when GENERATING a short code (D1).

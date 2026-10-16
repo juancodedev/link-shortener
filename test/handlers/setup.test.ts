@@ -1,6 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { Hono } from "hono";
-import { setupHandler } from "../../src/handlers/setup";
+import { renderSetupPage, setupHandler } from "../../src/handlers/setup";
 import { loginHandler, SAFE_NEXT_PATH } from "../../src/handlers/auth";
 
 // ---------------------------------------------------------------------------
@@ -95,7 +95,7 @@ describe("setup script", () => {
     expect(html).toContain('"/api/links/" + encodeURIComponent(link.id)');
     expect(html).toContain('method: "PATCH"');
     expect(html).toContain('"X-Tenant-Slug": link.tenant_slug');
-    expect(html).toContain('"Authorization": "Bearer " + token');
+    expect(html).toContain('"Authorization": "Bearer " + accessToken');
   });
 
   it("returns to the card after a successful save", async () => {
@@ -135,5 +135,242 @@ describe("login return path", () => {
 
     expect(html).toContain(SAFE_NEXT_PATH.source);
     expect(html).toContain('searchParams.get("next")');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Running the setup script
+//
+// The page's behaviour lives in its inline script, so these tests execute it
+// against fake browser globals: a Supabase client, the form elements, fetch,
+// location and sessionStorage. What they hold is the save path's handling of
+// an access token that expired while the form was open.
+// ---------------------------------------------------------------------------
+
+interface FakeEl {
+  textContent: string;
+  hidden: boolean;
+  disabled: boolean;
+  value: string;
+  focus: () => void;
+  checkValidity: () => boolean;
+  addEventListener: (type: string, fn: (e: unknown) => Promise<void>) => void;
+}
+
+interface BrowserOpts {
+  /** Access tokens getSession hands out, one per call; null means no session. */
+  sessions: (string | null)[];
+  /** Access token refreshSession hands out; null means the refresh failed. */
+  refreshed?: string | null;
+  /** HTTP status of each PATCH, in order. */
+  patchStatuses?: number[];
+  link?: { original_url: string | null; client_ref: string | null };
+  /** Initial sessionStorage contents, or "throws" for blocked storage. */
+  storage?: Record<string, string> | "throws";
+}
+
+async function settle() {
+  for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
+}
+
+async function runSetupPage(code: string, opts: BrowserOpts) {
+  const html = renderSetupPage({ code, supabaseUrl: "https://x.supabase.co", supabaseAnonKey: "anon" });
+  const inline = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!);
+
+  const els: Record<string, FakeEl> = {};
+  let onSubmit: ((e: unknown) => Promise<void>) | undefined;
+  const el = (id: string): FakeEl =>
+    (els[id] ??= {
+      textContent: "",
+      hidden: id === "setup-form" || id === "form-error",
+      disabled: false,
+      value: "",
+      focus: () => {},
+      checkValidity: () => true,
+      addEventListener: (_t, fn) => {
+        onSubmit = fn;
+      },
+    });
+  const document = { getElementById: el };
+
+  const sessions = [...opts.sessions];
+  const getSession = vi.fn(async () => {
+    const token = sessions.length > 1 ? sessions.shift()! : sessions[0]!;
+    return { data: { session: token ? { access_token: token } : null } };
+  });
+  const refreshSession = vi.fn(async () => ({
+    data: { session: opts.refreshed ? { access_token: opts.refreshed } : null },
+  }));
+  const window = {
+    supabase: { createClient: () => ({ auth: { getSession, refreshSession } }) },
+  };
+
+  const patchStatuses = [...(opts.patchStatuses ?? [200])];
+  const patches: { token: string; body: unknown }[] = [];
+  const fetch = vi.fn(async (url: string, init: any = {}) => {
+    if (init.method === "PATCH") {
+      patches.push({
+        token: init.headers.Authorization,
+        body: JSON.parse(init.body),
+      });
+      const status = patchStatuses.shift() ?? 200;
+      return new Response(JSON.stringify(status === 200 ? { ok: true } : { error: "nope" }), { status });
+    }
+    return new Response(
+      JSON.stringify({
+        id: "link-uuid",
+        short_code: code,
+        tenant_slug: "acme",
+        ...(opts.link ?? { original_url: null, client_ref: "MESA-7" }),
+      }),
+      { status: 200 },
+    );
+  });
+
+  const store: Record<string, string> = opts.storage === "throws" ? {} : { ...(opts.storage ?? {}) };
+  const sessionStorage =
+    opts.storage === "throws"
+      ? new Proxy({}, { get() { throw new Error("SecurityError: storage blocked"); } })
+      : {
+          getItem: (k: string) => (k in store ? store[k]! : null),
+          setItem: (k: string, v: string) => { store[k] = String(v); },
+          removeItem: (k: string) => { delete store[k]; },
+        };
+
+  const replace = vi.fn();
+  for (const src of inline) {
+    new Function("window", "document", "location", "fetch", "sessionStorage", src)(
+      window, document, { replace }, fetch, sessionStorage,
+    );
+  }
+  await settle();
+
+  return {
+    els,
+    store,
+    replace,
+    patches,
+    getSession,
+    refreshSession,
+    async submit() {
+      await onSubmit!({ preventDefault: () => {} });
+    },
+  };
+}
+
+const LOGIN = "/login?next=" + encodeURIComponent("/setup/ywaoSiE");
+
+describe("saving with an access token that expired while the form was open", () => {
+  it("reads the session again at save time instead of reusing the load-time token", async () => {
+    const page = await runSetupPage("ywaoSiE", { sessions: ["load-token", "fresh-token"] });
+    page.els.original_url!.value = "https://example.com";
+
+    await page.submit();
+
+    expect(page.patches).toHaveLength(1);
+    expect(page.patches[0]!.token).toBe("Bearer fresh-token");
+  });
+
+  it("refreshes once and retries once when the save is refused as unauthenticated", async () => {
+    const page = await runSetupPage("ywaoSiE", {
+      sessions: ["load-token", "stale-token"],
+      refreshed: "refreshed-token",
+      patchStatuses: [401, 200],
+    });
+    page.els.original_url!.value = "https://example.com";
+
+    await page.submit();
+
+    expect(page.refreshSession).toHaveBeenCalledTimes(1);
+    expect(page.patches.map((p) => p.token)).toEqual(["Bearer stale-token", "Bearer refreshed-token"]);
+    expect(page.replace).not.toHaveBeenCalledWith(LOGIN);
+  });
+
+  it("keeps the input as a draft and goes to login when the retry is refused too", async () => {
+    const page = await runSetupPage("ywaoSiE", {
+      sessions: ["load-token", "stale-token"],
+      refreshed: "refreshed-token",
+      patchStatuses: [401, 401],
+    });
+    page.els.original_url!.value = "https://example.com/menu";
+    page.els.client_ref!.value = "MESA-9";
+
+    await page.submit();
+
+    // Exactly one retry: no loop between refresh and save.
+    expect(page.patches).toHaveLength(2);
+    expect(page.refreshSession).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(page.store["setup-draft:ywaoSiE"]!)).toEqual({
+      original_url: "https://example.com/menu",
+      client_ref: "MESA-9",
+    });
+    expect(page.replace).toHaveBeenCalledWith(LOGIN);
+  });
+
+  it("keeps the draft and goes to login when the session is gone and cannot be refreshed", async () => {
+    const page = await runSetupPage("ywaoSiE", {
+      sessions: ["load-token", null],
+      refreshed: null,
+    });
+    page.els.original_url!.value = "https://example.com";
+
+    await page.submit();
+
+    expect(page.patches).toHaveLength(0);
+    expect(page.store["setup-draft:ywaoSiE"]).toBeDefined();
+    expect(page.replace).toHaveBeenCalledWith(LOGIN);
+  });
+
+  it("still goes to login when sessionStorage is blocked", async () => {
+    const page = await runSetupPage("ywaoSiE", {
+      sessions: ["load-token", "stale-token"],
+      refreshed: null,
+      patchStatuses: [401],
+      storage: "throws",
+    });
+    page.els.original_url!.value = "https://example.com";
+
+    await page.submit();
+
+    expect(page.replace).toHaveBeenCalledWith(LOGIN);
+  });
+});
+
+describe("coming back from login with a draft", () => {
+  it("restores the draft over the stored values and clears it", async () => {
+    const page = await runSetupPage("ywaoSiE", {
+      sessions: ["token"],
+      link: { original_url: "https://old.example", client_ref: "MESA-7" },
+      storage: {
+        "setup-draft:ywaoSiE": JSON.stringify({
+          original_url: "https://example.com/menu",
+          client_ref: "MESA-9",
+        }),
+      },
+    });
+
+    expect(page.els.original_url!.value).toBe("https://example.com/menu");
+    expect(page.els.client_ref!.value).toBe("MESA-9");
+    expect(page.store["setup-draft:ywaoSiE"]).toBeUndefined();
+  });
+
+  it("ignores another card's draft", async () => {
+    const page = await runSetupPage("ywaoSiE", {
+      sessions: ["token"],
+      storage: { "setup-draft:other": JSON.stringify({ original_url: "https://x.example", client_ref: "X" }) },
+    });
+
+    expect(page.els.original_url!.value).toBe("");
+    expect(page.els.client_ref!.value).toBe("MESA-7");
+    expect(page.store["setup-draft:other"]).toBeDefined();
+  });
+
+  it("falls back to the stored values when the draft is unreadable", async () => {
+    const page = await runSetupPage("ywaoSiE", {
+      sessions: ["token"],
+      storage: { "setup-draft:ywaoSiE": "{not json" },
+    });
+
+    expect(page.els.client_ref!.value).toBe("MESA-7");
   });
 });

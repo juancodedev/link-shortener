@@ -130,6 +130,31 @@ export function renderSetupPage(params: {
       location.replace("/login?next=" + encodeURIComponent("/setup/" + encodeURIComponent(CODE)));
     }
 
+    // What the owner typed survives a trip through login. sessionStorage, so
+    // it stays in this tab and is gone when the tab is; keyed by code, so one
+    // card's draft never fills another's form. Storage can be blocked, and a
+    // lost draft must never stop the redirect to login.
+    var DRAFT_KEY = "setup-draft:" + CODE;
+    function saveDraft() {
+      try {
+        sessionStorage.setItem(DRAFT_KEY, JSON.stringify({
+          original_url: urlInput.value,
+          client_ref: refInput.value,
+        }));
+      } catch (e) {}
+    }
+    function takeDraft() {
+      try {
+        var raw = sessionStorage.getItem(DRAFT_KEY);
+        if (raw === null) return null;
+        sessionStorage.removeItem(DRAFT_KEY);
+        var draft = JSON.parse(raw);
+        return draft && typeof draft === "object" ? draft : null;
+      } catch (e) {
+        return null;
+      }
+    }
+
     if (!window.supabase) {
       status.textContent = "No se pudo cargar la página. Revisa tu conexión e intenta de nuevo.";
       return;
@@ -138,12 +163,11 @@ export function renderSetupPage(params: {
 
     var session = (await sb.auth.getSession()).data.session;
     if (!session) { toLogin(); return; }
-    var token = session.access_token;
 
     var res;
     try {
       res = await fetch("/api/links/by-code/" + encodeURIComponent(CODE), {
-        headers: { "Authorization": "Bearer " + token },
+        headers: { "Authorization": "Bearer " + session.access_token },
       });
     } catch (e) {
       status.textContent = "No se pudo conectar. Intenta de nuevo.";
@@ -156,8 +180,9 @@ export function renderSetupPage(params: {
     }
     var link = await res.json();
 
-    urlInput.value = link.original_url || "";
-    refInput.value = link.client_ref || "";
+    var draft = takeDraft();
+    urlInput.value = draft && typeof draft.original_url === "string" ? draft.original_url : (link.original_url || "");
+    refInput.value = draft && typeof draft.client_ref === "string" ? draft.client_ref : (link.client_ref || "");
     status.hidden = true;
     form.hidden = false;
     urlInput.focus();
@@ -175,19 +200,35 @@ export function renderSetupPage(params: {
       save.textContent = "Guardando…";
 
       var ref = refInput.value.trim();
-      try {
-        var r = await fetch("/api/links/" + encodeURIComponent(link.id), {
+      var payload = JSON.stringify({ original_url: urlInput.value.trim(), client_ref: ref || null });
+      function patch(accessToken) {
+        return fetch("/api/links/" + encodeURIComponent(link.id), {
           method: "PATCH",
           headers: {
             "Content-Type": "application/json",
-            "Authorization": "Bearer " + token,
+            "Authorization": "Bearer " + accessToken,
             // The tenant the code belongs to, so the save lands there even for
             // someone who belongs to several.
             "X-Tenant-Slug": link.tenant_slug,
           },
-          body: JSON.stringify({ original_url: urlInput.value.trim(), client_ref: ref || null }),
+          body: payload,
         });
-        if (r.status === 401) { toLogin(); return; }
+      }
+      try {
+        // The load-time token is not reused: the form can sit open past the
+        // access token's lifetime. getSession() refreshes an expired token
+        // when a refresh token exists. If the server still says 401, one
+        // explicit refresh and one retry — then the draft is kept and the
+        // owner signs in again. Bounded on purpose: no refresh/save loop.
+        var current = null;
+        try { current = (await sb.auth.getSession()).data.session; } catch (err) {}
+        var r = current ? await patch(current.access_token) : null;
+        if (!r || r.status === 401) {
+          var refreshed = null;
+          try { refreshed = (await sb.auth.refreshSession()).data.session; } catch (err) {}
+          r = refreshed ? await patch(refreshed.access_token) : null;
+          if (!r || r.status === 401) { saveDraft(); toLogin(); return; }
+        }
         if (!r.ok) {
           var body = {};
           try { body = await r.json(); } catch (err) {}

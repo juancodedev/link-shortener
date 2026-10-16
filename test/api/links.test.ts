@@ -60,7 +60,7 @@ import {
   invalidateCachedRegistryEntry,
 } from "../../src/cache/shortcode";
 import { generateShortCode } from "../../src/utils/short-code";
-import { createLink, deleteLink, linkClicks, listLinks, updateLink, DEFAULT_MAX_ACTIVE_LINKS } from "../../src/api/links";
+import { createLink, deleteLink, linkClicks, listLinks, updateLink, DEFAULT_MAX_ACTIVE_LINKS, DEFAULT_MAX_CARD_STOCK } from "../../src/api/links";
 import { UNIQUE_WINDOW, SESSION_WINDOW } from "../../src/analytics/metrics";
 import { ValidationError } from "../../src/middleware/error";
 
@@ -151,7 +151,7 @@ describe("createLink handler", () => {
       if (callCount === 1) {
         // COUNT query: 5 active links
         return fn({
-          query: vi.fn().mockResolvedValueOnce({ rows: [{ count: "5" }], rowCount: 1 }),
+          query: vi.fn().mockResolvedValueOnce({ rows: [{ configured: "5", stock: "0" }], rowCount: 1 }),
         });
       }
       // INSERT query (success), then the registry claim on the same client.
@@ -212,7 +212,7 @@ describe("createLink handler", () => {
   it("returns 429 when at the configured active links limit", async () => {
     vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) => {
       return fn({
-        query: vi.fn().mockResolvedValueOnce({ rows: [{ count: "30" }], rowCount: 1 }),
+        query: vi.fn().mockResolvedValueOnce({ rows: [{ configured: "30", stock: "0" }], rowCount: 1 }),
       });
     });
 
@@ -235,7 +235,7 @@ describe("createLink handler", () => {
       if (callCount === 1) {
         // COUNT query: 10 active links
         return fn({
-          query: vi.fn().mockResolvedValueOnce({ rows: [{ count: "10" }], rowCount: 1 }),
+          query: vi.fn().mockResolvedValueOnce({ rows: [{ configured: "10", stock: "0" }], rowCount: 1 }),
         });
       }
       if (callCount === 2) {
@@ -289,7 +289,7 @@ describe("createLink handler", () => {
       if (callCount === 1) {
         // COUNT query
         return fn({
-          query: vi.fn().mockResolvedValueOnce({ rows: [{ count: "10" }], rowCount: 1 }),
+          query: vi.fn().mockResolvedValueOnce({ rows: [{ configured: "10", stock: "0" }], rowCount: 1 }),
         });
       }
       // All 3 INSERT attempts: collision (rowCount 0)
@@ -312,7 +312,7 @@ describe("createLink handler", () => {
       callCount++;
       if (callCount === 1) {
         return fn({
-          query: vi.fn().mockResolvedValueOnce({ rows: [{ count: "0" }], rowCount: 1 }),
+          query: vi.fn().mockResolvedValueOnce({ rows: [{ configured: "0", stock: "0" }], rowCount: 1 }),
         });
       }
       // Link INSERT succeeds, then the registry claim succeeds
@@ -360,7 +360,7 @@ describe("createLink handler", () => {
       if (callCount === 1) {
         // COUNT query: 29 active links (under limit)
         return fn({
-          query: vi.fn().mockResolvedValueOnce({ rows: [{ count: "29" }], rowCount: 1 }),
+          query: vi.fn().mockResolvedValueOnce({ rows: [{ configured: "29", stock: "0" }], rowCount: 1 }),
         });
       }
       // Link INSERT succeeds, then the registry claim succeeds
@@ -1223,7 +1223,7 @@ describe("client_ref on createLink", () => {
 
   it("persists and returns client_ref when supplied", async () => {
     const calls = mockRecordingDb([
-      [{ count: "3" }],
+      [{ configured: "3", stock: "0" }],
       [
         {
           id: "link-uuid",
@@ -1256,7 +1256,7 @@ describe("client_ref on createLink", () => {
 
   it("succeeds with client_ref absent and returns null (backward compatibility)", async () => {
     const calls = mockRecordingDb([
-      [{ count: "3" }],
+      [{ configured: "3", stock: "0" }],
       [
         {
           id: "link-uuid",
@@ -1475,7 +1475,7 @@ describe("flat short_url output (T5.1)", () => {
   });
 
   it("createLink returns the flat short_url with no path prefix or tenant slug", async () => {
-    mockRecordingDb([[{ count: "2" }], [createdLink()], [{ short_code: "abc1234" }]]);
+    mockRecordingDb([[{ configured: "2", stock: "0" }], [createdLink()], [{ short_code: "abc1234" }]]);
 
     const { c, jsonFn } = mockContext({ body: { original_url: "https://example.com" } });
 
@@ -1527,7 +1527,7 @@ describe("registry insert on createLink (T4.1)", () => {
   });
 
   it("inserts a registry row binding the short code to the tenant and link", async () => {
-    const calls = mockRecordingDb([[{ count: "0" }], [createdLink()], [{ short_code: "abc1234" }]]);
+    const calls = mockRecordingDb([[{ configured: "0", stock: "0" }], [createdLink()], [{ short_code: "abc1234" }]]);
 
     const { c } = mockContext({ body: { original_url: "https://example.com" } });
 
@@ -1539,7 +1539,7 @@ describe("registry insert on createLink (T4.1)", () => {
   });
 
   it("claims the code with ON CONFLICT DO NOTHING so the primary key arbitrates", async () => {
-    const calls = mockRecordingDb([[{ count: "0" }], [createdLink()], [{ short_code: "abc1234" }]]);
+    const calls = mockRecordingDb([[{ configured: "0", stock: "0" }], [createdLink()], [{ short_code: "abc1234" }]]);
 
     const { c } = mockContext({ body: { original_url: "https://example.com" } });
 
@@ -1552,7 +1552,7 @@ describe("registry insert on createLink (T4.1)", () => {
   it("writes the registry row before reporting the link as created", async () => {
     // Ordering is the invariant: a 201 whose code is not yet resolvable is a
     // broken link handed to the user.
-    const calls = mockRecordingDb([[{ count: "0" }], [createdLink()], [{ short_code: "abc1234" }]]);
+    const calls = mockRecordingDb([[{ configured: "0", stock: "0" }], [createdLink()], [{ short_code: "abc1234" }]]);
 
     const { c } = mockContext({ body: { original_url: "https://example.com" } });
 
@@ -1565,7 +1565,7 @@ describe("registry insert on createLink (T4.1)", () => {
   });
 
   it("warms the registry KV cache so the first redirect skips the join", async () => {
-    mockRecordingDb([[{ count: "0" }], [createdLink()], [{ short_code: "abc1234" }]]);
+    mockRecordingDb([[{ configured: "0", stock: "0" }], [createdLink()], [{ short_code: "abc1234" }]]);
 
     const { c, waitUntilFn } = mockContext({ body: { original_url: "https://example.com" } });
 
@@ -1590,7 +1590,7 @@ describe("cross-tenant short-code collision (T4.1)", () => {
     // the URL the registry primary key is the only thing that can reject it, and
     // rejecting it must not leave an orphaned link behind.
     const calls = mockRecordingDb([
-      [{ count: "1" }], // active-link count
+      [{ configured: "1", stock: "0" }], // active-link count
       [createdLink({ id: "link-1" })], // link INSERT succeeds
       [], // registry claim loses to tenant B
       [], // compensating DELETE of link-1
@@ -1619,7 +1619,7 @@ describe("cross-tenant short-code collision (T4.1)", () => {
 
   it("fails after exhausting retries when every code is globally taken", async () => {
     mockRecordingDb([
-      [{ count: "1" }],
+      [{ configured: "1", stock: "0" }],
       [createdLink({ id: "link-1" })], [], [],
       [createdLink({ id: "link-2" })], [], [],
       [createdLink({ id: "link-3" })], [], [],
@@ -1734,7 +1734,7 @@ describe("caller-supplied slug (T3.2)", () => {
 
   it("persists a free caller-supplied slug unchanged", async () => {
     const calls = mockRecordingDb([
-      [{ count: "0" }],
+      [{ configured: "0", stock: "0" }],
       [createdLink({ id: "link-uuid", short_code: "cafe-central" })],
       [{ short_code: "cafe-central" }],
     ]);
@@ -1772,7 +1772,7 @@ describe("caller-supplied slug (T3.2)", () => {
    */
   it("returns 409 and creates NOTHING when the supplied slug is already taken", async () => {
     const calls = mockRecordingDb([
-      [{ count: "0" }], // active-link count — well under the cap
+      [{ configured: "0", stock: "0" }], // active-link count — well under the cap
       [], // link INSERT → this tenant already uses the code
     ]);
 
@@ -1797,7 +1797,7 @@ describe("caller-supplied slug (T3.2)", () => {
     // The registry primary key is the constraint that can reject a code this
     // tenant does not itself hold — `short_code` is only UNIQUE per schema.
     const calls = mockRecordingDb([
-      [{ count: "0" }],
+      [{ configured: "0", stock: "0" }],
       [createdLink({ id: "link-1", short_code: "cafe-central" })],
       [], // registry claim loses to tenant B
     ]);
@@ -1823,7 +1823,7 @@ describe("caller-supplied slug (T3.2)", () => {
     // the 409: the attempt budget is 1 when the caller named the code, so there
     // is no second draw sitting there ready to be substituted.
     const calls = mockRecordingDb([
-      [{ count: "0" }],
+      [{ configured: "0", stock: "0" }],
       [], // collide
     ]);
 
@@ -1847,7 +1847,7 @@ describe("caller-supplied slug (T3.2)", () => {
     vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) => {
       callCount++;
       if (callCount === 1) {
-        return fn({ query: vi.fn().mockResolvedValueOnce({ rows: [{ count: "0" }], rowCount: 1 }) });
+        return fn({ query: vi.fn().mockResolvedValueOnce({ rows: [{ configured: "0", stock: "0" }], rowCount: 1 }) });
       }
       if (callCount === 2) {
         return fn({ query: vi.fn().mockResolvedValueOnce({ rows: [], rowCount: 0 }) });
@@ -1915,7 +1915,7 @@ describe("caller-supplied slug (T3.2)", () => {
   it("treats an explicitly empty slug as absent, not as an invalid one", async () => {
     // The dashboard form sends `slug: ""` when the field is left blank. Treating
     // that as a validation failure would make the optional field mandatory.
-    mockRecordingDb([[{ count: "0" }], [createdLink()], [{ short_code: "abc1234" }]]);
+    mockRecordingDb([[{ configured: "0", stock: "0" }], [createdLink()], [{ short_code: "abc1234" }]]);
 
     const { c, jsonFn } = mockContext({
       body: { original_url: "https://example.com", slug: "" },
@@ -1931,7 +1931,7 @@ describe("caller-supplied slug (T3.2)", () => {
 
   it("warm-warms nothing special: a supplied slug still warms both KV caches", async () => {
     mockRecordingDb([
-      [{ count: "0" }],
+      [{ configured: "0", stock: "0" }],
       [createdLink({ short_code: "cafe-central" })],
       [{ short_code: "cafe-central" }],
     ]);
@@ -1971,7 +1971,7 @@ describe("configurable active-link cap (T3.1)", () => {
 
   it("honours the cap when the environment variable is set", async () => {
     vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) =>
-      fn({ query: vi.fn().mockResolvedValueOnce({ rows: [{ count: "7" }], rowCount: 1 }) }),
+      fn({ query: vi.fn().mockResolvedValueOnce({ rows: [{ configured: "7", stock: "0" }], rowCount: 1 }) }),
     );
 
     const { c, jsonFn } = mockContext({
@@ -1984,7 +1984,7 @@ describe("configurable active-link cap (T3.1)", () => {
   });
 
   it("allows creation below a configured cap", async () => {
-    mockRecordingDb([[{ count: "6" }], [createdLink()], [{ short_code: "abc1234" }]]);
+    mockRecordingDb([[{ configured: "6", stock: "0" }], [createdLink()], [{ short_code: "abc1234" }]]);
 
     const { c, jsonFn } = mockContext({
       env: { MAX_ACTIVE_LINKS: "7" },
@@ -2003,7 +2003,7 @@ describe("configurable active-link cap (T3.1)", () => {
     // be edited alongside.
     expect(DEFAULT_MAX_ACTIVE_LINKS).toBeGreaterThan(30);
 
-    mockRecordingDb([[{ count: "30" }], [createdLink()], [{ short_code: "abc1234" }]]);
+    mockRecordingDb([[{ configured: "30", stock: "0" }], [createdLink()], [{ short_code: "abc1234" }]]);
 
     const { c, jsonFn } = mockContext({ body: { original_url: "https://example.com" } });
 
@@ -2017,7 +2017,7 @@ describe("configurable active-link cap (T3.1)", () => {
     vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) =>
       fn({
         query: vi.fn().mockResolvedValueOnce({
-          rows: [{ count: String(DEFAULT_MAX_ACTIVE_LINKS) }],
+          rows: [{ configured: String(DEFAULT_MAX_ACTIVE_LINKS), stock: "0" }],
           rowCount: 1,
         }),
       }),
@@ -2031,7 +2031,7 @@ describe("configurable active-link cap (T3.1)", () => {
   it("ignores a non-numeric or non-positive env value rather than locking every tenant out", async () => {
     // A typo in a wrangler var must not read as 0 and reject every creation.
     for (const bad of ["", "many", "-5", "0", "12abc"]) {
-      mockRecordingDb([[{ count: "30" }], [createdLink()], [{ short_code: "abc1234" }]]);
+      mockRecordingDb([[{ configured: "30", stock: "0" }], [createdLink()], [{ short_code: "abc1234" }]]);
       const { c, jsonFn } = mockContext({
         env: { MAX_ACTIVE_LINKS: bad },
         body: { original_url: "https://example.com" },
@@ -2043,7 +2043,7 @@ describe("configurable active-link cap (T3.1)", () => {
 
   it("reports the CONFIGURED cap in the limit message, not a hardcoded number", async () => {
     vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) =>
-      fn({ query: vi.fn().mockResolvedValueOnce({ rows: [{ count: "7" }], rowCount: 1 }) }),
+      fn({ query: vi.fn().mockResolvedValueOnce({ rows: [{ configured: "7", stock: "0" }], rowCount: 1 }) }),
     );
 
     const { c } = mockContext({
@@ -2302,5 +2302,163 @@ describe("original_url on updateLink", () => {
       "https://g.page/x",
       "link-uuid",
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Card stock has its own budget
+//
+// Card stock is created before it has a destination, which is the state the
+// whole manufacturing flow depends on. These tests pin the consequence: stock
+// must NOT consume the link budget, and it must still be bounded.
+// ---------------------------------------------------------------------------
+describe("card stock is bounded separately from the link budget", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(generateShortCode).mockReturnValue("abc1234");
+    mockCacheDefaults();
+  });
+
+  it("counts configured links and stock as two distinct numbers", async () => {
+    // One query, two FILTER counts. Reading them as one number is what caused
+    // card stock to eat the link budget in the first place.
+    mockRecordingDb([
+      [{ configured: "7", stock: "450" }],
+      [createdLink()],
+      [{ short_code: "abc1234" }],
+    ]);
+
+    await createLink(mockContext({ body: { original_url: "https://example.com" } }).c as any);
+
+    const countSql = vi.mocked(withClient).mock.results.length;
+    expect(countSql).toBeGreaterThan(0);
+  });
+
+  it("does not charge card stock against the link budget", async () => {
+    // 450 cards exist and the configured count is 7. Creating a 51st
+    // CONFIGURED link must succeed: the 450 cards are not links anyone is
+    // being sent to, and charging for them meant an owner with a hundred
+    // working stickers could not manufacture fifty more.
+    mockRecordingDb([
+      [{ configured: "7", stock: "450" }],
+      [createdLink()],
+      [{ short_code: "abc1234" }],
+    ]);
+
+    const { c, jsonFn } = mockContext({
+      env: { MAX_ACTIVE_LINKS: "50" },
+      body: { original_url: "https://example.com" },
+    });
+
+    await createLink(c as any);
+    expect(jsonFn).toHaveBeenCalledWith(expect.any(Object), 201);
+  });
+
+  it("still bounds card stock", async () => {
+    // Not unbounded. An unbounded creation path is how a loop bug becomes an
+    // outage, and a stolen token should not be able to fill a table for free.
+    // AT the cap, not one below it. `>=` is the comparison, so a row of 2000
+    // against a cap of 2000 is refused and 1999 is not.
+    mockRecordingDb([[{ configured: "0", stock: "2000" }]]);
+
+    const { c } = mockContext({
+      env: { MAX_CARD_STOCK: "2000" },
+      body: { client_ref: "table-14" },
+    });
+
+    await expect(createLink(c as any)).rejects.toMatchObject({ status: 429 });
+  });
+
+  it("lets a card through below the stock bound", async () => {
+    mockRecordingDb([
+      [{ configured: "0", stock: "1998" }],
+      [createdLink()],
+      [{ short_code: "abc1234" }],
+    ]);
+
+    const { c, jsonFn } = mockContext({
+      env: { MAX_CARD_STOCK: "2000" },
+      body: { client_ref: "table-14" },
+    });
+
+    await createLink(c as any);
+    expect(jsonFn).toHaveBeenCalledWith(expect.any(Object), 201);
+  });
+
+  it("says WHICH budget was hit, because they are different numbers", async () => {
+    // "Link limit reached" from a card-manufacturing run sends an operator
+    // looking at the wrong configuration value. The message must name both.
+    mockRecordingDb([[{ configured: "0", stock: "2000" }]]);
+
+    const { c } = mockContext({
+      env: { MAX_ACTIVE_LINKS: "50", MAX_CARD_STOCK: "2000" },
+      body: { client_ref: "table-14" },
+    });
+
+    // One invocation, one rejection, two assertions. Awaiting twice would consume
+    // the single mocked row and the second would fail for the wrong reason.
+    await expect(createLink(c as any)).rejects.toThrow(
+      /Card stock limit reached.*separate from the link limit of 50/s,
+    );
+  });
+
+  it("keeps the configured-link message honest about what it counts", async () => {
+    mockRecordingDb([[{ configured: "50", stock: "900" }]]);
+
+    const { c } = mockContext({
+      env: { MAX_ACTIVE_LINKS: "50" },
+      body: { original_url: "https://example.com" },
+    });
+
+    await expect(createLink(c as any)).rejects.toThrow(/with a destination/);
+  });
+
+  it("gates BOTH buckets on is_active, so disabling a card frees budget", async () => {
+    // An operator over-stocked with cards reaches for the toggle and expects it
+    // to work. It does, because `is_active` appears in both FILTER arms rather
+    // than being applied to the row as a whole.
+    const calls = mockRecordingDb([
+      [{ configured: "0", stock: "0" }],
+      [createdLink()],
+      [{ short_code: "abc1234" }],
+    ]);
+
+    await createLink(mockContext({ body: { client_ref: "table-14" } }).c as any);
+
+    const countSql = calls.map((c) => c.sql).find((sql) => sql.includes("FILTER"));
+    expect(countSql).toBeDefined();
+    // Twice: once per bucket. One arm alone would leave a bucket unbounded by
+    // the toggle.
+    expect(countSql!.match(/is_active = true/g)).toHaveLength(2);
+  });
+
+  it("falls back to the documented default on a malformed MAX_CARD_STOCK", async () => {
+    // Same discipline as MAX_ACTIVE_LINKS: a typo must never read as 0 and lock
+    // a tenant out of manufacturing.
+    for (const bad of ["", "many", "-5", "0", "12abc"]) {
+      vi.resetAllMocks();
+      vi.mocked(generateShortCode).mockReturnValue("abc1234");
+      mockCacheDefaults();
+
+      mockRecordingDb([
+        [{ configured: "0", stock: "0" }],
+        [createdLink()],
+        [{ short_code: "abc1234" }],
+      ]);
+
+      const { c, jsonFn } = mockContext({
+        env: { MAX_CARD_STOCK: bad },
+        body: { client_ref: "table-14" },
+      });
+
+      await createLink(c as any);
+      expect(jsonFn).toHaveBeenCalledWith(expect.any(Object), 201);
+    }
+  });
+
+  it("defaults card stock well above the link budget", async () => {
+    // The relationship is the whole point: if the default were equal, the split
+    // would be a refactor rather than a fix.
+    expect(DEFAULT_MAX_CARD_STOCK).toBeGreaterThan(DEFAULT_MAX_ACTIVE_LINKS);
   });
 });

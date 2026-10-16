@@ -83,6 +83,24 @@ export interface AppVars {
   MAX_ACTIVE_LINKS?: string;
 
   /**
+   * Maximum links a tenant may hold as CARD STOCK — created without a
+   * destination, awaiting one.
+   *
+   * Separate from `MAX_ACTIVE_LINKS` because a card is active from the moment it
+   * is manufactured, so counting it against the link budget charged a tenant
+   * their entire allowance for stickers they had not yet printed. An owner with
+   * a hundred working cards could not manufacture fifty more.
+   *
+   * Bounded rather than unbounded: an unbounded creation path is how a loop bug
+   * becomes an outage, and a stolen token should not be able to fill a table for
+   * free.
+   *
+   * Optional for the same reason as `MAX_ACTIVE_LINKS`: an unset value falls
+   * back to a named default rather than blocking every creation.
+   */
+  MAX_CARD_STOCK?: string;
+
+  /**
    * Cloudflare rate limiter guarding `POST /api/gate`.
    *
    * Optional for the same reason as `MAX_ACTIVE_LINKS`: the binding exists in

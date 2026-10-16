@@ -1442,7 +1442,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
        */
       async function loadDestination(id) {
         const url = window.prompt(
-          "Where should this card go?\n\nPaste the full URL. Leave it blank to clear it again.",
+          "Where should this card go?\\n\\nPaste the full URL. Leave it blank to clear it again.",
           "",
         );
 

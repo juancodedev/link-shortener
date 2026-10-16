@@ -1574,3 +1574,51 @@ describe("the dashboard can load a destination onto a card", () => {
     expect(fn.slice(0, fn.indexOf("async function showMetrics"))).toContain("loadLinks()");
   });
 });
+
+describe("the served client script parses", () => {
+  /**
+   * The test that was missing, added after shipping a dead dashboard.
+   *
+   * Every other assertion in this file compares SUBSTRINGS. Substrings match
+   * happily inside a script the browser cannot parse, so a hundred green
+   * assertions once coexisted with `Uncaught SyntaxError: Invalid or unexpected
+   * token` and a dashboard that did nothing at all.
+   *
+   * `new Function` COMPILES without EXECUTING. Nothing in this script runs: no
+   * fetch, no DOM access, no auth. It is a parser, not a smoke test — which is
+   * what makes it safe to run on the whole block on every test run.
+   */
+  it("is valid JavaScript", async () => {
+    const html = await serve();
+    const blocks = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+    const client = blocks.find((b) => b.includes("links-body"));
+    expect(client).toBeDefined();
+
+    let error: unknown = null;
+    try {
+      new Function(client!);
+    } catch (e) {
+      error = e;
+    }
+    expect(error, String(error)).toBeNull();
+  });
+
+  it("emits no raw newline inside a string literal", async () => {
+    // The specific escape that broke it.
+    //
+    // The client script is a TEMPLATE LITERAL in the handler, so a `\n` written
+    // in that source becomes a REAL newline in the served JavaScript. Real
+    // newlines inside a double-quoted string are a SyntaxError. The prompt text
+    // needed `\\n` in the handler so the browser receives the two-character
+    // escape and renders a line break at runtime.
+    //
+    // Asserted here because it is invisible in review: the handler compiles, the
+    // typecheck passes, and every substring assertion still matches. Only the
+    // parser sees it.
+    const html = await serve();
+    const blocks = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+    const client = blocks.find((b) => b.includes("links-body"))!;
+
+    expect(client).toContain("\\n\\nPaste the full URL");
+  });
+});

@@ -42,7 +42,7 @@ import {
   setCachedRegistryEntry,
 } from "../../src/cache/shortcode";
 import { trackClick } from "../../src/analytics/tracker";
-import { redirectHandler } from "../../src/handlers/redirect";
+import { redirectHandler, renderCardNotConfigured } from "../../src/handlers/redirect";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -883,7 +883,9 @@ describe("scanning a card that has no destination yet", () => {
     const { response, body } = await scanUnconfigured();
 
     // A card with no destination has nothing to forward to, so there is no
-    // Location header and no script that navigates.
+    // Location header and no script that navigates a customer. The only
+    // navigation on this page is the owner's hop to /setup/:code, gated on a
+    // Supabase session — covered in its own suite below.
     expect(response.headers.get("Location")).toBeNull();
     expect(body).not.toMatch(/location\.href\s*=/i);
     expect(body).not.toContain("http-equiv=\"refresh\"");
@@ -1008,5 +1010,93 @@ describe("scanning a card that has no destination yet", () => {
     await redirectHandler(c as any);
 
     expect(jsonFn).toHaveBeenCalledWith({ error: "not_found" }, 404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Card quick setup hop
+//
+// The server cannot tell a logged-in owner from a customer: auth is a Supabase
+// session in localStorage, and /:code receives no credentials. So the
+// unconfigured page carries a tiny script that hands a browser WITH a session
+// to /setup/:code. A customer's browser has no such key and must see exactly
+// the page it always did.
+//
+// The script is executed here against a fake window rather than only grepped,
+// because what matters is which browsers it navigates, not that it exists.
+// ---------------------------------------------------------------------------
+
+describe("unconfigured card hands a logged-in owner to setup", () => {
+  function inlineScripts(html: string): string[] {
+    return [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!);
+  }
+
+  /** Runs the page's inline scripts against a fake storage and location. */
+  function runInBrowser(html: string, storage: Record<string, string> | "throws") {
+    const replace = vi.fn();
+    const localStorage =
+      storage === "throws"
+        ? undefined
+        : {
+            get length() {
+              return Object.keys(storage).length;
+            },
+            key: (i: number) => Object.keys(storage)[i] ?? null,
+            getItem: (k: string) => storage[k] ?? null,
+          };
+    const window: Record<string, unknown> = {};
+    Object.defineProperty(window, "localStorage", {
+      get() {
+        if (storage === "throws") throw new Error("SecurityError: storage blocked");
+        return localStorage;
+      },
+    });
+    for (const src of inlineScripts(html)) {
+      new Function("window", "location", src)(window, { replace });
+    }
+    return replace;
+  }
+
+  const page = (code = "ywaoSiE") =>
+    renderCardNotConfigured({ businessName: "Acme", code, clientRef: "MESA-7" });
+
+  it("sends a browser holding a Supabase session to /setup/:code", () => {
+    const replace = runInBrowser(page(), {
+      "sb-abcdefgh-auth-token": "{}",
+    });
+
+    expect(replace).toHaveBeenCalledWith("/setup/ywaoSiE");
+  });
+
+  it("leaves an anonymous visitor on the page", () => {
+    expect(runInBrowser(page(), {})).not.toHaveBeenCalled();
+  });
+
+  it("ignores storage keys that only look similar", () => {
+    const replace = runInBrowser(page(), {
+      tenant: "acme",
+      "sb-auth-token": "{}",
+      "xsb-abc-auth-token": "{}",
+      "sb-abc-auth-token-code-verifier": "{}",
+    });
+
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("leaves the visitor on the page when storage is blocked", () => {
+    expect(runInBrowser(page(), "throws")).not.toHaveBeenCalled();
+  });
+
+  it("encodes the code into the setup path", () => {
+    const replace = runInBrowser(page("a b/c"), { "sb-x-auth-token": "{}" });
+
+    expect(replace).toHaveBeenCalledWith("/setup/a%20b%2Fc");
+  });
+
+  it("cannot be broken out of the script by the code", () => {
+    const html = page("</script><script>alert(1)</script>");
+
+    expect(html).not.toContain("</script><script>alert(1)");
+    expect(html).toContain("\\u003c/script>");
   });
 });

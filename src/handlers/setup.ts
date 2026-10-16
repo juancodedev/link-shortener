@@ -30,8 +30,9 @@ import { MAX_CLIENT_REF_LENGTH } from "../api/links";
 /**
  * Encodes a value for a `<script>` block. JSON.stringify alone leaves `<`
  * intact, and `</script>` inside a string literal still ends the element.
+ * Shared with the unconfigured card page, which embeds the code the same way.
  */
-function scriptValue(value: string): string {
+export function scriptValue(value: string): string {
   return JSON.stringify(value)
     .replace(/</g, "\\u003c")
     .replace(/\u2028/g, "\\u2028")

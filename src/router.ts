@@ -17,7 +17,7 @@ import { createLinksBatch } from "./api/batch";
 import { listClientRefMetrics } from "./api/clients";
 import { listLocations, createLocation, updateLocation } from "./api/locations";
 import { linkQrSvg, batchQrSheet } from "./api/qr";
-import { reviewGateMetrics } from "./api/review-gate";
+import { exportFeedbackCsv, listFeedback, reviewGateMetrics } from "./api/review-gate";
 import {
   createTenant,
   deleteTenant,
@@ -157,6 +157,9 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
   // scans and the dashboard renders them on one screen, so fetching them
   // separately would let the numbers disagree in front of the owner.
   app.get("/api/review-gate/metrics", auth, tenantMembershipMiddleware, reviewGateMetrics);
+  // The comments themselves, and the same data as a download.
+  app.get("/api/review-gate/feedback", auth, tenantMembershipMiddleware, listFeedback);
+  app.get("/api/review-gate/feedback.csv", auth, tenantMembershipMiddleware, exportFeedbackCsv);
 
   // Tenant provisioning: auth required, no tenant middleware (tenant doesn't exist yet)
   // -----------------------------------------------------------------------

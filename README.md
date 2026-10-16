@@ -202,6 +202,8 @@ Every mutation flushes the tenant's `reg:{code}` KV entries so the change takes 
 | `POST` | `/api/locations` | Create one location |
 | `PATCH` | `/api/locations/:id` | Rename a location or switch it off |
 | `GET` | `/api/clients/metrics` | Per-`client_ref` visitor rollup |
+| `GET` | `/api/review-gate/feedback` | What customers wrote, newest first |
+| `GET` | `/api/review-gate/feedback.csv` | The same, as a download |
 | `GET` | `/api/review-gate/metrics` | Action-screen views, sentiment, derivation rate |
 
 Tenant-scoped routes run `auth` → `createTenantMembershipMiddleware` → handler. **That chain is

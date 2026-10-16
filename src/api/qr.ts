@@ -1,5 +1,6 @@
 import qrcode from "qrcode-generator";
 import { textToPathData } from "../qr/font";
+import { toCsv } from "../utils/csv";
 import { zipSync } from "fflate";
 import type { Handler } from "hono";
 import type { AppEnv, HonoVars } from "../types/env";
@@ -259,18 +260,6 @@ export function renderCardSvg(params: {
 </svg>`;
 }
 
-/**
- * Quotes a CSV cell when it holds anything that would move a column.
- *
- * A comma in a value does not fail loudly: it shifts every later column and the
- * sheet still opens. The designer then reads a shifted sheet as a wrong sheet,
- * which is the worst possible failure for a document about to be cut.
- */
-function csvCell(value: string): string {
-  if (!/[",\n\r]/.test(value)) return value;
-  return `"${value.replace(/"/g, '""')}"`;
-}
-
 function round3(v: number): string {
   return v.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
 }
@@ -460,20 +449,21 @@ export const batchQrSheet: Handler<{
   //
   // Escaped because a comma in a value silently shifts every later column, and
   // a designer would read a shifted sheet as a wrong sheet.
-  const header = "file,short_code,short_url,client_ref,feedback_email";
-  const lines = rows.map(
-    (r, i) =>
-      [
-        `card-${String(i + 1).padStart(3, "0")}.svg`,
-        r.short_code,
-        `https://${domain}/${r.short_code}`,
-        r.client_ref ?? "",
-        r.feedback_email ?? "",
-      ]
-        .map(csvCell)
-        .join(","),
+  const lines = rows.map((r, i) =>
+    [
+      `card-${String(i + 1).padStart(3, "0")}.svg`,
+      r.short_code,
+      `https://${domain}/${r.short_code}`,
+      r.client_ref ?? "",
+      r.feedback_email ?? "",
+    ],
   );
-  files["links.csv"] = new TextEncoder().encode(`${header}\n${lines.join("\n")}\n`);
+  files["links.csv"] = new TextEncoder().encode(
+    toCsv(
+      ["file", "short_code", "short_url", "client_ref", "feedback_email"],
+      lines,
+    ),
+  );
 
   const zipped = zipSync(files, { level: 6 });
 

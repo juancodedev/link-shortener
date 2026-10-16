@@ -200,6 +200,21 @@ export function validateSlug(raw: string): SlugValidationResult {
   return { valid: true };
 }
 
+/** Canonical 8-4-4-4-12 hex UUID, any version, case-insensitive. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Whether a string is a UUID, as Postgres's `uuid` type would accept it in
+ * canonical form.
+ *
+ * Checked before a query rather than left to the database: a malformed id
+ * bound to a `uuid` column is a 22P02 cast error, which surfaces as a 500 for
+ * what is plainly a bad request.
+ */
+export function isUuid(raw: string): boolean {
+  return UUID_RE.test(raw);
+}
+
 /**
  * Sanitizes user input by trimming whitespace and truncating to maxLen.
  * Used for display_name, title, and other text fields.

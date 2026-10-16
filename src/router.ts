@@ -16,6 +16,7 @@ import { createLink, listLinks, updateLink, deleteLink, linkClicks } from "./api
 import { createLinksBatch } from "./api/batch";
 import { listClientRefMetrics } from "./api/clients";
 import { listLocations, createLocation, updateLocation } from "./api/locations";
+import { linkQrSvg, batchQrSheet } from "./api/qr";
 import { reviewGateMetrics } from "./api/review-gate";
 import { createTenant, deleteTenant, listTenants } from "./api/tenants";
 import { listTenantSubscriptions, setTenantSubscription } from "./handlers/ops";
@@ -102,6 +103,12 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
   // tenant-scoped route above, for the same reason: the links COUNT is a
   // correlated subquery against the tenant's own schema, so omitting the
   // middleware would not merely return wrong numbers, it would throw.
+  // Server-rendered QR. The print sheet is what removes the dependency on a
+  // third-party image service for the one artefact that leaves this system and
+  // comes back as ink on paper.
+  app.get("/api/links/:id/qr.svg", auth, tenantMembershipMiddleware, linkQrSvg);
+  app.post("/api/links/qr-sheet.zip", auth, tenantMembershipMiddleware, batchQrSheet);
+
   app.get("/api/locations", auth, tenantMembershipMiddleware, listLocations);
   app.post("/api/locations", auth, tenantMembershipMiddleware, createLocation);
   app.patch("/api/locations/:id", auth, tenantMembershipMiddleware, updateLocation);

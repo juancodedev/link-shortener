@@ -71,6 +71,68 @@ const RECENT_CLICK_LIMIT = 10;
 export const DEFAULT_MAX_ACTIVE_LINKS = 1000;
 
 /**
+ * Separates the card-stock budget from the active-link budget.
+ *
+ * THE PROBLEM THIS SOLVES
+ *
+ * `is_active` defaults to true, and that default is load-bearing: it is what
+ * makes manufacturing a card before its destination possible at all. The cost
+ * is that card stock is ACTIVE from the moment it is created, so it counted
+ * against `MAX_ACTIVE_LINKS` — the cap that exists to stop one tenant
+ * registering every link they will ever need.
+ *
+ * Which meant manufacturing 500 cards consumed the entire budget before a
+ * single one had a destination, and an owner with a hundred working stickers
+ * could not manufacture fifty more. The cap was not protecting anything; it
+ * was charging for stock the tenant had not yet committed to.
+ *
+ * WHAT IS NOW BOUNDED
+ *
+ * CONFIGURED links — those with a destination. That is the set the cap was
+ * always about: a runaway-creation guard on links customers are being sent to.
+ * Counting them is unchanged, so every existing deployment's behaviour is
+ * preserved for links it already has.
+ *
+ * CARD STOCK gets its own, much larger bound. It is bounded rather than
+ * unbounded because an unbounded path is how a loop bug becomes an outage, and
+ * because a tenant that can create unlimited cards can still be made to create
+ * them by anyone with a stolen token.
+ *
+ * THE TWO ARE REPORTED SEPARATELY in the error message, because "link limit
+ * reached" from a card-manufacturing run is a sentence that sends an operator
+ * looking at the wrong number.
+ *
+ * Overridable through the same var so an operator who genuinely wants one
+ * shared budget can have it: `MAX_CARD_STOCK`.
+ */
+
+/** Fallback card-stock bound when `MAX_CARD_STOCK` is not configured. */
+export const DEFAULT_MAX_CARD_STOCK = 2000;
+
+/**
+ * Resolves the card-stock bound.
+ *
+ * Same parsing discipline as `resolveMaxActiveLinks`: every malformed value
+ * falls back to the documented default rather than being coerced, because a
+ * typo in a wrangler var must never read as `0` and lock a tenant out of
+ * manufacturing.
+ */
+export function resolveMaxCardStock(
+  env: Pick<AppEnv, "MAX_CARD_STOCK">,
+): number {
+  const raw = env.MAX_CARD_STOCK;
+  if (typeof raw !== "string") return DEFAULT_MAX_CARD_STOCK;
+
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return DEFAULT_MAX_CARD_STOCK;
+
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_MAX_CARD_STOCK;
+
+  return parsed;
+}
+
+/**
  * Resolves the active-link cap from the environment (T3.1).
  *
  * Every malformed value falls back to the default rather than being coerced. A
@@ -494,25 +556,65 @@ export async function createLinkCore({
     original_url = urlResult.normalized ?? input.original_url;
   }
 
-  // --- 4. Count active links (configured cap, T3.1) ---
+  // --- 4. Count against the RIGHT budget (T3.1, refined for card stock) ---
+  //
+  // Two counts, because a link and a piece of card stock are different things
+  // and the cap was always about the first:
+  //
+  //   CONFIGURED — has a destination. This is the set MAX_ACTIVE_LINKS bounds,
+  //     unchanged, so no existing deployment sees a link it used to be able to
+  //     create suddenly refused.
+  //
+  //   CARD STOCK — manufactured ahead of its destination. Bounded separately
+  //     and far more generously, because charging a tenant's entire link
+  //     budget for stickers they have not yet printed is not a guard, it is a
+  //     tax. See resolveMaxCardStock for the full reasoning.
+  //
+  // `is_active` still gates both: disabling a card frees its budget, which is
+  // what an operator reaching for the toggle expects.
+  //
+  // The incoming row is counted against the bucket it WILL land in, not the
+  // one its neighbours are in. Creating the 500th configured link is refused at
+  // 500 configured; creating the 500th card is refused at 500 cards.
+  const incomingIsStock = !original_url;
   const countRow = await withClient(env, async (client) => {
     const table = qualifyTable(tenant.schemaName, "links");
-    const res = await client.query<{ count: string }>(
-      `SELECT COUNT(*)::text AS count FROM ${table} WHERE is_active = true`,
+    const res = await client.query<{ configured: string; stock: string }>(
+      `SELECT
+         COUNT(*) FILTER (WHERE is_active = true AND original_url IS NOT NULL)::text AS configured,
+         COUNT(*) FILTER (WHERE is_active = true AND original_url IS NULL)::text AS stock
+       FROM ${table}`,
     );
     return res.rows[0];
   });
 
-  const activeCount = countRow ? parseInt(countRow.count, 10) : 0;
-  const maxActiveLinks = resolveMaxActiveLinks(env);
-  if (activeCount >= maxActiveLinks) {
-    // The message reports the cap ACTUALLY IN FORCE. Interpolating a constant
-    // here would state one number while enforcing another, so an operator who
-    // raised the limit still reads "30" in the error.
-    throw new LimitError(
-      `Link limit reached (${maxActiveLinks} active links)`,
-      "link_limit_reached",
-    );
+  if (incomingIsStock) {
+    const stockCount = countRow ? parseInt(countRow.stock, 10) : 0;
+    const maxCardStock = resolveMaxCardStock(env);
+    if (stockCount >= maxCardStock) {
+      // Reports the bound actually in force, and says WHICH budget was hit. A
+      // "link limit" message from a card-manufacturing run sends an operator
+      // looking at the wrong number.
+      throw new LimitError(
+        `Card stock limit reached (${maxCardStock} cards awaiting a destination). ` +
+          `This is separate from the link limit of ${resolveMaxActiveLinks(env)}. ` +
+          `Configure or remove existing cards to free budget.`,
+        "card_stock_limit_reached",
+      );
+    }
+  } else {
+    const configuredCount = countRow ? parseInt(countRow.configured, 10) : 0;
+    const maxActiveLinks = resolveMaxActiveLinks(env);
+    if (configuredCount >= maxActiveLinks) {
+      // The message reports the cap ACTUALLY IN FORCE. Interpolating a constant
+      // here would state one number while enforcing another, so an operator who
+      // raised the limit still reads "30" in the error.
+      throw new LimitError(
+        `Link limit reached (${maxActiveLinks} active links with a destination). ` +
+          `Card stock awaiting a destination does not count toward this.`,
+        "link_limit_reached",
+      );
+    }
   }
 
   // --- 5. Create the link and claim its short code globally ---

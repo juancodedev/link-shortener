@@ -667,6 +667,15 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         <p class="caption">Your short link:</p>
         <input type="text" id="short-url" readonly class="short-url" onclick="this.select();navigator.clipboard.writeText(this.value)">
       </div>
+      <!--
+        Card stock is a different job from shortening a URL, so it gets its own
+        entry point rather than an option on this form. An owner making a hundred
+        stickers does not want a hundred submissions.
+      -->
+      <hr style="margin:1.25rem 0;border:none;border-top:1px solid var(--edge);">
+      <button type="button" id="open-bulk" class="btn-sm btn-outline">
+        Create cards in bulk...
+      </button>
     </div>
 
     <div class="card">
@@ -756,6 +765,55 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         -->
         <button id="copy-print-sheet" class="btn-sm btn-outline gap-top-sm">Copy URL for print sheet</button>
         <button class="btn-sm gap-top-sm" onclick="document.getElementById('qr-modal').classList.add('hidden')">Close</button>
+      </div>
+    </div>
+
+    <!--
+      MANUFACTURING CARD STOCK IN BULK.
+
+      One card at a time is the wrong shape for the job. An owner making a
+      hundred stickers does not want a hundred form submissions; they want to
+      say "ten of these" and receive a print sheet they can hand to a designer.
+
+      This creates them WITHOUT a destination, which is the state the whole flow
+      depends on: the QR goes on the card now and the review URL is loaded later,
+      when it is settled. A card created with a destination already filled in
+      commits the owner to knowing the URL before the sticker exists.
+
+      The modal asks for a COUNT and nothing else. Every field the create form
+      has — title, client_ref, location — is per-card by nature, and pretending
+      otherwise would mean inventing a bulk meaning for each one. Those stay on
+      the row, editable after the fact.
+
+      Deliberately NOT wired through data-action: that switch is for record
+      actions, and this acts on no record. It is a static button with a static
+      listener, which is the same discipline the create form follows.
+    -->
+    <div id="bulk-modal" class="qr-modal hidden" onclick="this.classList.add('hidden')">
+      <div class="qr-card" onclick="event.stopPropagation()" style="max-width:26rem;">
+        <h3 class="qr-title">Create cards in bulk</h3>
+        <p class="field-help">
+          Each card gets its own QR and no destination yet. Print them, and load
+          the real URL whenever it is settled — until then, scanning a card
+          opens a \"not configured\" page rather than a broken link.
+        </p>
+        <label for="bulk-count">How many cards</label>
+        <input type="number" id="bulk-count" min="1" max="200" step="1" value="10">
+        <div id="bulk-msg" class="message"></div>
+        <div id="bulk-result" style="display:none;">
+          <p class="caption" id="bulk-summary"></p>
+          <button type="button" id="bulk-download" class="btn-sm btn-primary gap-top-sm">
+            Download print sheet (.zip)
+          </button>
+          <p class="field-help">
+            One SVG per card plus a links.csv listing them. The cards go straight
+            to your designer.
+          </p>
+        </div>
+        <div class="gap-top-sm" style="display:flex;gap:.5rem;">
+          <button type="button" id="bulk-create" class="btn-sm btn-primary">Create them</button>
+          <button class="btn-sm gap-top-sm" onclick="document.getElementById('bulk-modal').classList.add('hidden')">Close</button>
+        </div>
       </div>
     </div>
 
@@ -887,6 +945,137 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         } finally {
           btn.disabled = false;
           btn.textContent = "Shorten";
+        }
+      });
+
+      // ---------------------------------------------------------------------
+      // Bulk card creation
+      //
+      // The count is the only input, and that is deliberate: every other field
+      // on a link is per-card by nature, and inventing a bulk meaning for each
+      // would be inventing vocabulary the product does not have. They stay
+      // editable on the row afterwards.
+      //
+      // The generated ids are kept in module scope rather than in the DOM,
+      // because the download button needs them and a data-* attribute would be
+      // a second copy of the same list that could drift out of sync with it.
+      // ---------------------------------------------------------------------
+      // >>> BULK BLOCK — the dashboard test scopes its row-action assertion to
+      // exactly this range.
+      let bulkIds = [];
+
+      document.getElementById("open-bulk").addEventListener("click", () => {
+        bulkIds = [];
+        document.getElementById("bulk-result").style.display = "none";
+        const msg = document.getElementById("bulk-msg");
+        msg.className = "message";
+        msg.textContent = "";
+        document.getElementById("bulk-modal").classList.remove("hidden");
+      });
+
+      document.getElementById("bulk-create").addEventListener("click", async () => {
+        const btn = document.getElementById("bulk-create");
+        const msg = document.getElementById("bulk-msg");
+        const count = parseInt(document.getElementById("bulk-count").value, 10);
+
+        // Validated here as well as on the server: the server is what makes it
+        // safe, but a button that does nothing for ten seconds because the count
+        // was 0 teaches the owner that the button is broken.
+        if (!Number.isInteger(count) || count < 1 || count > 200) {
+          msg.className = "message error";
+          msg.textContent = "Enter a number between 1 and 200.";
+          return;
+        }
+
+        btn.disabled = true;
+        btn.textContent = "Creating...";
+        msg.className = "message";
+        msg.textContent = "";
+
+        try {
+          // No destination, and \`is_gated\` on: a card whose QR forwards
+          // straight past the gate records nothing, and the panel this product
+          // is measured by would stay empty.
+          const links = Array.from({ length: count }, () => ({ is_gated: true }));
+          const res = await window.__api("POST", "/api/links/batch", { links });
+
+          const body = await res.json();
+          // A partial batch is reported, never treated as success. Nine of ten
+          // cards is a shortfall the owner discovers at the printer.
+          const created = (body.results || []).filter((r) => r.status === 201);
+
+          if (!res.ok && !created.length) {
+            throw new Error(body.error || "Could not create the cards");
+          }
+
+          bulkIds = created.map((r) => r.link.id);
+
+          document.getElementById("bulk-result").style.display = "";
+          const failed = (body.results || []).length - created.length;
+          document.getElementById("bulk-summary").textContent =
+            created.length + (created.length === 1 ? " card created. " : " cards created. ") +
+            (failed ? failed + " failed — try those again." : "");
+
+          msg.className = failed ? "message error" : "message success";
+          if (!failed) msg.textContent = "";
+          loadLinks();
+        } catch (err) {
+          msg.className = "message error";
+          msg.textContent = err instanceof Error ? err.message : "Error";
+        } finally {
+          btn.disabled = false;
+          btn.textContent = "Create them";
+        }
+      });
+
+      // <<< BULK BLOCK
+
+      document.getElementById("bulk-download").addEventListener("click", async () => {
+        const msg = document.getElementById("bulk-msg");
+
+        if (!bulkIds.length) {
+          msg.className = "message error";
+          msg.textContent = "Create the cards first.";
+          return;
+        }
+
+        try {
+          // Fetched and saved as a blob rather than pointed at by an <a href>:
+          // this request is a POST with a JSON body, and a navigation cannot
+          // carry one.
+          const res = await fetch("/api/links/qr-sheet.zip", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: "Bearer " + localStorage.getItem("access_token"),
+              "X-Tenant-Slug": localStorage.getItem("tenant") || "",
+            },
+            body: JSON.stringify({ link_ids: bulkIds }),
+          });
+
+          if (!res.ok) {
+            // The server refuses a batch containing an unconfigured card, and
+            // says so. That message is the answer — it is shown rather than
+            // replaced with a generic failure.
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.error || "Could not build the print sheet");
+          }
+
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "cards.zip";
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          // Revoked immediately after the click: the download has already been
+          // handed to the browser, and leaving the object URL alive pins the
+          // whole ZIP in memory for the life of the tab.
+          URL.revokeObjectURL(url);
+        } catch (err) {
+          msg.className = "message error";
+          msg.textContent = err instanceof Error ? err.message : "Error";
         }
       });
 

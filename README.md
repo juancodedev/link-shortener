@@ -194,6 +194,8 @@ Every mutation flushes the tenant's `reg:{code}` KV entries so the change takes 
 | `DELETE` | `/api/links/:id` | Delete a link |
 | `GET` | `/api/links/:id/clicks` | Per-link analytics: country, device, source |
 | `POST` | `/api/links/batch` | Create up to 100 links in one call |
+| `GET` | `/api/links/:id/qr.svg` | One card's QR, as a print-ready SVG |
+| `POST` | `/api/links/qr-sheet.zip` | A batch of cards as a ZIP: one SVG per card plus `links.csv` |
 | `GET` | `/api/locations` | List locations (tables, zones) with a link count each |
 | `POST` | `/api/locations` | Create one location |
 | `PATCH` | `/api/locations/:id` | Rename a location or switch it off |
@@ -515,3 +517,22 @@ There is no CI workflow — `.github/` does not exist. Typecheck and tests run l
 ## License
 
 MIT
+
+#### Link and card-stock budgets
+
+Two budgets, counted separately, because a link and a piece of card stock are
+different things:
+
+| Variable | Bounds | Default | Counts |
+| --- | --- | --- | --- |
+| `MAX_ACTIVE_LINKS` | Links **with a destination** | `1000` | Active configured links |
+| `MAX_CARD_STOCK` | Links **without** one | `2000` | Active card stock |
+
+`MAX_ACTIVE_LINKS` counts exactly what it always counted, so no existing
+deployment loses a link it was able to create. Disabling a link or a card frees
+its budget in both buckets.
+
+Card stock is created before its destination exists — that is what makes
+manufacturing a sticker possible — and it is active from the moment it is made.
+Counting it against `MAX_ACTIVE_LINKS` charged a tenant their whole allowance
+for stickers they had not yet printed.

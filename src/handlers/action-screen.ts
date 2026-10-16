@@ -167,6 +167,20 @@ export function renderActionScreen(params: ActionScreenParams): Response {
     <summary style="display:none">Enviar comentario privado</summary>
     <form method="POST" action="/api/gate">
       <input type="hidden" name="code" value="${code}">
+      <!--
+        WITHOUT THIS FIELD EVERY PRIVATE COMMENT 400s.
+
+        The endpoint validates action_taken against google_redirect and
+        internal_feedback, and rejects an empty string. The form posted only
+        code, comment and customer_contact, so it sent an empty action and every
+        submission came back as an invalid_request error, with no way for the
+        customer to tell what was wrong.
+
+        Every handler test passes this field by hand, so all of them stayed green
+        while the only client that posts to this endpoint in production could not
+        use it. Tests on each side of a boundary are not a test of the boundary.
+      -->
+      <input type="hidden" name="action_taken" value="internal_feedback">
       <textarea name="comment" required maxlength="2000" placeholder="Cuéntanos qué pasó"></textarea>
       <input type="email" name="customer_contact" maxlength="200" placeholder="Tu correo (opcional)">
       <button class="submit" type="submit">Enviar a la dirección</button>
@@ -184,16 +198,17 @@ export function renderActionScreen(params: ActionScreenParams): Response {
       keepalive: true
     }).catch(function () {});
   });
-  document.querySelector('details')?.addEventListener('toggle', function (e) {
-    if (e.target.open) {
-      fetch('/api/gate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: 'code=' + encodeURIComponent(${JSON.stringify(code)}) + '&action_taken=internal_feedback',
-        keepalive: true
-      }).catch(function () {});
-    }
-  });
+  // There is deliberately NO fetch on the panel's toggle.
+  //
+  // It used to record \`internal_feedback\` the moment the panel opened, with no
+  // comment — which the endpoint rejects on purpose, because "a private
+  // submission with no comment carries no information". So this request could
+  // only ever return 400: it recorded nothing, and it cost a round trip on a
+  // customer's phone.
+  //
+  // If opening the panel is worth measuring, it needs an action of its own that
+  // means "saw the option" rather than "left feedback". That is a product
+  // decision, not a bug fix, so it is not invented here.
 </script>
 </body>
 </html>`;

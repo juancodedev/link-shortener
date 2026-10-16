@@ -1179,6 +1179,9 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           case "toggle":
             toggleLink(el.dataset.id, el.dataset.active === "true");
             break;
+          case "load-destination":
+            loadDestination(el.dataset.id);
+            break;
           case "delete":
             deleteLink(el.dataset.id);
             break;
@@ -1325,6 +1328,24 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
                       </div>
                       <p class="field-note">The code that goes on the sticker. This is the destination the printed tag resolves to.</p>
                     </div>
+                    \${!l.original_url ? \`
+                    <div class="field">
+                      <label>Destination</label>
+                      <div class="field-row">
+                        <button class="btn-sm btn-primary" data-action="load-destination" data-id="\${esc(l.id)}">Load destination...</button>
+                      </div>
+                      <!--
+                        Rendered ONLY while the card has no destination, because
+                        that is the only state in which there is something to do.
+
+                        It exists because the flow promises one: a card is
+                        manufactured first and its destination loaded later. The
+                        API has always accepted it and invalidated the cache; what
+                        was missing was the door. Without this, "load them before
+                        exporting" was an instruction with nowhere to go.
+                      -->
+                      <p class="field-note">This card has no destination yet. Anyone who scans it opens a "not configured" page. Load the URL whenever it is settled — the printed sticker does not need reprinting.</p>
+                    </div>\` : ""}
                     <div class="field">
                       <label>Tag state</label>
                       <div class="field-row">
@@ -1402,6 +1423,43 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         } catch (err) {
           alert("Error: " + (err instanceof Error ? err.message : ""));
         }
+      }
+
+      /**
+       * Loads a destination onto a card that was manufactured without one.
+       *
+       * THE SECOND HALF OF THE FLOW. The card already exists, already has a
+       * short_code, and is already printed — what is missing is the row the QR
+       * resolves through. Setting it here is what makes an existing sticker work,
+       * with no reprinting, because the pixels never encoded the destination;
+       * they encoded the short code.
+       *
+       * \`prompt\` rather than a modal: this is a single field on a row the
+       * owner is already looking at, and a dialog that hides the rest of the
+       * table to ask for one string is heavier than the act deserves. It is
+       * dismissible and it validates nothing, which is why the server still
+       * validates — the prompt is a convenience, not a gate.
+       */
+      async function loadDestination(id) {
+        const url = window.prompt(
+          "Where should this card go?\n\nPaste the full URL. Leave it blank to clear it again.",
+          "",
+        );
+
+        // Cancelled is null; an empty string is a deliberate clear. Treating
+        // them the same would let an owner undo a mistake by closing the dialog.
+        if (url === null) return;
+
+        const trimmed = url.trim();
+
+        // Not validated here on purpose — the same URL rules apply as on create,
+        // and reimplementing them in the browser is how the two drift apart.
+        // Sending an empty string clears the destination back to card stock.
+        await window.__api("PATCH", "/api/links/" + id, {
+          original_url: trimmed === "" ? null : trimmed,
+        });
+
+        loadLinks();
       }
 
       async function showMetrics(linkId, code, e) {

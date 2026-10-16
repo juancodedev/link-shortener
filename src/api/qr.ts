@@ -254,19 +254,25 @@ export const batchQrSheet: Handler<{
     return res.rows;
   });
 
-  // Every requested id must resolve, and every one must have a destination.
-  // A partially-exported sheet is a print run that comes up short.
+  // Every requested id must resolve. A partially-exported sheet is a print run
+  // that comes up short, so an id that is not in this tenant is refused rather
+  // than quietly producing a sheet with a hole in it.
+  //
+  // NOT a refusal condition: a link without a destination.
+  //
+  // This used to reject them — "load them before exporting" — which inverted the
+  // entire product. The destination is loaded LATER, on purpose: a card is
+  // printed before anyone knows where it points. A sheet that refuses to export
+  // unconfigured cards refuses to manufacture stock, which is the one thing this
+  // endpoint exists to do.
+  //
+  // The card still gets a real QR either way, because `short_code` exists from
+  // the moment the card does. What the QR encodes is decided when the destination
+  // is loaded, because the destination lives on the row, not in the pixels.
   if (rows.length !== ids.length) {
     throw new NotFoundError(
       "one or more links do not exist in this tenant",
       "not_found",
-    );
-  }
-  const unconfigured = rows.filter((r) => !r.original_url);
-  if (unconfigured.length > 0) {
-    throw new ValidationError(
-      `${unconfigured.length} of ${rows.length} links have no destination yet; load them before exporting`,
-      "links_unconfigured",
     );
   }
 

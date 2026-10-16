@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { unzipSync, strFromU8 } from "fflate";
 import { renderQrSvg, renderCardSvg } from "../../src/api/qr";
 import { withClient } from "../../src/db/client";
 
@@ -176,10 +177,27 @@ describe("the ZIP sheet", () => {
   // of this file, which makes every handler call throw on an undefined query
   // client rather than on a real defect. The ZIP tests install their own
   // implementation per call, so they need no reset.
-  async function buildZip(rows: unknown[]) {
+  /**
+   * Decompresses a ZIP response into its entry names.
+   *
+   * The existing sheet tests only ever asserted headers, which meant the body
+   * was opaque: a handler that emitted an empty archive would have passed every
+   * one of them. Unzipping is what makes "the card is in there" a claim about
+   * the artefact and not about a status line.
+   */
+  async function zipEntries(res: Response): Promise<string[]> {
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    return Object.keys(unzipSync(bytes));
+  }
+
+  async function buildZip(rows: unknown[], opts: { rows?: unknown[] } = {}) {
     const { batchQrSheet } = await import("../../src/api/qr");
+    // `opts.rows` simulates ids that were selected but did not resolve — a
+    // different fact from an empty selection, which is rejected earlier for a
+    // different reason.
+    const resolved = opts.rows ?? rows;
     vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) =>
-      fn({ query: vi.fn().mockResolvedValue({ rows, rowCount: rows.length }) }),
+      fn({ query: vi.fn().mockResolvedValue({ rows: resolved, rowCount: resolved.length }) }),
     );
     return batchQrSheet(zipContext(rows.map((r: any) => r.id)));
   }
@@ -218,17 +236,37 @@ describe("the ZIP sheet", () => {
     expect(res.headers.get("Cache-Control")).toContain("no-store");
   });
 
-  it("REJECTS a batch containing an unconfigured link, rather than skipping it", async () => {
-    await expect(
-      buildZip([sheetRow(), sheetRow({ id: "link-2", original_url: null })]),
-    ).rejects.toThrow(/no destination yet/i);
+  it("exports a card that has no destination yet", async () => {
+    // THE WHOLE PRODUCT DEPENDS ON THIS.
+    //
+    // A card is printed before anyone knows where it points — that is the entire
+    // reason a destination is optional. This handler once refused those cards
+    // with "load them before exporting", which made the print sheet refuse to
+    // manufacture stock: the one thing it exists to do.
+    //
+    // The QR is still real. `short_code` exists from the moment the card does,
+    // and the destination lives on the row, not in the pixels — loading it later
+    // changes what the QR means without reprinting anything.
+    const res = await buildZip([
+      sheetRow(),
+      sheetRow({ id: "link-2", original_url: null }),
+    ]);
+
+    const entries = await zipEntries(res);
+    expect(entries).toContain("cards/card-001.svg");
+    expect(entries).toContain("cards/card-002.svg");
   });
 
-  it("names how many are unconfigured, so the caller can act", async () => {
-    // "Some links are unconfigured" is not actionable. "1 of 2" is.
+  it("still refuses a link that is not in this tenant", async () => {
+    // The refusal that survives is the ownership one, not the configuration
+    // one. An id from another tenant is a cross-tenant leak, not a missing
+    // destination, and it must never be printed onto stock.
     await expect(
-      buildZip([sheetRow(), sheetRow({ id: "link-2", original_url: null })]),
-    ).rejects.toThrow(/1 of 2/);
+      buildZip([sheetRow(), sheetRow({ id: "link-2", original_url: null })], {
+        // One of the two ids resolves to no row at all.
+        rows: [sheetRow()],
+      }),
+    ).rejects.toThrow(/do not exist in this tenant/i);
   });
 
   it("rejects a link that does not exist in this tenant", async () => {

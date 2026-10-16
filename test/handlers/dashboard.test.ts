@@ -894,9 +894,9 @@ describe("the dashboard script never triggers a load at parse time", () => {
     );
 
     // One call per handler that changes the table: create form submit, bulk
-    // create, toggle, client-ref save, delete. A parse-time call anywhere
-    // pushes this to six.
-    expect(statements).toHaveLength(5);
+    // create, load-destination, toggle, client-ref save, delete. A parse-time
+    // call anywhere pushes this to seven.
+    expect(statements).toHaveLength(6);
     expect(statements.every((indent) => indent > TOP_LEVEL_INDENT)).toBe(true);
   });
 
@@ -1472,10 +1472,105 @@ describe("the dashboard can manufacture cards in bulk", () => {
     // code under test.
     expect(wired).not.toMatch(/data-action=/);
 
-    // And the switch itself is unchanged: still exactly the six record actions.
+    // And the switch carries exactly seven record actions, no more. Pinned
+    // because this is the list that decides what a row may do: an action added
+    // here reaches the handler with a row's own id, so an unlisted one silently
+    // does nothing while looking wired.
+    //
+    // load-destination joined the six on purpose — it IS a record action, and it
+    // is the second half of the flow this PR completes.
     const actions = [...script.matchAll(/case "([a-z-]+)":/g)].map((m) => m[1]);
     expect(new Set(actions)).toEqual(
-      new Set(["copy", "qr", "metrics", "save-client-ref", "toggle", "delete"]),
+      new Set([
+        "copy",
+        "qr",
+        "metrics",
+        "save-client-ref",
+        "load-destination",
+        "toggle",
+        "delete",
+      ]),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Loading a destination onto a card
+//
+// A card is manufactured before anyone knows where it points. The API has always
+// accepted the destination and invalidated the redirect cache; what was missing
+// was the door — so "load them before exporting" was an instruction with nowhere
+// to go, and the owner's only way to fill ten cards was the API.
+// ---------------------------------------------------------------------------
+describe("the dashboard can load a destination onto a card", () => {
+  it("offers the action only while a card has no destination", async () => {
+    const html = await serve();
+
+    // Rendered conditionally, because a configured card has nothing to load.
+    // Offering it forever would be offering an action that does nothing.
+    expect(html).toContain('data-action="load-destination"');
+    expect(html).toContain("!l.original_url");
+  });
+
+  it("says what an unconfigured card does when scanned", async () => {
+    const html = await serve();
+
+    // The owner has to know the QR is not broken — it is waiting.
+    expect(html).toContain("not configured");
+    expect(html).toContain("does not need reprinting");
+  });
+
+  it("explains that no reprinting is needed", async () => {
+    const html = await serve();
+
+    // The pixels never encoded the destination; they encoded the short code.
+    // Saying so is what makes an owner willing to paste the sticker first.
+    expect(html).toMatch(/reprint/i);
+  });
+
+  it("PATCHes the existing link rather than creating one", async () => {
+    const script = await clientScript();
+
+    // The card exists and is already printed. Creating a second one would give
+    // the owner two cards and one of them would be dead on arrival.
+    expect(script).toContain('window.__api("PATCH", "/api/links/" + id');
+    expect(script).toContain("original_url: trimmed === \"\" ? null : trimmed");
+  });
+
+  it("lets an empty entry clear the destination back to card stock", async () => {
+    const script = await clientScript();
+
+    // The escape hatch matters: loading a typo'd URL with no way back would
+    // strand the owner on a card they cannot fix.
+    expect(script).toContain('trimmed === "" ? null : trimmed');
+  });
+
+  it("distinguishes a CANCELLED prompt from an empty one", async () => {
+    const script = await clientScript();
+
+    // `null` is dismiss; `""` is a deliberate clear. Treating them alike would
+    // let an owner undo a mistake by pressing Escape.
+    expect(script).toContain("if (url === null) return");
+  });
+
+  it("does NOT re-validate the URL in the browser", async () => {
+    const script = await clientScript();
+
+    // The server owns URL validation, and it owns it for create too. A second
+    // copy of the rules in the browser is how the two drift apart and how a
+    // card ends up with a destination the redirect layer rejects.
+    const fn = script.slice(script.indexOf("async function loadDestination"));
+    const body = fn.slice(0, fn.indexOf("async function showMetrics"));
+    expect(body).not.toMatch(/https?:\/\//);
+  });
+
+  it("refreshes the row so the button disappears once loaded", async () => {
+    const script = await clientScript();
+
+    // The button's presence is the record's state. Without a re-render the
+    // owner clicks "Load destination..." forever on a card that is already
+    // configured.
+    const fn = script.slice(script.indexOf("async function loadDestination"));
+    expect(fn.slice(0, fn.indexOf("async function showMetrics"))).toContain("loadLinks()");
   });
 });

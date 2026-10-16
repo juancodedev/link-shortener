@@ -259,6 +259,18 @@ export function renderCardSvg(params: {
 </svg>`;
 }
 
+/**
+ * Quotes a CSV cell when it holds anything that would move a column.
+ *
+ * A comma in a value does not fail loudly: it shifts every later column and the
+ * sheet still opens. The designer then reads a shifted sheet as a wrong sheet,
+ * which is the worst possible failure for a document about to be cut.
+ */
+function csvCell(value: string): string {
+  if (!/[",\n\r]/.test(value)) return value;
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
 function round3(v: number): string {
   return v.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
 }
@@ -384,11 +396,14 @@ export const batchQrSheet: Handler<{
       short_code: string;
       client_ref: string | null;
       original_url: string | null;
+      feedback_email: string | null;
     }>(
-      `SELECT id, short_code, client_ref, original_url
-         FROM ${table}
-        WHERE id = ANY($1::uuid[])`,
-      [ids],
+      `SELECT l.id, l.short_code, l.client_ref, l.original_url,
+              t.feedback_email
+         FROM ${table} l
+         JOIN public.tenants t ON t.schema_name = $2
+        WHERE l.id = ANY($1::uuid[])`,
+      [ids, tenant.schemaName],
     );
     return res.rows;
   });
@@ -437,10 +452,26 @@ export const batchQrSheet: Handler<{
   }
 
   // The manifest, so the designer knows which card is which before cutting.
-  const header = "file,short_code,short_url,client_ref";
+  //
+  // `feedback_email` is on every row on purpose: it is per tenant, and a print
+  // run is exactly the moment someone needs to know where the comments from
+  // these stickers are supposed to end up. Repeating it per row is redundant in
+  // a spreadsheet and obvious in a text editor.
+  //
+  // Escaped because a comma in a value silently shifts every later column, and
+  // a designer would read a shifted sheet as a wrong sheet.
+  const header = "file,short_code,short_url,client_ref,feedback_email";
   const lines = rows.map(
     (r, i) =>
-      `card-${String(i + 1).padStart(3, "0")}.svg,${r.short_code},https://${domain}/${r.short_code},${r.client_ref ?? ""}`,
+      [
+        `card-${String(i + 1).padStart(3, "0")}.svg`,
+        r.short_code,
+        `https://${domain}/${r.short_code}`,
+        r.client_ref ?? "",
+        r.feedback_email ?? "",
+      ]
+        .map(csvCell)
+        .join(","),
   );
   files["links.csv"] = new TextEncoder().encode(`${header}\n${lines.join("\n")}\n`);
 

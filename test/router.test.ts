@@ -316,6 +316,78 @@ describe("router link routes", () => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /api/links/by-code/:code — the card quick-setup lookup
+//
+// Registered with auth only: the tenant comes from the code, not from the
+// caller's selection, and membership is checked inside the handler against that
+// tenant. It must also not be read as `/api/links/:id/...`.
+// ---------------------------------------------------------------------------
+
+describe("router by-code lookup route", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("registers GET /api/links/by-code/:code ahead of the /api/links/:id routes", () => {
+    const app = createApp(testEnv());
+    const paths = app.routes.map((r) => r.path);
+    const byCode = paths.indexOf("/api/links/by-code/:code");
+
+    expect(byCode).toBeGreaterThanOrEqual(0);
+    for (const path of ["/api/links/:id", "/api/links/:id/clicks", "/api/links/:id/qr.svg"]) {
+      expect(paths.indexOf(path)).toBeGreaterThan(byCode);
+    }
+  });
+
+  it("routes GET /api/links/by-code/:code through to the lookup handler", async () => {
+    vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) =>
+      fn({
+        query: vi.fn().mockImplementation(async (text: string) => {
+          if (text.includes("short_code_registry")) {
+            return {
+              rows: [
+                {
+                  short_code: "ywaoSiE",
+                  link_id: "link-uuid",
+                  tenant_id: "tenant-uuid",
+                  schema_name: "tenant_a7f3",
+                  salt: "salt-abc",
+                  subdomain: "acme",
+                },
+              ],
+            };
+          }
+          if (text.includes("tenant_memberships")) return { rows: [{ ok: 1 }] };
+          return {
+            rows: [
+              { id: "link-uuid", short_code: "ywaoSiE", original_url: null, client_ref: "T-14" },
+            ],
+          };
+        }),
+      }),
+    );
+
+    const app = createApp(testEnv());
+    const res = await app.request(
+      "/api/links/by-code/ywaoSiE",
+      { method: "GET" },
+      testEnv(),
+      executionCtx,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    await expect(res.json()).resolves.toEqual({
+      id: "link-uuid",
+      short_code: "ywaoSiE",
+      original_url: null,
+      client_ref: "T-14",
+      tenant_slug: "acme",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // GET /api/clients/metrics — the per-client_ref rollup's own route
 //
 // This exists because the rollup used to ride inside GET /api/links, which

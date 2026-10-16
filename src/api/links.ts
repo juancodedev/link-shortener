@@ -18,7 +18,13 @@ import {
   setCachedRegistryEntry,
   invalidateCachedRegistryEntry,
 } from "../cache/shortcode";
-import { LimitError, ValidationError, NotFoundError, ConflictError } from "../middleware/error";
+import {
+  AuthError,
+  LimitError,
+  ValidationError,
+  NotFoundError,
+  ConflictError,
+} from "../middleware/error";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1103,6 +1109,79 @@ export const updateLink: Handler<{
   }
 
   return c.json({ ok: true });
+};
+
+// ---------------------------------------------------------------------------
+// GET /api/links/by-code/:code — look a link up by the code on the card
+//
+// The card quick-setup page starts from what the owner just scanned: a bare
+// short code, with no link id and no tenant. So unlike every other route here,
+// the tenant is NOT chosen by the caller through the membership middleware —
+// it is whichever tenant the registry says owns the code, and the caller must
+// be a member of exactly that tenant.
+//
+// The membership check is a point lookup bound to (user, tenant) rather than a
+// reuse of the middleware's list query: the question is "is this user in THIS
+// tenant", and binding both ids into the predicate means there is no row set a
+// handler could pick from wrongly.
+//
+// Unknown code, inactive tenant, not a member, and a registry row whose link is
+// gone are all the same 404. Distinguishing "not yours" from "does not exist"
+// would let any logged-in user probe which codes are live on the platform.
+// ---------------------------------------------------------------------------
+
+export const getLinkByCode: Handler<{
+  Bindings: AppEnv;
+  Variables: HonoVars;
+}> = async (c) => {
+  const user = c.get("user");
+  if (!user?.userId) throw new AuthError();
+
+  const code = c.req.param("code") ?? "";
+  const notFound = () => new NotFoundError("Link not found", "not_found");
+
+  const entry = await resolveRegistryEntry(c.env, code);
+  if (!entry) throw notFound();
+
+  const isMember = await withClient(c.env, async (client) => {
+    const res = await client.query(
+      `SELECT 1
+         FROM public.tenant_memberships m
+        WHERE m.profile_id = $1 AND m.tenant_id = $2
+        LIMIT 1`,
+      [user.userId, entry.tenantId],
+    );
+    return res.rows.length > 0;
+  });
+  if (!isMember) throw notFound();
+
+  // By short_code, not by the registry's link_id: the code is what the caller
+  // has, and a cached registry entry may predate link_id being recorded.
+  const rows = await withClient(c.env, async (client) => {
+    const table = qualifyTable(entry.schemaName, "links");
+    const res = await client.query<{
+      id: string;
+      short_code: string;
+      original_url: string | null;
+      client_ref: string | null;
+    }>(
+      `SELECT id, short_code, original_url, client_ref FROM ${table} WHERE short_code = $1 LIMIT 1`,
+      [code],
+    );
+    return res.rows;
+  });
+  const link = rows[0];
+  if (!link) throw notFound();
+
+  return c.json({
+    id: link.id,
+    short_code: link.short_code,
+    original_url: link.original_url ?? null,
+    client_ref: link.client_ref ?? null,
+    // The setup page sends this back as X-Tenant-Slug on the PATCH, so the save
+    // lands in the tenant the code belongs to even for a multi-tenant user.
+    tenant_slug: entry.subdomain,
+  });
 };
 
 // ---------------------------------------------------------------------------

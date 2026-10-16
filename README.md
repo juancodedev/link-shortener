@@ -195,6 +195,7 @@ Every mutation flushes the tenant's `reg:{code}` KV entries so the change takes 
 | `PATCH` | `/api/links/:id` | Update a link |
 | `DELETE` | `/api/links/:id` | Delete a link |
 | `GET` | `/api/links/:id/clicks` | Per-link analytics: country, device, source |
+| `GET` | `/api/links/by-code/:code` | Look a link up by the code on its card (card quick setup). `auth` only: the tenant is the one that owns the code, and membership in it is checked in the handler; unknown and not-a-member are the same 404 |
 | `POST` | `/api/links/batch` | Create up to 100 links in one call |
 | `GET` | `/api/links/:id/qr.svg` | One card's QR, as a print-ready SVG |
 | `POST` | `/api/links/qr-sheet.zip` | A batch of cards as a ZIP: one SVG per card plus `links.csv` |

@@ -12,7 +12,14 @@ import { redirectHandler } from "./handlers/redirect";
 import { signupHandler, loginHandler, resetPasswordHandler, authCallbackHandler } from "./handlers/auth";
 import { dashboardHandler } from "./handlers/dashboard";
 import { gateHandler } from "./handlers/gate";
-import { createLink, listLinks, updateLink, deleteLink, linkClicks } from "./api/links";
+import {
+  createLink,
+  listLinks,
+  updateLink,
+  deleteLink,
+  linkClicks,
+  getLinkByCode,
+} from "./api/links";
 import { createLinksBatch } from "./api/batch";
 import { listClientRefMetrics } from "./api/clients";
 import { listLocations, createLocation, updateLocation } from "./api/locations";
@@ -111,6 +118,13 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
   // -----------------------------------------------------------------------
   // API routes (authenticated)
   // -----------------------------------------------------------------------
+
+  // Lookup by the code printed on a card (card quick setup). Auth only, no
+  // tenant middleware: the tenant is the one that owns the code, and the
+  // handler checks membership in exactly that tenant — see src/api/links.ts.
+  // Registered ahead of the `/api/links/:id/...` routes so `by-code` is never
+  // read as a link id.
+  app.get("/api/links/by-code/:code", auth, getLinkByCode);
 
   // Link CRUD: auth → resolve tenant from user profile → handler
   app.post("/api/links", auth, tenantMembershipMiddleware, createLink);

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { dashboardHandler } from "../../src/handlers/dashboard";
 
 // ---------------------------------------------------------------------------
@@ -1777,5 +1777,150 @@ describe("the feedback email section", () => {
 
     // It acts on no record, and the switch's membership is pinned to seven.
     expect(script).not.toContain('case "feedback-email"');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The feedback inbox.
+//
+// The renderer itself is covered in `feedback-inbox.test.ts`. These pin the
+// wiring in the served page: that the renderer actually ships, that it loads
+// once at boot outside loadLinks' all-or-nothing fetch, and that the export
+// carries the same auth as every other call instead of being a bare link.
+// ---------------------------------------------------------------------------
+
+describe("the feedback inbox", () => {
+  it("ships the renderer into the page, after the esbuild shim", async () => {
+    const script = await clientScript();
+    const shim = script.indexOf("var __name");
+    const binding = script.indexOf("const renderFeedbackInbox =");
+    expect(shim).toBeGreaterThan(-1);
+    expect(binding).toBeGreaterThan(shim);
+  });
+
+  it("loads the inbox once at boot, not inside loadLinks", async () => {
+    const script = await clientScript();
+    expect(script).toContain('window.__api("GET", "/api/review-gate/feedback")');
+    expect(extractFunction(script, "loadLinks")).not.toContain("/api/review-gate/feedback");
+
+    const html = await serve();
+    const at = html.indexOf("loadFeedbackInbox();");
+    const linksAt = html.indexOf("loadLinks();", at);
+    expect(at).toBeGreaterThan(-1);
+    expect(linksAt).toBeGreaterThan(at);
+  });
+
+  it("downloads the export through window.__api, never through a bare link", async () => {
+    // Auth is an Authorization header plus X-Tenant-Slug. A navigation to the
+    // CSV carries neither, so an href would be a 401 the owner sees as a
+    // broken button.
+    const html = await serve();
+    expect(html).not.toMatch(/href="\/api\/review-gate\/feedback\.csv"/);
+
+    const script = await clientScript();
+    expect(script).toContain(
+      'getElementById("feedback-export").addEventListener("click", (e) =>',
+    );
+    const handler = extractFunction(script, "exportFeedbackCsv");
+    expect(handler).toContain('window.__api("GET", "/api/review-gate/feedback.csv")');
+    expect(handler).toContain("URL.createObjectURL");
+    expect(handler).toContain('res.headers.get("X-Truncated")');
+  });
+
+  it("checks res.ok before treating either response as data", async () => {
+    const script = codeOnly(await clientScript());
+    const exporter = extractFunction(script, "exportFeedbackCsv");
+    expect(exporter.indexOf("!res.ok")).toBeGreaterThan(-1);
+    expect(exporter.indexOf("!res.ok")).toBeLessThan(exporter.indexOf("res.blob()"));
+
+    const loader = extractFunction(script, "loadFeedbackInbox");
+    expect(loader.indexOf("!res.ok")).toBeGreaterThan(-1);
+    expect(loader.indexOf("!res.ok")).toBeLessThan(loader.indexOf("renderFeedbackInbox("));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The feedback inbox, run.
+//
+// The served functions compiled and called against stubs. A failed request
+// must say so in the card; it must never be rendered as an inbox, and never be
+// saved to disk as customer-feedback.csv.
+// ---------------------------------------------------------------------------
+
+function errorResponse(status: number, body: Record<string, unknown>) {
+  return {
+    ok: false,
+    status,
+    headers: new Headers(),
+    json: vi.fn().mockResolvedValue(body),
+    blob: vi.fn().mockResolvedValue(new Blob([JSON.stringify(body)])),
+  };
+}
+
+describe("the feedback export, when the server refuses", () => {
+  async function runExport(res: unknown) {
+    const src = extractFunction(await clientScript(), "exportFeedbackCsv");
+    const URLStub = { createObjectURL: vi.fn(), revokeObjectURL: vi.fn() };
+    const documentStub = { createElement: vi.fn(), body: { appendChild: vi.fn() } };
+    const windowStub = { __api: vi.fn().mockResolvedValue(res) };
+    const fn = new Function(
+      "window",
+      "document",
+      "URL",
+      // extractFunction starts at `function`, so the `async` it dropped is restored.
+      `async ${src}\nreturn exportFeedbackCsv;`,
+    )(windowStub, documentStub, URLStub) as (btn: unknown, msg: unknown) => Promise<void>;
+    const btn = { disabled: false };
+    const msg = { className: "", textContent: "" };
+    await fn(btn, msg);
+    return { btn, msg, URLStub, documentStub };
+  }
+
+  it("shows the error in the card and downloads nothing", async () => {
+    const res = errorResponse(500, { error: "internal_error" });
+    const { btn, msg, URLStub, documentStub } = await runExport(res);
+
+    expect(res.blob).not.toHaveBeenCalled();
+    expect(URLStub.createObjectURL).not.toHaveBeenCalled();
+    expect(documentStub.createElement).not.toHaveBeenCalled();
+    expect(msg.className).toBe("message error");
+    expect(msg.textContent).toContain("internal_error");
+    expect(btn.disabled).toBe(false);
+  });
+
+  it("still says something when the error body is not JSON", async () => {
+    const res = errorResponse(401, {});
+    res.json.mockRejectedValue(new SyntaxError("not json"));
+    const { msg } = await runExport(res);
+
+    expect(msg.className).toBe("message error");
+    expect(msg.textContent).not.toBe("");
+  });
+});
+
+describe("the feedback inbox, when the server refuses", () => {
+  it("says it could not load, instead of rendering the error as an inbox", async () => {
+    const src = extractFunction(await clientScript(), "loadFeedbackInbox");
+    const body = { innerHTML: "" };
+    const render = vi.fn().mockReturnValue("<p>inbox</p>");
+    const consoleStub = { error: vi.fn() };
+    const fn = new Function(
+      "window",
+      "document",
+      "renderFeedbackInbox",
+      "console",
+      `async ${src}\nreturn loadFeedbackInbox;`,
+    )(
+      { __api: vi.fn().mockResolvedValue(errorResponse(401, { error: "unauthorized" })) },
+      { getElementById: () => body },
+      render,
+      consoleStub,
+    ) as () => Promise<void>;
+
+    await fn();
+
+    expect(render).not.toHaveBeenCalled();
+    expect(body.innerHTML).toContain("Could not load comments.");
+    expect(consoleStub.error).toHaveBeenCalled();
   });
 });

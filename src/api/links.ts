@@ -1081,8 +1081,12 @@ export const updateLink: Handler<{
     sets.push(`updated_at = NOW()`);
     vals.push(linkId);
 
-    const res = await client.query<{ short_code: string; is_active: boolean }>(
-      `UPDATE ${table} SET ${sets.join(", ")} WHERE id = $${vals.length} RETURNING short_code, is_active`,
+    const res = await client.query<{
+      short_code: string;
+      is_active: boolean;
+      original_url: string | null;
+    }>(
+      `UPDATE ${table} SET ${sets.join(", ")} WHERE id = $${vals.length} RETURNING short_code, is_active, original_url`,
       vals,
     );
     return res.rows;
@@ -1106,6 +1110,15 @@ export const updateLink: Handler<{
     c.executionCtx.waitUntil(
       invalidateCachedUrl(c.env, tenant.tenantSlug, rows[0]!.short_code).catch(() => {}),
     );
+  }
+
+  // The destination as stored — normalized — when this PATCH set or cleared
+  // it. The card setup page navigates straight there rather than back through
+  // /:code, whose cached destination is only cleared after this response (the
+  // invalidation above runs in waitUntil). Additive and only when relevant: a
+  // PATCH that does not touch the destination answers exactly as before.
+  if (body.original_url !== undefined) {
+    return c.json({ ok: true, original_url: rows[0]!.original_url ?? null });
   }
 
   return c.json({ ok: true });

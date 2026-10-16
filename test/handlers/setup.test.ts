@@ -98,9 +98,12 @@ describe("setup script", () => {
     expect(html).toContain('"Authorization": "Bearer " + accessToken');
   });
 
-  it("returns to the card after a successful save", async () => {
+  it("falls back to the card, never anywhere else, when the save names no destination", async () => {
     const { html } = await render("ywaoSiE");
-    expect(html).toContain('location.replace("/" + encodeURIComponent(CODE))');
+    // Behaviour is covered in "after a successful save"; this pins the
+    // rendered regex, which a template literal can silently unescape.
+    expect(html).toContain(': "/" + encodeURIComponent(CODE)');
+    expect(html).toContain("/^https?:\\/\\//i.test(saved.original_url)");
   });
 });
 
@@ -167,6 +170,8 @@ interface BrowserOpts {
   link?: { original_url: string | null; client_ref: string | null };
   /** Initial sessionStorage contents, or "throws" for blocked storage. */
   storage?: Record<string, string> | "throws";
+  /** Body of a successful PATCH response. */
+  patchBody?: unknown;
 }
 
 async function settle() {
@@ -214,7 +219,8 @@ async function runSetupPage(code: string, opts: BrowserOpts) {
         body: JSON.parse(init.body),
       });
       const status = patchStatuses.shift() ?? 200;
-      return new Response(JSON.stringify(status === 200 ? { ok: true } : { error: "nope" }), { status });
+      const ok = opts.patchBody ?? { ok: true };
+      return new Response(JSON.stringify(status === 200 ? ok : { error: "nope" }), { status });
     }
     return new Response(
       JSON.stringify({
@@ -238,9 +244,11 @@ async function runSetupPage(code: string, opts: BrowserOpts) {
         };
 
   const replace = vi.fn();
+  // Runs the confirmation delay immediately, recording the order of events.
+  const setTimeout = (fn: () => void) => fn();
   for (const src of inline) {
-    new Function("window", "document", "location", "fetch", "sessionStorage", src)(
-      window, document, { replace }, fetch, sessionStorage,
+    new Function("window", "document", "location", "fetch", "sessionStorage", "setTimeout", src)(
+      window, document, { replace }, fetch, sessionStorage, setTimeout,
     );
   }
   await settle();
@@ -372,5 +380,50 @@ describe("coming back from login with a draft", () => {
     });
 
     expect(page.els.client_ref!.value).toBe("MESA-7");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// After a successful save
+//
+// /:code serves a cached destination that the PATCH only clears after it has
+// answered, so returning through /:code right away can show the OLD destination
+// when an existing one was edited. The page goes straight to the destination
+// the server saved instead, after a brief confirmation.
+// ---------------------------------------------------------------------------
+
+describe("after a successful save", () => {
+  it("confirms and goes straight to the destination the server saved", async () => {
+    const page = await runSetupPage("ywaoSiE", {
+      sessions: ["token"],
+      patchBody: { ok: true, original_url: "https://example.com/menu" },
+    });
+    page.els.original_url!.value = "HTTPS://Example.com/menu";
+
+    await page.submit();
+
+    expect(page.els.save!.textContent).toBe("Guardado");
+    expect(page.replace).toHaveBeenCalledWith("https://example.com/menu");
+  });
+
+  it("falls back to /:code when the response carries no destination", async () => {
+    const page = await runSetupPage("ywaoSiE", { sessions: ["token"], patchBody: { ok: true } });
+    page.els.original_url!.value = "https://example.com";
+
+    await page.submit();
+
+    expect(page.replace).toHaveBeenCalledWith("/ywaoSiE");
+  });
+
+  it("never navigates to a non-http destination from the response", async () => {
+    const page = await runSetupPage("ywaoSiE", {
+      sessions: ["token"],
+      patchBody: { ok: true, original_url: "javascript:alert(1)" },
+    });
+    page.els.original_url!.value = "https://example.com";
+
+    await page.submit();
+
+    expect(page.replace).toHaveBeenCalledWith("/ywaoSiE");
   });
 });

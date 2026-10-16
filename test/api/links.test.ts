@@ -2147,7 +2147,7 @@ describe("original_url on updateLink", () => {
 
   it("loads a destination onto a link that has none", async () => {
     const calls = mockRecordingDb([
-      [{ short_code: "abc1234", is_active: true }],
+      [{ short_code: "abc1234", is_active: true, original_url: "https://g.page/ACME/review" }],
     ]);
 
     const { c, jsonFn } = mockContext({
@@ -2160,7 +2160,11 @@ describe("original_url on updateLink", () => {
     const update = calls.find((q) => /^UPDATE/i.test(q.sql.trim()))!;
     expect(update.sql).toMatch(/original_url\s*=/);
     expect(update.params).toContain("https://g.page/ACME/review");
-    expect(jsonFn).toHaveBeenCalledWith({ ok: true });
+    // The response also carries the stored destination since card quick setup.
+    expect(jsonFn).toHaveBeenCalledWith({
+      ok: true,
+      original_url: "https://g.page/ACME/review",
+    });
   });
 
   it("rejects a scheme-less destination, exactly as creation does", async () => {
@@ -2194,7 +2198,7 @@ describe("original_url on updateLink", () => {
     expect(update.sql).toMatch(/original_url = NULL/);
     expect(update.sql).toMatch(/WHERE id = \$1\b/);
     expect(update.params).toEqual(["link-uuid"]);
-    expect(jsonFn).toHaveBeenCalledWith({ ok: true });
+    expect(jsonFn).toHaveBeenCalledWith({ ok: true, original_url: null });
   });
 
   it("treats an empty string as clear, because the form posts a blank field", async () => {
@@ -2583,5 +2587,56 @@ describe("getLinkByCode handler", () => {
       getLinkByCode(mockContext({ params: { code: "ywaoSiE" } }).c as any),
     ).rejects.toMatchObject({ status: 401 });
     expect(withClient).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PATCH returns the destination it saved
+//
+// The card setup page navigates straight to the saved destination instead of
+// back through /:code, whose cached destination is only cleared after this
+// response is sent. It needs the value as stored — normalized — not as typed.
+// Additive: `ok: true` stays, and a PATCH that does not touch the destination
+// answers exactly as before.
+// ---------------------------------------------------------------------------
+
+describe("updateLink returns the saved destination", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockCacheDefaults();
+  });
+
+  it("returns the stored original_url alongside ok when the destination is set", async () => {
+    const calls = mockRecordingDb([
+      [{ short_code: "abc1234", is_active: true, original_url: "https://g.page/ACME/review" }],
+    ]);
+    const { c, jsonFn } = mockContext({
+      params: { id: "link-uuid" },
+      body: { original_url: "https://g.page/ACME/review" },
+    });
+
+    await updateLink(c as any);
+
+    const update = calls.find((q) => /^UPDATE/i.test(q.sql.trim()))!;
+    expect(update.sql).toMatch(/RETURNING[^;]*\boriginal_url\b/);
+    expect(jsonFn).toHaveBeenCalledWith({ ok: true, original_url: "https://g.page/ACME/review" });
+  });
+
+  it("returns null when the destination is cleared", async () => {
+    mockRecordingDb([[{ short_code: "abc1234", is_active: true, original_url: null }]]);
+    const { c, jsonFn } = mockContext({ params: { id: "link-uuid" }, body: { original_url: null } });
+
+    await updateLink(c as any);
+
+    expect(jsonFn).toHaveBeenCalledWith({ ok: true, original_url: null });
+  });
+
+  it("answers exactly as before when the destination is not part of the PATCH", async () => {
+    mockRecordingDb([[{ short_code: "abc1234", is_active: false, original_url: "https://x.example" }]]);
+    const { c, jsonFn } = mockContext({ params: { id: "link-uuid" }, body: { is_active: false } });
+
+    await updateLink(c as any);
+
+    expect(jsonFn).toHaveBeenCalledWith({ ok: true });
   });
 });

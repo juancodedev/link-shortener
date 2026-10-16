@@ -238,7 +238,18 @@ export function renderSetupPage(params: {
           save.textContent = "Guardar";
           return;
         }
-        location.replace("/" + encodeURIComponent(CODE));
+        // Straight to the destination the server saved, not back through
+        // /:code: when an existing destination was edited, /:code can still
+        // serve the old one from KV until the PATCH's background invalidation
+        // lands. Only an http(s) value is followed; anything else, or no value,
+        // falls back to /:code.
+        var saved = {};
+        try { saved = await r.json(); } catch (err) {}
+        var dest = typeof saved.original_url === "string" && /^https?:\\/\\//i.test(saved.original_url)
+          ? saved.original_url
+          : "/" + encodeURIComponent(CODE);
+        save.textContent = "Guardado";
+        setTimeout(function () { location.replace(dest); }, 700);
       } catch (err) {
         formError.textContent = "No se pudo conectar. Intenta de nuevo.";
         formError.hidden = false;

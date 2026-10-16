@@ -1364,13 +1364,16 @@ describe("the dashboard can manufacture cards in bulk", () => {
     expect(script).toContain('a.download = "cards.zip"');
   });
 
-  it("fetches the sheet rather than navigating to it", async () => {
+  it("fetches the sheet as a blob rather than navigating to it", async () => {
     const script = await clientScript();
 
-    // The download is a POST with a JSON body; a navigation cannot carry one,
-    // which is why this is a blob and not an href.
-    expect(script).toContain("method: \"POST\"");
+    // The claim is "not a navigation", and it holds for a reason that is now
+    // structural rather than incidental: the request goes through __api, whose
+    // signature is (method, path, body) — it cannot become a navigation, and it
+    // returns the response so a blob can be read off it.
+    expect(script).toContain('window.__api("POST", "/api/links/qr-sheet.zip", {');
     expect(script).toContain("URL.createObjectURL");
+    expect(script).toContain("await res.blob()");
   });
 
   it("revokes the object URL, so the ZIP is not pinned in memory", async () => {
@@ -1386,13 +1389,50 @@ describe("the dashboard can manufacture cards in bulk", () => {
     expect(script).toContain("body.error");
   });
 
-  it("sends the tenant, or the sheet exports the wrong tenant's cards", async () => {
+  it("downloads through the dashboard's OWN api helper, not a hand-rolled fetch", async () => {
     const script = await clientScript();
 
-    // The whole auth contract in one assertion: JWT plus tenant. Both are
-    // required, and the download path is not exempt because it is "just a file".
-    expect(script).toContain("Authorization: \"Bearer \"");
-    expect(script).toContain("X-Tenant-Slug");
+    // THE REGRESSION THAT MATTERS.
+    //
+    // This handler originally did its own `fetch` with its own headers, reading
+    // the token from `localStorage.getItem("access_token")`. The dashboard keeps
+    // it in `window.__token`. So the create succeeded — it goes through __api —
+    // and the download 401'd with `Bearer null`, leaving the modal claiming ten
+    // cards existed and the sheet unreachable.
+    //
+    // Reusing __api is the fix: one auth contract, one place to change it, and
+    // the 401-to-login and 409-tenant-picker behaviour comes along for free
+    // instead of being reimplemented slightly wrong.
+    expect(script).toContain('window.__api("POST", "/api/links/qr-sheet.zip"');
+  });
+
+  it("never rebuilds auth headers inside the bulk block", async () => {
+    const script = await clientScript();
+    const start = script.indexOf(">>> BULK BLOCK");
+    const end = script.indexOf("<<< BULK BLOCK", start);
+    const wired = script.slice(start, end);
+
+    // A duplicated auth contract is a contract that will drift. The token lives
+    // in one place and this block does not get a second opinion on where.
+    expect(wired).not.toMatch(/Authorization:/);
+    expect(wired).not.toMatch(/X-Tenant-Slug/);
+  });
+
+  it("inherits the full auth contract instead of approximating it", async () => {
+    // Asserted against the WHOLE served page, not clientScript().
+    //
+    // The dashboard serves __api and the bulk client as two separate <script>
+    // blocks, so clientScript() — which returns the one holding the client —
+    // cannot see the helper at all. Scoping this assertion to it produced a
+    // failure that looked like missing auth but was really the wrong slice.
+    const html = await serve();
+
+    // The download carries whatever __api carries — JWT, tenant, and the 409
+    // picker — by going through it at all. This asserts the helper still does
+    // its own job, so the download inherits a working contract rather than a
+    // broken one.
+    expect(html).toContain("Bearer " + '" + window.__token');
+    expect(html).toContain('headers["X-Tenant-Slug"] = q');
   });
 
   it("refuses to download before anything was created", async () => {

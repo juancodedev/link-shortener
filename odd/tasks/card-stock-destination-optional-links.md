@@ -198,3 +198,45 @@ know they were checked separately:
 
 Server-side QR, and the print sheet the `copy-print-sheet` button has been promising since T3.4
 (`store-links-and-client-refs.md:915-917`).
+
+---
+
+## Cierre (2026-10-15)
+
+Los tres work units de este documento están implementados y verificados.
+
+| Commit | Unidad | Estado |
+| --- | --- | --- |
+| `17cb1b4` | QR propio + hoja de impresión | ✅ 823 tests |
+| `cd3fc8b` | Pop-up de fabricación masiva | ✅ 840 tests |
+| `9eb6420` | Presupuesto de card stock separado | ✅ 849 tests |
+
+### Decisiones tomadas durante la implementación
+
+1. **El ZIP acepta card stock sin destino.** El WIP inicial rechazaba
+   `original_url = null`, lo que contradecía el producto: la tarjeta se imprime
+   ANTES de saber a dónde apunta. El rechazo ahora es solo para IDs ajenos al
+   tenant.
+
+2. **SVG, no PNG.** "Alta resolución" en papel significa resolución
+   independiente. Un PNG exige adivinar los DPI. Corrección de errores Q (~25%
+   recuperable) en lugar de la M por defecto: una tarjeta sobrevive a un rayón.
+
+3. **`is_gated: true` en la fabricación masiva.** Una tarjeta cuyo QR
+   redirige sin pasar por la puerta no registra nada, y el panel de satisfacción
+   queda en cero para siempre.
+
+4. **Lotes parciales se reportan, nunca se llaman éxito.** Nueve de diez tarjetas
+   es un faltante que el dueño descubre en la imprenta.
+
+5. **El presupuesto se parte en dos.** `MAX_ACTIVE_LINKS` cuenta solo links con
+   destino — exactamente lo que ya contaba, así que ningún despliegue existente
+   pierde nada. `MAX_CARD_STOCK` acota la existencia sin destino, porque una vía
+   de creación sin límite es cómo un bug de bucle se convierte en una caída.
+
+### Pendiente externo (no bloquea el código)
+
+- **Migración `00015` sin ejecutar.** Requiere `DATABASE_URL` o el project ref de
+  Supabase. Hasta entonces, crear un link sin destino devuelve 409
+  `schema_not_migrated`, que es el comportamiento correcto y accionable.
+- **PR abierto.** El push y la apertura del PR son decisiones del dueño.

@@ -48,6 +48,40 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
   app.onError(errorHandler);
 
   // -----------------------------------------------------------------------
+  // The caching contract of every API response
+  //
+  // Reported from the browser: deleting a link left its row on screen until a
+  // HARD refresh. A hard refresh sends `Cache-Control: no-cache`, which is the
+  // tell — the browser was replaying a cached list. And it could, because this
+  // app never said whether its responses were cacheable. Verified against the
+  // deployed worker: no `Cache-Control`, no `ETag`, no `Vary`. Silence is not a
+  // policy; it hands the decision to a heuristic nobody chose.
+  //
+  // WHY no-store, AND NOT just no-cache
+  //
+  // `no-store` says do not keep this at all. `no-cache` would say keep it but
+  // revalidate, which still requires a round trip to prove it is fresh and
+  // still leaves one sitting in the disk cache. For a response that is one
+  // tenant's private link list, being on disk at all is the problem.
+  //
+  // `private` is deliberately absent alongside it: it is the weaker form
+  // (shared caches must not store it, private ones may), and a private browser
+  // cache is exactly where this data is least wanted.
+  //
+  // ONE place, not per-handler. A rule applied route by route is a rule that is
+  // missing from the route someone adds next month — and the failure is silent,
+  // because nothing is wrong until a user deletes something and watches it
+  // come back.
+  //
+  // Registered before the handlers, and it mutates the response after they
+  // return, so it covers a handler that set its own header too.
+  // -----------------------------------------------------------------------
+  app.use("/api/*", async (c, next) => {
+    await next();
+    c.res.headers.set("Cache-Control", "no-store");
+  });
+
+  // -----------------------------------------------------------------------
   // Public routes
   // -----------------------------------------------------------------------
 

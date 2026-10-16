@@ -2,6 +2,7 @@ import type { Handler } from "hono";
 import type { AppEnv, HonoVars } from "../types/env";
 import { VISITOR_ESTIMATE_CAVEAT } from "../analytics/metrics";
 import { renderGatePanel } from "./gate-panel";
+import { renderFeedbackInbox } from "./feedback-inbox";
 import { resolveMaxActiveLinks } from "../api/links";
 
 // ---------------------------------------------------------------------------
@@ -402,6 +403,31 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     .gate-empty-note { border-top: 0; padding-top: 0; margin-top: 0; }
     .rating-of { font-size: 0.875rem; color: var(--ink-soft); }
 
+    /* The feedback inbox. Shared with src/handlers/feedback-inbox.ts, which
+       emits these classes. The comment wraps rather than being cut: the API
+       returns the full text and the owner should be able to read all of it. */
+    .feedback-head { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; }
+    .feedback-head h3 { margin: 0; }
+    .feedback-list { list-style: none; margin: 0.75rem 0 0; padding: 0; }
+    .feedback-item { border-top: 1px solid var(--edge); padding: 0.75rem 0; }
+    .feedback-item:first-child { border-top: 0; padding-top: 0; }
+    .feedback-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.25rem 0.75rem;
+      font-size: 0.75rem;
+      color: var(--ink-soft);
+    }
+    .feedback-rating { color: var(--ink); font-weight: 600; }
+    .feedback-rating.withheld { color: var(--ink-faint); font-weight: 400; }
+    .feedback-comment {
+      margin: 0.35rem 0 0;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .feedback-contact { margin-top: 0.25rem; font-size: 0.75rem; color: var(--ink-soft); }
+    .message.notice { display: block; background: var(--stale-wash); color: var(--stale); border: 1px solid var(--edge); }
+
     /* The location bar is injected by script into document.body. It used to
        carry its own inline cssText blob, which meant its colours could not be
        reached by the tokens. */
@@ -624,6 +650,7 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       // to the tenant and not to any row, so re-reading it whenever a link is
       // toggled would be a request per keystroke of someone else's workflow.
       if (typeof loadFeedbackEmail === "function") loadFeedbackEmail();
+      if (typeof loadFeedbackInbox === "function") loadFeedbackInbox();
       if (typeof loadLinks === "function") loadLinks();
     })();
   </script>
@@ -789,6 +816,15 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       <div id="gate-body"><div class="loading">Loading...</div></div>
     </div>
 
+    <div class="card" id="feedback-card">
+      <div class="feedback-head">
+        <h3>What customers wrote</h3>
+        <button type="button" id="feedback-export" class="btn-sm">Download CSV</button>
+      </div>
+      <div id="feedback-export-msg" class="message"></div>
+      <div id="feedback-body"><div class="loading">Loading...</div></div>
+    </div>
+
     <!-- QR code modal -->
     <div id="qr-modal" class="qr-modal hidden" onclick="this.classList.add('hidden')">
       <div class="qr-card" onclick="event.stopPropagation()">
@@ -901,6 +937,8 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         Object.defineProperty(target, "name", { value, configurable: true });
 
       const renderGatePanel = ${renderGatePanel.toString()};
+      // Same injection, same caveat: self-contained, see feedback-inbox.ts.
+      const renderFeedbackInbox = ${renderFeedbackInbox.toString()};
       /**
        * Readiness gate for the auth bootstrap.
        *
@@ -1038,6 +1076,76 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           // dashboard; the field just stays empty rather than blocking the page.
         }
       }
+
+      // ---------------------------------------------------------------------
+      // Feedback inbox
+      //
+      // Once at boot, like the feedback address: the comments belong to the
+      // tenant, not to any link row, so re-reading them on every table refresh
+      // would be a request per toggle for data that did not change.
+      //
+      // Kept out of loadLinks' all-or-nothing fetch on purpose. A failure here
+      // says so in this card and leaves the rest of the dashboard working;
+      // the links table should not disappear because the inbox could not load.
+      // ---------------------------------------------------------------------
+      async function loadFeedbackInbox() {
+        const body = document.getElementById("feedback-body");
+        if (!body) return;
+        try {
+          const res = await window.__api("GET", "/api/review-gate/feedback");
+          body.innerHTML = renderFeedbackInbox(await res.json());
+        } catch (err) {
+          body.innerHTML = '<p class="gate-empty">Could not load comments.</p>';
+          console.error("feedback inbox failed to load", err);
+        }
+      }
+
+      /**
+       * The CSV export, downloaded through window.__api.
+       *
+       * Not a plain link: every tenant-scoped route authenticates with an
+       * Authorization: Bearer header and picks the tenant with X-Tenant-Slug,
+       * and a navigation carries neither — an href here would be a 401. So
+       * the file is fetched with the same headers as every other call and
+       * handed to the browser as a Blob. One auth path, nothing hand-written
+       * to drift out of sync with it.
+       *
+       * The server cannot say "truncated" inside the CSV without corrupting
+       * it, so it says so in X-Truncated, and this says it to the owner.
+       */
+      document.getElementById("feedback-export").addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        const msg = document.getElementById("feedback-export-msg");
+        btn.disabled = true;
+        msg.className = "message";
+        msg.textContent = "";
+        try {
+          const res = await window.__api("GET", "/api/review-gate/feedback.csv");
+          const blob = await res.blob();
+          const href = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = href;
+          a.download = "customer-feedback.csv";
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          // Revoked on a delay: some browsers start the download after the
+          // click handler returns, and an already-revoked URL cancels it.
+          setTimeout(() => URL.revokeObjectURL(href), 10000);
+
+          if (res.headers.get("X-Truncated") === "true") {
+            msg.className = "message notice";
+            msg.textContent = "The file holds the newest " +
+              (res.headers.get("X-Feedback-Limit") || "") +
+              " comments; older ones were left out.";
+          }
+        } catch (err) {
+          msg.className = "message error";
+          msg.textContent = err instanceof Error ? err.message : "Could not export";
+        } finally {
+          btn.disabled = false;
+        }
+      });
 
       document.getElementById("feedback-email-save").addEventListener("click", async () => {
         const input = document.getElementById("feedback-email");

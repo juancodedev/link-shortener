@@ -1779,3 +1779,48 @@ describe("the feedback email section", () => {
     expect(script).not.toContain('case "feedback-email"');
   });
 });
+
+// ---------------------------------------------------------------------------
+// The feedback inbox.
+//
+// The renderer itself is covered in `feedback-inbox.test.ts`. These pin the
+// wiring in the served page: that the renderer actually ships, that it loads
+// once at boot outside loadLinks' all-or-nothing fetch, and that the export
+// carries the same auth as every other call instead of being a bare link.
+// ---------------------------------------------------------------------------
+
+describe("the feedback inbox", () => {
+  it("ships the renderer into the page, after the esbuild shim", async () => {
+    const script = await clientScript();
+    const shim = script.indexOf("var __name");
+    const binding = script.indexOf("const renderFeedbackInbox =");
+    expect(shim).toBeGreaterThan(-1);
+    expect(binding).toBeGreaterThan(shim);
+  });
+
+  it("loads the inbox once at boot, not inside loadLinks", async () => {
+    const script = await clientScript();
+    expect(script).toContain('window.__api("GET", "/api/review-gate/feedback")');
+    expect(extractFunction(script, "loadLinks")).not.toContain("/api/review-gate/feedback");
+
+    const html = await serve();
+    const at = html.indexOf("loadFeedbackInbox();");
+    const linksAt = html.indexOf("loadLinks();", at);
+    expect(at).toBeGreaterThan(-1);
+    expect(linksAt).toBeGreaterThan(at);
+  });
+
+  it("downloads the export through window.__api, never through a bare link", async () => {
+    // Auth is an Authorization header plus X-Tenant-Slug. A navigation to the
+    // CSV carries neither, so an href would be a 401 the owner sees as a
+    // broken button.
+    const html = await serve();
+    expect(html).not.toMatch(/href="\/api\/review-gate\/feedback\.csv"/);
+
+    const script = await clientScript();
+    const handler = script.slice(script.indexOf('getElementById("feedback-export").addEventListener'));
+    expect(handler).toContain('window.__api("GET", "/api/review-gate/feedback.csv")');
+    expect(handler).toContain("URL.createObjectURL");
+    expect(handler).toContain('res.headers.get("X-Truncated")');
+  });
+});

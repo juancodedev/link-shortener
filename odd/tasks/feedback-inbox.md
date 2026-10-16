@@ -95,7 +95,7 @@ line budget per slice, so one PR is expected.
   `X-Truncated` header; removal of the false "list truncates comments" claim.
   Tests: `test/utils/csv.test.ts`, `test/api/review-gate.test.ts`.
   Route: delegated writer (2+ non-trivial files).
-- [ ] **T2 — Dashboard UI.** "What customers wrote" section rendered by a pure,
+- [x] **T2 — Dashboard UI.** "What customers wrote" section rendered by a pure,
   self-contained `renderFeedbackInbox`, serialised into the dashboard script
   like `renderGatePanel`; HTML-escaped customer text; empty state; truncation
   note; CSV export via `window.__api` + Blob. Tests in `test/handlers`.
@@ -107,6 +107,26 @@ line budget per slice, so one PR is expected.
   `npx tsc --noEmit` clean; `npx vitest run` 37 files / 975 tests passed.
   No lint script exists in `package.json`.
 
+- T1 commit: `bc2df80` — feat(feedback): add feedback inbox endpoints and CSV export.
+- T2: RED observed for the renderer (`test/handlers/feedback-inbox.test.ts`
+  failed on the missing module), then GREEN. The dashboard wiring tests in
+  `test/handlers/dashboard.test.ts` were written alongside the wiring, not
+  before it. `npx tsc --noEmit` clean; `npx vitest run` 38 files / 992 tests
+  passed. Commit: the `feat(dashboard): show customer feedback inbox with CSV
+  export` work unit that follows `bc2df80`.
+- Auth finding: `window.__api` sends `Authorization: Bearer <token>` and
+  `X-Tenant-Slug`; there is no cookie session. The export therefore downloads
+  via `window.__api` + Blob + object URL, and reads `X-Truncated` to tell the
+  owner when the file was capped.
+
+## Follow-ups
+
+- **Location filter UI.** The endpoints accept `location_id` and `since`, but
+  the dashboard has no locations list loaded to build a picker from (it never
+  calls `GET /api/locations`). Adding one is its own small change.
+- **Pagination.** The list shows the newest 100 and says so; reading further
+  back is the CSV for now.
+
 ## Next step
 
-T2 — the dashboard section.
+Push and open the PR — the user's decision.

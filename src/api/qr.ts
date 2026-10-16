@@ -1,4 +1,5 @@
 import qrcode from "qrcode-generator";
+import { textToPathData } from "../qr/font";
 import { zipSync } from "fflate";
 import type { Handler } from "hono";
 import type { AppEnv, HonoVars } from "../types/env";
@@ -51,77 +52,215 @@ import { ValidationError, NotFoundError } from "../middleware/error";
  * pinned higher typeNumber would be more bytes for the same string and a
  * physically larger symbol for no benefit.
  */
-export function renderQrSvg(url: string, opts?: { margin?: number }): string {
-  // Level Q: ~25% recoverable. See the note above for why not M.
-  const qr = qrcode(0, "Q");
-  qr.addData(url);
+/** Error correction level. See the note above for why Q and not M. */
+const ECC = "Q" as const;
+
+/** Millimetres per module. The single number that sets how big the mark prints. */
+export const MODULE_MM = 1.6;
+
+/**
+ * Quiet zone, in MODULES.
+ *
+ * The specification says four. This code shipped one, which is the difference
+ * between a symbol with a guaranteed margin and a symbol that happens to work
+ * when the scanner is generous — and "the scanner was generous" is not a
+ * property anyone can rely on once the sticker is on a table under a lamp.
+ */
+export const QUIET_MODULES = 4;
+
+/**
+ * The QR matrix as booleans, read from the generator rather than recovered from
+ * its SVG.
+ *
+ * The library can emit a path, and an earlier version of this file used that
+ * path as the source of truth — then had to regex the coordinates back out of it
+ * to learn anything. Reading `isDark` is the API the generator actually offers,
+ * and it means the geometry below is derived from the matrix instead of from a
+ * rendering of the matrix.
+ */
+export function qrMatrix(data: string): boolean[][] {
+  const qr = qrcode(0, ECC);
+  qr.addData(data);
   qr.make();
 
-  // 24 modules of quiet zone. The library counts these in `cellSize` units, so
-  // the pixel size is derived here rather than left to the caller guessing.
-  const margin = opts?.margin ?? 4;
-
-  return qr.createSvgTag({
-    cellSize: 4,
-    margin,
-    scalable: true,
-  });
+  const n = qr.getModuleCount();
+  const rows: boolean[][] = [];
+  for (let r = 0; r < n; r++) {
+    const row: boolean[] = [];
+    for (let c = 0; c < n; c++) row.push(qr.isDark(r, c));
+    rows.push(row);
+  }
+  return rows;
 }
 
 /**
- * One printable page per card, as SVG.
+ * Draws a QR matrix as ONE path of merged horizontal runs.
  *
- * A card is not a QR code. It is a QR code on a physical object that a
- * designer has to lay out, cut and laminate, and what they need from this
- * system is the mark, not the artwork — so this emits the mark at a size that
- * is legible in a vector editor, plus the short code beside it as text, which
- * is the second thing a designer needs for the print sheet.
+ * NOT one rectangle per module. 564 separate rectangles can show hairline seams
+ * where the renderer anti-aliases adjacent edges, and a seam through the finder
+ * pattern is a symbol some scanners refuse. Merging each run of dark modules
+ * into a single rectangle removes the shared edge entirely, and `crispEdges`
+ * tells the renderer not to smooth what is left.
  *
- * The page is sized in millimetres rather than pixels because a designer sets
- * the trim size, not a pixel count. 85mm is a common sticker edge and the
- * artwork scales from there.
+ * Emitted in millimetre user units so the geometry below is readable arithmetic
+ * rather than a mystery scale factor. The previous version carried
+ * `scale(0.777)` — a number with no derivation — and the mark overflowed the
+ * card by 27mm on two sides.
+ */
+export function matrixToPath(
+  matrix: boolean[][],
+  origin: { x: number; y: number },
+  module: number = MODULE_MM,
+): string {
+  const f = (v: number) => {
+    const s = v.toFixed(3);
+    return s.replace(/0+$/, "").replace(/\.$/, "");
+  };
+
+  const parts: string[] = [];
+  for (let r = 0; r < matrix.length; r++) {
+    const row = matrix[r]!;
+    let c = 0;
+    while (c < row.length) {
+      if (!row[c]) {
+        c++;
+        continue;
+      }
+      let end = c;
+      while (end < row.length && row[end]) end++;
+
+      const x = origin.x + c * module;
+      const y = origin.y + r * module;
+      const w = (end - c) * module;
+      parts.push(`M${f(x)} ${f(y)}h${f(w)}v${f(module)}h${f(-w)}z`);
+      c = end;
+    }
+  }
+  return parts.join("");
+}
+
+/** Strips the generator's document wrapper, keeping only its drawing. */
+function stripSvgWrapper(svg: string): string {
+  const open = svg.indexOf(">", svg.indexOf("<svg"));
+  const close = svg.lastIndexOf("</svg>");
+  return svg.slice(open + 1, close);
+}
+
+/**
+ * A standalone QR as an SVG document, in millimetres.
+ *
+ * Sized from the matrix rather than from a caller-supplied pixel count, so the
+ * quiet zone is part of the drawing instead of a hint the caller can forget.
+ */
+export function renderQrSvg(url: string): string {
+  const matrix = qrMatrix(url);
+  const n = matrix.length;
+  const panel = (n + 2 * QUIET_MODULES) * MODULE_MM;
+  const path = matrixToPath(matrix, {
+    x: QUIET_MODULES * MODULE_MM,
+    y: QUIET_MODULES * MODULE_MM,
+  });
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${panel}mm" height="${panel}mm" viewBox="0 0 ${panel} ${panel}">
+  <rect width="${panel}" height="${panel}" fill="#ffffff"/>
+  <path fill="#000000" shape-rendering="crispEdges" d="${path}"/>
+</svg>`;
+}
+
+/**
+ * One printable card, as SVG. Sized in millimetres.
+ *
+ * A card is not a QR code. It is a QR code on a physical object that a designer
+ * lays out, cuts and laminates, and what they need from this system is the
+ * mark — not artwork.
+ *
+ * THE GEOMETRY, IN ARITHMETIC RATHER THAN IN A MAGIC NUMBER
+ *
+ *   card      85 x 85 mm
+ *   module    1.6 mm
+ *   quiet     4 modules each side (the specification's minimum)
+ *   panel     (33 + 8) x 1.6 = 65.6 mm, centred horizontally, 6 mm from the top
+ *   baseline  79.9 mm, which is the centre of the band left below the panel
+ *
+ * This version replaced `scale(0.777)`, an unsourced constant that assumed a QR
+ * of ~84 units. The real one is 132 at version 4, so the mark rendered 99.5 mm
+ * wide on an 85 mm card and lost 27 mm off the right and bottom. It looked
+ * perfect on screen and would have failed in the wild, because an SVG does not
+ * warn you that it does not fit on the paper.
+ *
+ * WHY FOUR MODULES OF QUIET ZONE
+ *
+ * The specification says four. The previous code drew one, which works when a
+ * scanner is feeling generous and does not work when it is not — and the
+ * generosity of a scanner is not something anyone can promise about a sticker
+ * that will be scratched, taped at an angle and read under a bar lamp.
+ *
+ * WHY PURE BLACK
+ *
+ * The print shop converts to K100. Anything that is merely very dark — #2b2622,
+ * a colour profile, a "rich black" — becomes a four-colour build, costs more,
+ * and prints a grey. #000000 and #ffffff are the two values a press agrees on.
+ *
+ * WHY NO `<text>`
+ *
+ * The short code is the fallback for a damaged card: a human reads it and types
+ * it. As a text element, its shape is decided by whoever opens the file, and
+ * that person is not us. As outlines it is fixed forever. See src/qr/font.ts.
  */
 export function renderCardSvg(params: {
   shortUrl: string;
   shortCode: string;
   clientRef?: string | null;
 }): string {
-  const qrSvg = renderQrSvg(params.shortUrl);
+  const CARD_MM = 85;
+  const PANEL_TOP = 6;
+  const CODE_SIZE = 4.5;
+  const CODE_TRACKING = 0.4;
+  const CODE_BASELINE = 79.9;
+  const REF_SIZE = 3;
+  const REF_BASELINE = 84.2;
 
-  // The code is printed beside the QR, which is what makes a card recoverable
-  // when it is too damaged to scan: a human can still read it and type it.
-  const code = params.shortCode;
-  const ref = params.clientRef ?? "";
+  const matrix = qrMatrix(params.shortUrl);
+  const n = matrix.length;
+  const panel = (n + 2 * QUIET_MODULES) * MODULE_MM;
+  const panelX = (CARD_MM - panel) / 2;
 
-  // Inlined rather than wrapped: an SVG file handed to a designer has no
-  // network, so a <style> block at the top is the only way the inner SVG can
-  // inherit anything.
+  const qr = matrixToPath(matrix, {
+    x: panelX + QUIET_MODULES * MODULE_MM,
+    y: PANEL_TOP + QUIET_MODULES * MODULE_MM,
+  });
+
+  const code = textToPathData(params.shortCode, {
+    size: CODE_SIZE,
+    centerX: CARD_MM / 2,
+    baseline: CODE_BASELINE,
+    tracking: CODE_TRACKING,
+  });
+
+  const ref = (params.clientRef ?? "").trim();
+  const refPath = ref
+    ? textToPathData(ref, {
+        size: REF_SIZE,
+        centerX: CARD_MM / 2,
+        baseline: REF_BASELINE,
+        tracking: 0.15,
+      }).d
+    : "";
+
   return `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="85mm" height="85mm" viewBox="0 0 85 85">
-  <style>
-    .bg { fill: #fbf9f5; }
-    .ink { fill: #2b2622; font-family: ui-monospace, monospace; }
-    .muted { fill: #6b625a; font-family: system-ui, sans-serif; }
-  </style>
-  <rect class="bg" width="85" height="85" rx="6"/>
-  <g transform="translate(9.5 9.5) scale(0.777)">${stripSvgWrapper(qrSvg)}</g>
-  <text class="ink" x="42.5" y="76" font-size="5" text-anchor="middle" letter-spacing="0.4">${escapeXml(code)}</text>
-  ${ref ? `<text class="muted" x="42.5" y="81.5" font-size="3.2" text-anchor="middle">${escapeXml(ref)}</text>` : ""}
+<svg xmlns="http://www.w3.org/2000/svg" width="${CARD_MM}mm" height="${CARD_MM}mm" viewBox="0 0 ${CARD_MM} ${CARD_MM}">
+  <title>QR card ${escapeXml(params.shortCode)}</title>
+  <rect id="background" width="${CARD_MM}" height="${CARD_MM}" rx="6" fill="#ffffff"/>
+  <rect id="quiet-zone" x="${round3(panelX)}" y="${PANEL_TOP}" width="${round3(panel)}" height="${round3(panel)}" fill="#ffffff"/>
+  <path id="qr" fill="#000000" shape-rendering="crispEdges" d="${qr}"/>
+  <path id="short-code" fill="#000000" d="${code.d}"/>
+  ${refPath ? `<path id="client-ref" fill="#000000" d="${refPath}"/>` : ""}
 </svg>`;
 }
 
-/**
- * Strips the outer `<svg>` element, keeping only its contents.
- *
- * The generator emits a complete document with its own width, height and
- * viewBox. Nesting that inside a card page would put a second `viewBox` in one
- * file, and the inner element's coordinate system would fight the outer's.
- */
-function stripSvgWrapper(svg: string): string {
-  const open = svg.indexOf(">", svg.indexOf("<svg"));
-  const close = svg.lastIndexOf("</svg>");
-  if (open < 0 || close < 0) return svg;
-  return svg.slice(open + 1, close);
+function round3(v: number): string {
+  return v.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
 }
 
 /** Escapes text for an XML/SVG text node. The short code is generated, but the client_ref is not. */

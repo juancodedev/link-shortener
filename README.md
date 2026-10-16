@@ -518,6 +518,33 @@ There is no CI workflow — `.github/` does not exist. Typecheck and tests run l
 
 MIT
 
+#### The printed card
+
+Geometry, in millimetres, so a designer sets a trim size instead of guessing pixels:
+
+| | |
+| --- | --- |
+| Card | 85 x 85 mm, rounded corners |
+| Module | 1.6 mm |
+| Quiet zone | **4 modules** each side (the specification's minimum) |
+| Panel | 65.6 mm, centred, 6 mm from the top |
+| Short code | outlined, 4.5 mm, baseline 79.9 mm, below the panel |
+| Client ref | outlined, 3 mm, baseline 84.2 mm |
+
+Three things this is deliberately not:
+
+- **No `<text>`.** The short code is the fallback for a damaged card — a human
+  reads it and types it. As a text element its shape belongs to whoever opens
+  the SVG: the designer's Mac, their colleague's Linux box, the print shop's RIP.
+  The glyphs are converted to outlines at build time (`scripts/build-glyphs.py`)
+  so the Worker does arithmetic rather than shipping a 520 KB font parser.
+- **Not one rectangle per module.** Consecutive dark modules merge into a single
+  run, with `shape-rendering="crispEdges"`. 564 separate rectangles can show
+  hairline seams where the renderer anti-aliases, and a seam through a finder
+  pattern is a symbol some scanners refuse.
+- **Not a colour.** Pure `#000000` on `#ffffff`, because the press converts to
+  K100. The old cream and warm grey were four-colour builds that print grey.
+
 #### Link and card-stock budgets
 
 Two budgets, counted separately, because a link and a piece of card stock are

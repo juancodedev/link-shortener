@@ -42,7 +42,7 @@ import {
   setCachedRegistryEntry,
 } from "../../src/cache/shortcode";
 import { trackClick } from "../../src/analytics/tracker";
-import { redirectHandler } from "../../src/handlers/redirect";
+import { redirectHandler, renderSubscriptionPaused } from "../../src/handlers/redirect";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -672,6 +672,18 @@ describe("subscription pause", () => {
     const { res } = await run("canceled");
 
     expect(res.status).toBe(402);
+  });
+
+  // A duplicated <style> block once leaked raw CSS into <main>, so diners saw
+  // selector text above the message.
+  it("renders the paused page as one document with no CSS in the body", () => {
+    const html = renderSubscriptionPaused("demo", "Demo Café", "mailto:billing@example.com");
+
+    expect(html.match(/<style>/g)).toHaveLength(1);
+    expect(html.match(/<main>/g)).toHaveLength(1);
+    const body = html.slice(html.indexOf("<body>"));
+    expect(body).not.toContain("font-size:");
+    expect(html).toContain("a.reactivate {");
   });
 
   // The critical one. A printed sticker hits a warm cache almost every time,

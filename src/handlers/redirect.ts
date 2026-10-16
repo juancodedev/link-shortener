@@ -386,12 +386,6 @@ export function renderSubscriptionPaused(
   p { font-size: .95rem; line-height: 1.55; margin: 0 0 .75rem; color: #3d3d3d; }
   code { font-family: ui-monospace, monospace; font-size: .85rem; background: #f0f0ec;
          padding: .1rem .35rem; border-radius: 4px; }
-</style>
-</head>
-<body>
-<main>
-  h1 { font-size: 1.15rem; margin: 0 0 .75rem; }
-  p { font-size: .95rem; line-height: 1.55; margin: 0 0 .75rem; color: #3d3d3d; }
   a.reactivate { display: inline-block; margin-top: .25rem; padding: .7rem 1.1rem;
                  background: #1a1a1a; color: #fff; border-radius: 8px;
                  text-decoration: none; font-size: .95rem; }

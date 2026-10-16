@@ -893,9 +893,10 @@ describe("the dashboard script never triggers a load at parse time", () => {
       (m) => m[1].length,
     );
 
-    // One call per handler: create form submit, toggle, client-ref save,
-    // delete. A parse-time call anywhere pushes this to five.
-    expect(statements).toHaveLength(4);
+    // One call per handler that changes the table: create form submit, bulk
+    // create, toggle, client-ref save, delete. A parse-time call anywhere
+    // pushes this to six.
+    expect(statements).toHaveLength(5);
     expect(statements.every((indent) => indent > TOP_LEVEL_INDENT)).toBe(true);
   });
 
@@ -1273,5 +1274,168 @@ describe("the create form can manufacture card stock", () => {
     const script = await clientScript();
 
     expect(script).toContain('document.getElementById("url").value = ""');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bulk card creation
+//
+// An owner making a hundred stickers does not want a hundred form submissions.
+// This creates them in one call with no destination and hands back a print sheet
+// the designer can use directly.
+//
+// The generated ids live in module scope rather than in a data-* attribute,
+// because the download button needs them and a second copy in the DOM could
+// drift out of sync with the list the handler actually holds.
+// ---------------------------------------------------------------------------
+
+describe("the dashboard can manufacture cards in bulk", () => {
+  it("offers a bulk entry point", async () => {
+    const html = await serve();
+    expect(html).toContain('id="open-bulk"');
+    expect(html).toContain('id="bulk-modal"');
+  });
+
+  it("asks for a count and nothing else", async () => {
+    const html = await serve();
+
+    // Every other field on a link is per-card by nature. Inventing a bulk
+    // meaning for each would be inventing vocabulary the product does not have.
+    const modal = html.slice(html.indexOf('id="bulk-modal"'));
+    const card = modal.slice(0, modal.indexOf("</div>"));
+    expect(card).toContain('id="bulk-count"');
+    expect(card).not.toContain('id="url"');
+  });
+
+  it("caps the count at the server's own limit", async () => {
+    const html = await serve();
+    // The server is what makes it safe; this stops a 900-card request spending
+    // ten seconds before it is refused.
+    expect(html).toContain('max="200"');
+  });
+
+  it("says what an unconfigured card does when scanned", async () => {
+    const html = await serve();
+    // The owner has to know the QR is not broken — it is waiting.
+    expect(html).toContain("not configured");
+  });
+
+  it("creates the cards WITHOUT a destination", async () => {
+    const script = await clientScript();
+
+    // The item literal itself is the claim: a card is `is_gated` and nothing
+    // else. Asserting on the whole script for "no original_url" would also
+    // catch the single-create form above, which legitimately has one.
+    expect(script).toContain("Array.from({ length: count }, () => ({ is_gated: true }))");
+  });
+
+  it("creates them GATED, or the panel stays empty", async () => {
+    const script = await clientScript();
+
+    // The single most consequential field in the flow. A card whose QR forwards
+    // straight past the gate records nothing and the satisfaction panel reads
+    // zero forever, which is the bug three PRs ago.
+    expect(script).toContain("({ is_gated: true })");
+  });
+
+  it("posts to the batch endpoint that already exists", async () => {
+    const script = await clientScript();
+    expect(script).toContain('"/api/links/batch"');
+  });
+
+  it("reports a PARTIAL batch rather than calling it a success", async () => {
+    const script = await clientScript();
+
+    // Nine of ten cards is a shortfall the owner discovers at the printer.
+    expect(script).toContain("failed — try those again");
+    expect(script).toMatch(/created\.length/);
+  });
+
+  it("keeps only the ids that were actually created", async () => {
+    const script = await clientScript();
+
+    // A failed item has no link to export, so its id must not enter the sheet.
+    expect(script).toContain('filter((r) => r.status === 201)');
+  });
+
+  it("downloads the sheet as a ZIP", async () => {
+    const script = await clientScript();
+    expect(script).toContain('"/api/links/qr-sheet.zip"');
+    expect(script).toContain('a.download = "cards.zip"');
+  });
+
+  it("fetches the sheet rather than navigating to it", async () => {
+    const script = await clientScript();
+
+    // The download is a POST with a JSON body; a navigation cannot carry one,
+    // which is why this is a blob and not an href.
+    expect(script).toContain("method: \"POST\"");
+    expect(script).toContain("URL.createObjectURL");
+  });
+
+  it("revokes the object URL, so the ZIP is not pinned in memory", async () => {
+    const script = await clientScript();
+    expect(script).toContain("URL.revokeObjectURL");
+  });
+
+  it("surfaces the server's own refusal instead of a generic failure", async () => {
+    const script = await clientScript();
+
+    // The server refuses a batch containing an unconfigured card and says so.
+    // That sentence IS the answer.
+    expect(script).toContain("body.error");
+  });
+
+  it("sends the tenant, or the sheet exports the wrong tenant's cards", async () => {
+    const script = await clientScript();
+
+    // The whole auth contract in one assertion: JWT plus tenant. Both are
+    // required, and the download path is not exempt because it is "just a file".
+    expect(script).toContain("Authorization: \"Bearer \"");
+    expect(script).toContain("X-Tenant-Slug");
+  });
+
+  it("refuses to download before anything was created", async () => {
+    const script = await clientScript();
+    expect(script).toContain("Create the cards first.");
+  });
+
+  it("validates the count before spending a request on it", async () => {
+    const script = await clientScript();
+
+    // A button that does nothing for ten seconds because the count was 0
+    // teaches the owner the button is broken.
+    expect(script).toMatch(/count < 1 \|\| count > 200/);
+  });
+
+  it("adds no inline handler and no new data-action", async () => {
+    const script = await clientScript();
+
+    // The delegated switch handles record actions and a test pins its exact
+    // membership. Bulk acts on NO record, so it must not join that switch — it
+    // is a static button with a static listener, like the create form.
+    //
+    // Scoped to the bulk BLOCK, delimited by the two function names that bracket
+    // it in the source. Slicing to the end of the script would sweep in the
+    // delegated switch below, which legitimately contains data-action and would
+    // make the assertion meaningless.
+    // Delimited by markers the source plants, not by guessing where a
+    // function happens to end — a slice bounded by a function name breaks the
+    // moment the block is reordered.
+    const start = script.indexOf(">>> BULK BLOCK");
+    const end = script.indexOf("<<< BULK BLOCK", start);
+    const wired = script.slice(start, end);
+    expect(wired.length).toBeGreaterThan(0);
+    // Matched on the ATTRIBUTE, not the substring: an earlier version asserted
+    // on "data-action" and this very comment contained the word, so the test
+    // detected itself and failed for a reason that had nothing to do with the
+    // code under test.
+    expect(wired).not.toMatch(/data-action=/);
+
+    // And the switch itself is unchanged: still exactly the six record actions.
+    const actions = [...script.matchAll(/case "([a-z-]+)":/g)].map((m) => m[1]);
+    expect(new Set(actions)).toEqual(
+      new Set(["copy", "qr", "metrics", "save-client-ref", "toggle", "delete"]),
+    );
   });
 });

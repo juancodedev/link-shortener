@@ -573,7 +573,20 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
         if (!q) { try { q = window.localStorage.getItem("tenant"); } catch (e) { q = null; } }
         if (q) headers["X-Tenant-Slug"] = q;
 
-        const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+        // no-store, because the server already sends it, and because deleting a
+        // link has to visibly remove its row.
+        //
+        // The header is the contract; this is the belt to its braces. A GET that
+        // follows a mutation must never be answered from a cache holding the
+        // list as it was BEFORE the mutation — which is exactly what happened,
+        // and exactly why a hard refresh was the only thing that worked: a hard
+        // refresh is the browser's own way of saying no-cache.
+        const res = await fetch(path, {
+          method,
+          headers,
+          body: body ? JSON.stringify(body) : undefined,
+          cache: "no-store",
+        });
         if (res.status === 401) { window.location.href = "/login"; throw new Error("Unauthorized"); }
 
         // Several locations and none chosen. The API refuses rather than

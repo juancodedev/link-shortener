@@ -571,3 +571,40 @@ describe("error handling through the real app", () => {
     await expect(res.text()).resolves.not.toContain("Internal Server Error");
   });
 });
+// ---------------------------------------------------------------------------
+// The caching contract of an authenticated response
+//
+// Reported from the browser: deleting a link did not remove its row until a
+// HARD refresh. A hard refresh sends `Cache-Control: no-cache`, so the symptom
+// is a cache — and the cache exists because the app never said whether its
+// responses are cacheable at all.
+// ---------------------------------------------------------------------------
+describe("authenticated responses declare they are not cacheable", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each([
+    ["/api/links", "GET"],
+    ["/api/locations", "GET"],
+    ["/api/clients/metrics", "GET"],
+    ["/api/review-gate/metrics", "GET"],
+  ])("%s answers no-store, so a mutation cannot be replayed from cache", async (path, method) => {
+    const app = createApp(testEnv());
+    const res = await app.request(path, { method }, testEnv(), executionCtx);
+
+    // Whatever the status — 401 without a token here — the header is the point.
+    // It must be present on EVERY authenticated route, not only the ones that
+    // happened to be discovered while investigating this.
+    expect(res.headers.get("Cache-Control")).toContain("no-store");
+  });
+
+  it("never marks a per-tenant response as public", async () => {
+    const app = createApp(testEnv());
+    const res = await app.request("/api/links", {}, testEnv(), executionCtx);
+
+    // These responses are another tenant's data. `public` would make any shared
+    // cache — including one between users on a proxy — a data leak.
+    expect(res.headers.get("Cache-Control")).not.toContain("public");
+  });
+});

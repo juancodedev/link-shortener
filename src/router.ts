@@ -18,7 +18,13 @@ import { listClientRefMetrics } from "./api/clients";
 import { listLocations, createLocation, updateLocation } from "./api/locations";
 import { linkQrSvg, batchQrSheet } from "./api/qr";
 import { reviewGateMetrics } from "./api/review-gate";
-import { createTenant, deleteTenant, listTenants } from "./api/tenants";
+import {
+  createTenant,
+  deleteTenant,
+  getFeedbackEmail,
+  listTenants,
+  setFeedbackEmail,
+} from "./api/tenants";
 import { listTenantSubscriptions, setTenantSubscription } from "./handlers/ops";
 
 // ---------------------------------------------------------------------------
@@ -161,6 +167,11 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
 
   app.get("/api/ops/tenants", listTenantSubscriptions);
   app.post("/api/ops/tenants/subscription", setTenantSubscription);
+
+  // Where this business wants its private feedback to go. Records intent only:
+  // nothing is emailed yet, and the gate path is untouched by this.
+  app.get("/api/tenant/feedback-email", auth, tenantMembershipMiddleware, getFeedbackEmail);
+  app.put("/api/tenant/feedback-email", auth, tenantMembershipMiddleware, setFeedbackEmail);
 
   app.get("/api/tenants", auth, listTenants);
   app.post("/api/tenants", auth, createTenant);

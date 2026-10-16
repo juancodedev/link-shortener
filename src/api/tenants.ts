@@ -253,3 +253,102 @@ export const listTenants: Handler<{
     })),
   });
 };
+
+/**
+ * Where this tenant wants its private customer feedback sent.
+ *
+ * PHASE A: THIS RECORDS INTENT AND SENDS NOTHING.
+ *
+ * The column is stored, shown and exported so the owner can see it and a print
+ * run can carry it. No provider is wired and the gate path is untouched, which
+ * means this feature cannot break a customer's submission — and it means a
+ * review does NOT reach the address yet. That is the honest state of it, and the
+ * README says so rather than letting a green dashboard imply otherwise.
+ */
+export const getFeedbackEmail: Handler<{
+  Bindings: AppEnv;
+  Variables: HonoVars;
+}> = async (c) => {
+  const tenant = c.get("tenant");
+  if (!tenant) return c.json({ error: "unauthenticated" }, 401);
+
+  const row = await withClient(c.env, async (client) => {
+    const res = await client.query<{ feedback_email: string | null }>(
+      `SELECT feedback_email FROM public.tenants WHERE id = $1`,
+      [tenant.tenantId],
+    );
+    return res.rows[0];
+  });
+
+  return c.json({ feedback_email: row?.feedback_email ?? null });
+};
+
+export const setFeedbackEmail: Handler<{
+  Bindings: AppEnv;
+  Variables: HonoVars;
+}> = async (c) => {
+  const tenant = c.get("tenant");
+  if (!tenant) return c.json({ error: "unauthenticated" }, 401);
+
+  let body: { feedback_email?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid_request", code: "invalid_request" }, 400);
+  }
+
+  // Clearing is a first-class outcome, not an error: an owner who no longer wants
+  // this set must be able to say so. `null` and "" both mean "not configured",
+  // because a browser form submits "" for an emptied field.
+  const raw = typeof body.feedback_email === "string" ? body.feedback_email.trim() : null;
+
+  if (raw !== null && raw !== "" && !isPlausibleEmail(raw)) {
+    return c.json(
+      {
+        error: "invalid_email",
+        code: "invalid_email",
+        detail: "That does not look like an email address.",
+      },
+      400,
+    );
+  }
+
+  if (raw !== null && raw.length > 254) {
+    // The RFC limit, and the column is TEXT so nothing below would stop it. A
+    // value that long is a paste accident, and storing it would put a junk row
+    // in the registry that an export then carries to every print run.
+    return c.json({ error: "invalid_email", code: "invalid_email" }, 400);
+  }
+
+  const value = raw === "" ? null : raw;
+
+  const row = await withClient(c.env, async (client) => {
+    const res = await client.query<{ feedback_email: string | null }>(
+      `UPDATE public.tenants SET feedback_email = $1 WHERE id = $2 RETURNING feedback_email`,
+      [value, tenant.tenantId],
+    );
+    return res.rows[0];
+  });
+
+  return c.json({ feedback_email: row?.feedback_email ?? null });
+};
+
+/**
+ * A deliberately loose email check.
+ *
+ * Strict RFC 5322 validation rejects addresses that deliver. The rule of thumb
+ * from the original RFC is that anything with no whitespace, an `@`, and
+ * something on each side of it gets delivered — so that is what this checks, and
+ * anything more elaborate would refuse real addresses and teach the owner that
+ * our form is unreliable.
+ *
+ * The length and whitespace rules are the parts that genuinely break delivery,
+ * and they are the ones kept.
+ */
+export function isPlausibleEmail(value: string): boolean {
+  if (/\s/.test(value)) return false;
+  const parts = value.split("@");
+  if (parts.length !== 2) return false;
+  const [local, domain] = parts as [string, string];
+  return local.length > 0 && domain.length > 0;
+}

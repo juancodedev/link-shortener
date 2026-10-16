@@ -187,6 +187,8 @@ Every mutation flushes the tenant's `reg:{code}` KV entries so the change takes 
 
 | Method | Path | Purpose |
 | --- | --- | --- |
+| `GET` | `/api/tenant/feedback-email` | Where this business wants its private customer feedback sent |
+| `PUT` | `/api/tenant/feedback-email` | Set or clear it |
 | `GET` | `/api/tenants` | List tenants this user belongs to (the switcher's data source) |
 | `POST` | `/api/links` | Create one link |
 | `GET` | `/api/links` | List the tenant's links |
@@ -544,6 +546,26 @@ Three things this is deliberately not:
   pattern is a symbol some scanners refuse.
 - **Not a colour.** Pure `#000000` on `#ffffff`, because the press converts to
   K100. The old cream and warm grey were four-colour builds that print grey.
+
+#### Feedback email
+
+`GET`/`PUT /api/tenant/feedback-email` stores the address where a business wants
+its private customer comments delivered. It is one column on `public.tenants`, per
+business rather than per table: a chain of forty tables must not mean forty
+inboxes, and the person who reads reviews is one person.
+
+**It does not send anything.** No provider is wired and the review gate is
+untouched, so this cannot break a customer's submission — and a review does not
+reach the address yet. Feedback still lands in `analytics.tag_feedback` and shows
+in the satisfaction panel, and the dashboard says so next to the field. A green
+dashboard next to a label called "feedback email" would otherwise tell an owner
+their reviews are being delivered, and they would stop checking the panel.
+
+The address travels in the print sheet's `links.csv` so a print run knows where
+its comments are supposed to end up. Wiring a provider (Resend fits Workers
+best — native binding, no client library) is a later step, and it needs a retry
+or a durable queue: a customer whose review silently vanishes has no way to know,
+and neither does the owner.
 
 #### Link and card-stock budgets
 

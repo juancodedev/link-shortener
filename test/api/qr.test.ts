@@ -205,9 +205,52 @@ function sheetRow(over: Record<string, unknown> = {}) {
     short_code: "X4tonhH",
     client_ref: "mesa-1",
     original_url: "https://g.page/review",
+    // The tenant-level address now travels with the sheet query, so a row
+    // carries it even though the column lives on public.tenants.
+    feedback_email: "hola@cafecentral.com",
     ...over,
   };
 }
+
+
+/**
+ * A context whose `req.json` ALREADY resolves the selection.
+ *
+ * Built this way rather than patched after construction because the handler
+ * reads the body before anything else; a context that has to be fixed up in
+ * two steps is a context where the order of two lines decides whether the
+ * test tests anything.
+ */
+  function zipContext(linkIds: string[]) {
+    const { c } = mockContext();
+    (c.req as any).json = vi.fn().mockResolvedValue({ link_ids: linkIds });
+    return c;
+  }
+
+/**
+ * Builds a sheet from the given rows.
+ *
+ * `opts.rows` simulates ids that were selected but did not resolve — a
+ * different fact from an empty selection, which is rejected earlier for a
+ * different reason.
+ */
+  /** Unzips a response and returns one entry's text. */
+  async function zipText(res: Response, name: string): Promise<string> {
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    return strFromU8(unzipSync(bytes)[name]!);
+  }
+
+  async function buildZip(rows: unknown[], opts: { rows?: unknown[] } = {}) {
+    const { batchQrSheet } = await import("../../src/api/qr");
+    // `opts.rows` simulates ids that were selected but did not resolve — a
+    // different fact from an empty selection, which is rejected earlier for a
+    // different reason.
+    const resolved = opts.rows ?? rows;
+    vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) =>
+      fn({ query: vi.fn().mockResolvedValue({ rows: resolved, rowCount: resolved.length }) }),
+    );
+    return batchQrSheet(zipContext(rows.map((r: any) => r.id)));
+  }
 
 describe("the ZIP sheet", () => {
   // NO beforeEach here, deliberately. `vi.clearAllMocks()` also clears the
@@ -228,17 +271,6 @@ describe("the ZIP sheet", () => {
     return Object.keys(unzipSync(bytes));
   }
 
-  async function buildZip(rows: unknown[], opts: { rows?: unknown[] } = {}) {
-    const { batchQrSheet } = await import("../../src/api/qr");
-    // `opts.rows` simulates ids that were selected but did not resolve — a
-    // different fact from an empty selection, which is rejected earlier for a
-    // different reason.
-    const resolved = opts.rows ?? rows;
-    vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) =>
-      fn({ query: vi.fn().mockResolvedValue({ rows: resolved, rowCount: resolved.length }) }),
-    );
-    return batchQrSheet(zipContext(rows.map((r: any) => r.id)));
-  }
 
   /**
    * A context whose `req.json` ALREADY resolves the selection.
@@ -248,11 +280,6 @@ describe("the ZIP sheet", () => {
    * two steps is a context where the order of two lines decides whether the
    * test tests anything.
    */
-  function zipContext(linkIds: string[]) {
-    const { c } = mockContext();
-    (c.req as any).json = vi.fn().mockResolvedValue({ link_ids: linkIds });
-    return c;
-  }
 
   it("returns a ZIP, not a JSON error", async () => {
     const res = await buildZip([sheetRow()]);
@@ -346,6 +373,70 @@ describe("the ZIP sheet", () => {
     const c = zipContext("all" as never);
 
     await expect(batchQrSheet(c as any)).rejects.toThrow(/array/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The print sheet's manifest
+//
+// A print run is the moment someone needs to know where the comments from these
+// stickers are supposed to end up. The address lives on the tenant, not the row,
+// so it is repeated per row — redundant in a spreadsheet, obvious in a text
+// editor.
+// ---------------------------------------------------------------------------
+describe("the sheet manifest carries the feedback address", () => {
+  it("has a column for it", async () => {
+    const res = await buildZip([sheetRow({ feedback_email: "hola@cafe.com" })]);
+    const csv = await zipText(res, "links.csv");
+
+    expect(csv.split("\n")[0]).toBe("file,short_code,short_url,client_ref,feedback_email");
+  });
+
+  it("repeats the tenant address on every row", async () => {
+    // One address, many cards. A designer reading a single row in a text editor
+    // should not have to ask which business this run belongs to.
+    const res = await buildZip([
+      sheetRow({ feedback_email: "hola@cafe.com" }),
+      sheetRow({ id: "link-2", feedback_email: "hola@cafe.com" }),
+    ]);
+    const rows = (await zipText(res, "links.csv")).trim().split("\n");
+
+    expect(rows).toHaveLength(3);
+    expect(rows[1]).toContain("hola@cafe.com");
+    expect(rows[2]).toContain("hola@cafe.com");
+  });
+
+  it("leaves it empty for a tenant that has not set one", async () => {
+    // Every existing tenant is in this state. The column exists and is blank,
+    // rather than the column vanishing for some tenants and not others.
+    const res = await buildZip([sheetRow({ feedback_email: null })]);
+    const rows = (await zipText(res, "links.csv")).trim().split("\n");
+
+    expect(rows[0]).toContain("feedback_email");
+    expect(rows[1]!.endsWith(",")).toBe(true);
+  });
+
+  it("quotes a client_ref containing a comma, instead of shifting every column", async () => {
+    // A comma does not fail loudly: it shifts every later column and the sheet
+    // still opens. A designer then reads a shifted sheet as a wrong sheet, which
+    // is the worst possible failure for a document about to be cut.
+    const res = await buildZip([
+      sheetRow({ client_ref: "Mesas 1, 2 y 3", feedback_email: "hola@cafe.com" }),
+    ]);
+    const row = (await zipText(res, "links.csv")).trim().split("\n")[1]!;
+
+    expect(row).toContain('"Mesas 1, 2 y 3"');
+
+    // Five columns still, which is what proves nothing shifted.
+    const cells = row.match(/("[^"]*"|[^,]*)(,|$)/g)!.filter((x) => x !== "," || true);
+    expect(cells.filter((c) => c === "," || c.endsWith(",")).length).toBe(4);
+  });
+
+  it("doubles a quote inside a value, as CSV requires", async () => {
+    const res = await buildZip([sheetRow({ client_ref: 'Sala "VIP"' })]);
+    const row = (await zipText(res, "links.csv")).trim().split("\n")[1]!;
+
+    expect(row).toContain('"Sala ""VIP"""');
   });
 });
 

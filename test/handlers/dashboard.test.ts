@@ -1692,3 +1692,90 @@ describe("a bulk batch can carry one label", () => {
     expect(script).toContain(".value.trim()");
   });
 });
+
+// ---------------------------------------------------------------------------
+// The feedback email section
+//
+// Phase A: the owner records where private customer comments should go. It is
+// stored, shown and exported. NOTHING IS EMAILED.
+//
+// The last part is the one worth a test, because the failure is quiet: a green
+// dashboard next to a field labelled "feedback email" tells an owner their
+// reviews are being delivered, and they stop checking the satisfaction panel.
+// ---------------------------------------------------------------------------
+describe("the feedback email section", () => {
+  it("exists and is labelled as storing, not sending", async () => {
+    const html = await serve();
+
+    expect(html).toContain('id="feedback-email"');
+    expect(html).toContain('id="feedback-email-save"');
+
+    // Says so where the owner will actually read it.
+    expect(html).toMatch(/nothing is emailed/i);
+    expect(html).toMatch(/satisfaction panel/i);
+  });
+
+  it("puts the panel before the satisfaction panel it refers to", async () => {
+    const html = await serve();
+
+    // The text tells the owner where their comments still arrive. That sentence
+    // only makes sense if the panel it names is on the same page.
+    const card = html.indexOf('id="feedback-email-card"');
+    const gate = html.indexOf('id="gate-card"');
+    expect(card).toBeGreaterThan(-1);
+    expect(gate).toBeGreaterThan(-1);
+    expect(card).toBeLessThan(gate);
+  });
+
+  it("PUTs to the tenant-scoped endpoint", async () => {
+    const script = await clientScript();
+    expect(script).toContain('window.__api("PUT", "/api/tenant/feedback-email"');
+  });
+
+  it("loads the stored address once at boot, not on every table render", async () => {
+    const script = await clientScript();
+
+    expect(script).toContain('window.__api("GET", "/api/tenant/feedback-email"');
+
+    // loadLinks runs on every toggle, delete and create. Re-reading a
+    // tenant-level setting on each one is a request per keystroke of somebody
+    // else's workflow.
+    //
+    // Asserted against the whole served page because the boot call lives in the
+    // OTHER inline <script> — the auth bootstrap, not the links client. Reading
+    // it from clientScript() looks for a string that is not there and returns
+    // -1, which is how this first failed.
+    const html = await serve();
+    const at = html.indexOf("loadFeedbackEmail();");
+    const linksAt = html.indexOf("loadLinks();", at);
+    expect(at).toBeGreaterThan(-1);
+    expect(linksAt).toBeGreaterThan(at);
+  });
+
+  it("only claims success when the server agreed", async () => {
+    const script = await clientScript();
+
+    // A confirmation that lies is worse than no confirmation: the owner walks
+    // away believing an address is recorded that is not.
+    // The listener is addressed through getElementById, so the marker is that
+    // call — not the `id="..."` form, which only appears in the markup.
+    const fn = script.slice(script.indexOf('getElementById("feedback-email-save").addEventListener'));
+    expect(fn).toContain("if (!res.ok)");
+    expect(fn).toMatch(/message success[\s\S]*Saved\./);
+  });
+
+  it("surfaces the server's own message when it refuses", async () => {
+    const script = await clientScript();
+
+    // The endpoint returns `detail` — "That does not look like an email
+    // address." — which beats a generic failure.
+    expect(script).toContain("body.detail || body.error");
+  });
+
+  it("stays out of the delegated record switch", async () => {
+    const script = await clientScript();
+
+    // It acts on no record, and the switch's membership is pinned to seven.
+    expect(script).not.toContain('case "feedback-email"');
+  });
+});

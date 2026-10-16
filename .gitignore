@@ -6,3 +6,6 @@ dist/
 .dev.vars
 *.log
 .DS_Store
+
+# Supabase CLI scratch directory — regenerated on every invocation.
+supabase/.temp/

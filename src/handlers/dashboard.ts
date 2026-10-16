@@ -620,6 +620,10 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       // fail. Leaving waiters parked is the honest outcome, not a leak.
       window.__apiReadyResolve?.();
 
+      // Once, at boot, not on every loadLinks(): the feedback address belongs
+      // to the tenant and not to any row, so re-reading it whenever a link is
+      // toggled would be a request per keystroke of someone else's workflow.
+      if (typeof loadFeedbackEmail === "function") loadFeedbackEmail();
       if (typeof loadLinks === "function") loadLinks();
     })();
   </script>
@@ -747,6 +751,39 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
          what the owner forwards as their monthly report, so every figure here
          carries its own qualification in the markup rather than in a tooltip
          that a screenshot would not capture. -->
+    <!--
+      WHERE FEEDBACK SHOULD GO.
+
+      A card's QR leads to the review gate. A customer can leave a private
+      comment there, and it lands in analytics.tag_feedback and shows up in the
+      satisfaction panel below.
+
+      They can also record here where that should be delivered.
+
+      IT DOES NOT SEND ANYTHING YET. The address is stored, shown and exported
+      into the print sheet's CSV, and nothing is emailed from it. That is the
+      honest state of this field, and the label says so, because a green
+      dashboard implying "reviews are being emailed" is worse than no field at
+      all: an owner would stop checking the panel.
+
+      Wired as static listeners with the other form controls, not through the
+      delegated switch — that switch is for record actions, and this acts on no
+      record.
+    -->
+    <div class="card" id="feedback-email-card">
+      <h3>Feedback email</h3>
+      <p class="field-help">
+        Where you would like private customer comments delivered. Stored now;
+        nothing is emailed yet — comments still arrive in the satisfaction panel
+        below.
+      </p>
+      <label for="feedback-email">Email address</label>
+      <input type="email" id="feedback-email" placeholder="you@yourbusiness.com"
+             autocomplete="email" maxlength="254">
+      <div id="feedback-email-msg" class="message"></div>
+      <button type="button" id="feedback-email-save" class="btn-sm btn-primary gap-top-sm">Save</button>
+    </div>
+
     <div class="card" id="gate-card" style="display:none;">
       <h3>Customer satisfaction</h3>
       <div id="gate-body"><div class="loading">Loading...</div></div>
@@ -980,6 +1017,62 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       // because the download button needs them and a data-* attribute would be
       // a second copy of the same list that could drift out of sync with it.
       // ---------------------------------------------------------------------
+      // ---------------------------------------------------------------------
+      // Feedback email
+      //
+      // Loads whatever is stored so the owner can see it, which is the whole
+      // point of showing it here. Fetches once per load rather than on every
+      // render of the links table, because it belongs to the tenant and not to
+      // any row.
+      // ---------------------------------------------------------------------
+      async function loadFeedbackEmail() {
+        try {
+          const res = await window.__api("GET", "/api/tenant/feedback-email");
+          const body = await res.json();
+          const input = document.getElementById("feedback-email");
+          if (input && typeof body.feedback_email === "string") {
+            input.value = body.feedback_email;
+          }
+        } catch {
+          // A tenant that cannot read its own setting still gets a working
+          // dashboard; the field just stays empty rather than blocking the page.
+        }
+      }
+
+      document.getElementById("feedback-email-save").addEventListener("click", async () => {
+        const input = document.getElementById("feedback-email");
+        const msg = document.getElementById("feedback-email-msg");
+        const btn = document.getElementById("feedback-email-save");
+
+        btn.disabled = true;
+        msg.className = "message";
+        msg.textContent = "";
+
+        try {
+          const res = await window.__api("PUT", "/api/tenant/feedback-email", {
+            feedback_email: input.value,
+          });
+
+          // Only say "saved" when the server agreed. A confirmation that lies
+          // is worse than no confirmation: the owner walks away believing an
+          // address is recorded that is not.
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            msg.className = "message error";
+            msg.textContent = body.detail || body.error || "Could not save";
+            return;
+          }
+
+          msg.className = "message success";
+          msg.textContent = "Saved.";
+        } catch (err) {
+          msg.className = "message error";
+          msg.textContent = err instanceof Error ? err.message : "Error";
+        } finally {
+          btn.disabled = false;
+        }
+      });
+
       // >>> BULK BLOCK — the dashboard test scopes its row-action assertion to
       // exactly this range.
       let bulkIds = [];

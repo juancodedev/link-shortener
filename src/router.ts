@@ -11,8 +11,16 @@ import { landingHandler } from "./handlers/landing";
 import { redirectHandler } from "./handlers/redirect";
 import { signupHandler, loginHandler, resetPasswordHandler, authCallbackHandler } from "./handlers/auth";
 import { dashboardHandler } from "./handlers/dashboard";
+import { setupHandler } from "./handlers/setup";
 import { gateHandler } from "./handlers/gate";
-import { createLink, listLinks, updateLink, deleteLink, linkClicks } from "./api/links";
+import {
+  createLink,
+  listLinks,
+  updateLink,
+  deleteLink,
+  linkClicks,
+  getLinkByCode,
+} from "./api/links";
 import { createLinksBatch } from "./api/batch";
 import { listClientRefMetrics } from "./api/clients";
 import { listLocations, createLocation, updateLocation } from "./api/locations";
@@ -108,9 +116,22 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
   // Dashboard (authenticated via client-side Supabase session)
   app.get("/dashboard", dashboardHandler);
 
+  // Card quick setup. Authenticated the same way as the dashboard: the page is
+  // public HTML and its script carries the session. Two segments, so it cannot
+  // be shadowed by `/:code`, but it is registered here with the other pages
+  // all the same.
+  app.get("/setup/:code", setupHandler);
+
   // -----------------------------------------------------------------------
   // API routes (authenticated)
   // -----------------------------------------------------------------------
+
+  // Lookup by the code printed on a card (card quick setup). Auth only, no
+  // tenant middleware: the tenant is the one that owns the code, and the
+  // handler checks membership in exactly that tenant — see src/api/links.ts.
+  // Registered ahead of the `/api/links/:id/...` routes so `by-code` is never
+  // read as a link id.
+  app.get("/api/links/by-code/:code", auth, getLinkByCode);
 
   // Link CRUD: auth → resolve tenant from user profile → handler
   app.post("/api/links", auth, tenantMembershipMiddleware, createLink);

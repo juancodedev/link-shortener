@@ -6,6 +6,7 @@ import { setCachedUrl, getCachedUrl } from "../cache/shortcode";
 import { resolveRegistryEntry } from "../api/links";
 import { trackClick } from "../analytics/tracker";
 import { renderActionScreen, escapeHtml } from "./action-screen";
+import { scriptValue } from "./setup";
 
 // ---------------------------------------------------------------------------
 // Types for KV-cached link metadata
@@ -500,7 +501,17 @@ function safeContactHref(contact?: string): string | null {
  * `client_ref` is shown because it is the only thing that identifies WHICH
  * card is unconfigured, and telling the designer "this one" without a handle
  * makes the page useless to them. It is tenant-scoped free text the owner typed
- * themselves, carries no personal data, and is omitted entirely when unset.
+ * themselves, carries no personal data, and is omitted entirely when unset. *
+ * THE OWNER'S SHORTCUT TO SETUP
+ *
+ * The person most likely to scan an unconfigured card is the owner who just
+ * stuck it on a table. The server cannot tell them from a customer — auth is a
+ * Supabase session in localStorage and /:code receives no credentials — so a
+ * small inline script checks for Supabase's `sb-<project-ref>-auth-token` key
+ * and, when there is one, replaces this page with /setup/:code. A customer has
+ * no such key and sees exactly this page. Any storage failure (blocked, private
+ * mode) leaves the visitor here too. The setup page never sends a browser back
+ * to /:code without a destination saved, so the hop cannot loop.
  */
 export function renderCardNotConfigured(params: {
   businessName: string;
@@ -578,6 +589,19 @@ export function renderCardNotConfigured(params: {
   ${contact}
   ${refLine}
 </main>
+<script>
+  (function () {
+    try {
+      var storage = window.localStorage;
+      for (var i = 0; i < storage.length; i++) {
+        if (/^sb-.+-auth-token$/.test(storage.key(i) || "")) {
+          location.replace("/setup/" + encodeURIComponent(${scriptValue(params.code)}));
+          return;
+        }
+      }
+    } catch (e) {}
+  })();
+</script>
 </body>
 </html>`;
 }

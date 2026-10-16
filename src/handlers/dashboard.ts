@@ -1028,8 +1028,6 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         }
       });
 
-      // <<< BULK BLOCK
-
       document.getElementById("bulk-download").addEventListener("click", async () => {
         const msg = document.getElementById("bulk-msg");
 
@@ -1040,26 +1038,22 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         }
 
         try {
-          // Fetched and saved as a blob rather than pointed at by an <a href>:
-          // this request is a POST with a JSON body, and a navigation cannot
-          // carry one.
-          const res = await fetch("/api/links/qr-sheet.zip", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: "Bearer " + localStorage.getItem("access_token"),
-              "X-Tenant-Slug": localStorage.getItem("tenant") || "",
-            },
-            body: JSON.stringify({ link_ids: bulkIds }),
+          // Through __api, NOT a hand-rolled fetch.
+          //
+          // This handler used to do its own fetch with its own headers, reading
+          // the token from localStorage. The dashboard keeps it on window.__token,
+          // so the sheet request went out as
+          // an empty bearer token and came back 401, while the create (which
+          // does go through the helper) had already succeeded: the modal
+          // cheerfully claimed ten cards existed and none could be printed.
+          //
+          // __api returns the response rather than a parsed body, so a blob
+          // downloads through it unchanged — and the 401-to-login redirect, the
+          // 409 tenant picker, and the server's own error text all come along
+          // instead of being reimplemented slightly wrong.
+          const res = await window.__api("POST", "/api/links/qr-sheet.zip", {
+            link_ids: bulkIds,
           });
-
-          if (!res.ok) {
-            // The server refuses a batch containing an unconfigured card, and
-            // says so. That message is the answer — it is shown rather than
-            // replaced with a generic failure.
-            const body = await res.json().catch(() => ({}));
-            throw new Error(body.error || "Could not build the print sheet");
-          }
 
           const blob = await res.blob();
           const url = URL.createObjectURL(blob);
@@ -1078,6 +1072,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           msg.textContent = err instanceof Error ? err.message : "Error";
         }
       });
+      // <<< BULK BLOCK
 
       /**
        * Renders the two visitor figures for one link.

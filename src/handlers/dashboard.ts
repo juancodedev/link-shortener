@@ -812,6 +812,13 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         </p>
         <label for="bulk-count">How many cards</label>
         <input type="number" id="bulk-count" min="1" max="200" step="1" value="10">
+        <label for="bulk-label" class="gap-top-sm">Label for this batch <span class="field-note">(optional)</span></label>
+        <input type="text" id="bulk-label" maxlength="200" placeholder="e.g. Main room — tables 1 to 10">
+        <p class="field-help">
+          Printed under the code on every card, and written to the sheet's CSV, so
+          the designer knows which sticker is which before cutting. One field for
+          the whole batch beats typing it ten times.
+        </p>
         <div id="bulk-msg" class="message"></div>
         <div id="bulk-result" style="display:none;">
           <p class="caption" id="bulk-summary"></p>
@@ -1009,7 +1016,15 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           // No destination, and \`is_gated\` on: a card whose QR forwards
           // straight past the gate records nothing, and the panel this product
           // is measured by would stay empty.
-          const links = Array.from({ length: count }, () => ({ is_gated: true }));
+          // The label is applied to EVERY card in the batch on purpose. It is
+          // one field for the whole run rather than one per card, because the
+          // question being asked is "where does this batch go" — ten stickers
+          // for the main room — not ten separate identities.
+          const label = document.getElementById("bulk-label").value.trim();
+          const links = Array.from({ length: count }, () => ({
+            is_gated: true,
+            ...(label ? { client_ref: label } : {}),
+          }));
           const res = await window.__api("POST", "/api/links/batch", { links });
 
           const body = await res.json();

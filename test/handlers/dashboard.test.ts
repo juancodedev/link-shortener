@@ -56,6 +56,26 @@ async function clientScript(): Promise<string> {
   return script;
 }
 
+
+/**
+ * The served script with its COMMENTS removed.
+ *
+ * Added after a negative assertion (`not.toContain("original_url:")`) failed
+ * because the comment directly above it explained the rule and contained the
+ * word. It was the third time in this file a substring assertion caught its own
+ * prose — the first was `data-action`, the second a test name.
+ *
+ * The failure mode is nasty precisely because it looks like a real finding: the
+ * assertion reports a violation of a rule, and the violation is the test's own
+ * documentation of that rule. Stripping comments first makes a negative
+ * assertion mean what it says — about the CODE.
+ */
+function codeOnly(script: string): string {
+  return script
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+}
+
 /** Extracts a named `function foo(...) {...}` by brace matching. */
 function extractFunction(src: string, name: string): string {
   const start = src.indexOf(`function ${name}(`);
@@ -1326,7 +1346,20 @@ describe("the dashboard can manufacture cards in bulk", () => {
     // The item literal itself is the claim: a card is `is_gated` and nothing
     // else. Asserting on the whole script for "no original_url" would also
     // catch the single-create form above, which legitimately has one.
-    expect(script).toContain("Array.from({ length: count }, () => ({ is_gated: true }))");
+    // The item literal IS the claim: a card is gated, and it carries a
+    // destination only if the owner typed a label. `...(label ? ...)` is what
+    // makes "no destination" the default rather than a special case.
+    expect(script).toContain("Array.from({ length: count }, () => ({");
+    expect(script).toContain("is_gated: true");
+    // Scoped to the BULK BLOCK, not the whole script.
+    //
+    // The dashboard has two creation paths and only one of them must omit the
+    // destination. The single-create form legitimately sets `original_url` — it
+    // is how an owner shortens a URL they already have. Asserting on the whole
+    // script conflates the two and is wrong, not merely imprecise.
+    const start = script.indexOf(">>> BULK BLOCK");
+    const end = script.indexOf("<<< BULK BLOCK", start);
+    expect(codeOnly(script.slice(start, end))).not.toContain("original_url:");
   });
 
   it("creates them GATED, or the panel stays empty", async () => {
@@ -1335,7 +1368,7 @@ describe("the dashboard can manufacture cards in bulk", () => {
     // The single most consequential field in the flow. A card whose QR forwards
     // straight past the gate records nothing and the satisfaction panel reads
     // zero forever, which is the bug three PRs ago.
-    expect(script).toContain("({ is_gated: true })");
+    expect(script).toContain("is_gated: true");
   });
 
   it("posts to the batch endpoint that already exists", async () => {
@@ -1620,5 +1653,42 @@ describe("the served client script parses", () => {
     const client = blocks.find((b) => b.includes("links-body"))!;
 
     expect(client).toContain("\\n\\nPaste the full URL");
+  });
+});
+
+describe("a bulk batch can carry one label", () => {
+  it("asks for a label beside the count", async () => {
+    const html = await serve();
+
+    expect(html).toContain('id="bulk-label"');
+    expect(html).toContain("Label for this batch");
+  });
+
+  it("says the label reaches the card AND the CSV", async () => {
+    const html = await serve();
+
+    // The CSV is what the designer reads while laying out the sheet. A label
+    // that reaches only the card would still leave ten identical stickers and
+    // a blank column.
+    expect(html).toMatch(/CSV/);
+    expect(html).toMatch(/designer/i);
+  });
+
+  it("applies ONE label to every card in the batch", async () => {
+    const script = await clientScript();
+
+    // Ten stickers for the main room is one decision, not ten. Asking for a
+    // label per card would make a batch a form again.
+    expect(script).toContain("client_ref: label");
+    expect(script).toContain("Array.from({ length: count }");
+  });
+
+  it("treats an empty label as no label at all", async () => {
+    const script = await clientScript();
+
+    // A blank input must not produce ten cards carrying a blank identifier —
+    // that is a value that looks like data and is not.
+    expect(script).toContain("...(label ? { client_ref: label } : {})");
+    expect(script).toContain(".value.trim()");
   });
 });

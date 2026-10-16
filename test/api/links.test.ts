@@ -60,7 +60,7 @@ import {
   invalidateCachedRegistryEntry,
 } from "../../src/cache/shortcode";
 import { generateShortCode } from "../../src/utils/short-code";
-import { createLink, deleteLink, linkClicks, listLinks, updateLink, DEFAULT_MAX_ACTIVE_LINKS, DEFAULT_MAX_CARD_STOCK } from "../../src/api/links";
+import { createLink, deleteLink, getLinkByCode, linkClicks, listLinks, updateLink, DEFAULT_MAX_ACTIVE_LINKS, DEFAULT_MAX_CARD_STOCK } from "../../src/api/links";
 import { UNIQUE_WINDOW, SESSION_WINDOW } from "../../src/analytics/metrics";
 import { ValidationError } from "../../src/middleware/error";
 
@@ -75,6 +75,8 @@ function mockContext(overrides: {
   params?: Record<string, string>;
   /** Extra bindings merged over the default env — e.g. MAX_ACTIVE_LINKS. */
   env?: Record<string, string>;
+  /** The authenticated user, as the auth middleware would set it. */
+  user?: { userId: string; email?: string };
 } = {}) {
   const waitUntilFn = vi.fn();
   const jsonFn = vi.fn().mockImplementation(
@@ -111,6 +113,7 @@ function mockContext(overrides: {
         schemaName: "tenant_a7f3",
         tenantId: "tenant-uuid",
       };
+      if (key === "user") return overrides.user;
       return undefined;
     }),
     executionCtx: {
@@ -2144,7 +2147,7 @@ describe("original_url on updateLink", () => {
 
   it("loads a destination onto a link that has none", async () => {
     const calls = mockRecordingDb([
-      [{ short_code: "abc1234", is_active: true }],
+      [{ short_code: "abc1234", is_active: true, original_url: "https://g.page/ACME/review" }],
     ]);
 
     const { c, jsonFn } = mockContext({
@@ -2157,7 +2160,11 @@ describe("original_url on updateLink", () => {
     const update = calls.find((q) => /^UPDATE/i.test(q.sql.trim()))!;
     expect(update.sql).toMatch(/original_url\s*=/);
     expect(update.params).toContain("https://g.page/ACME/review");
-    expect(jsonFn).toHaveBeenCalledWith({ ok: true });
+    // The response also carries the stored destination since card quick setup.
+    expect(jsonFn).toHaveBeenCalledWith({
+      ok: true,
+      original_url: "https://g.page/ACME/review",
+    });
   });
 
   it("rejects a scheme-less destination, exactly as creation does", async () => {
@@ -2191,7 +2198,7 @@ describe("original_url on updateLink", () => {
     expect(update.sql).toMatch(/original_url = NULL/);
     expect(update.sql).toMatch(/WHERE id = \$1\b/);
     expect(update.params).toEqual(["link-uuid"]);
-    expect(jsonFn).toHaveBeenCalledWith({ ok: true });
+    expect(jsonFn).toHaveBeenCalledWith({ ok: true, original_url: null });
   });
 
   it("treats an empty string as clear, because the form posts a blank field", async () => {
@@ -2460,5 +2467,176 @@ describe("card stock is bounded separately from the link budget", () => {
     // The relationship is the whole point: if the default were equal, the split
     // would be a refactor rather than a fix.
     expect(DEFAULT_MAX_CARD_STOCK).toBeGreaterThan(DEFAULT_MAX_ACTIVE_LINKS);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/links/by-code/:code — the card quick-setup lookup
+//
+// The setup page starts from the code printed on the card, not from a link id
+// or a tenant. So this lookup is the one place the code decides the tenant, and
+// membership in THAT tenant is what grants access. Unknown and not-yours must
+// be the same answer, or the endpoint confirms which codes exist elsewhere.
+// ---------------------------------------------------------------------------
+
+describe("getLinkByCode handler", () => {
+  const registryRow = {
+    short_code: "ywaoSiE",
+    link_id: "link-uuid",
+    tenant_id: "tenant-uuid",
+    schema_name: "tenant_a7f3",
+    salt: "salt-abc",
+    subdomain: "acme",
+    display_name: "Acme",
+    subscription_status: "active",
+  };
+  const linkRow = {
+    id: "link-uuid",
+    short_code: "ywaoSiE",
+    original_url: null,
+    client_ref: "ACME-0042",
+  };
+
+  /** Routes each statement by its SQL shape and records it. */
+  function mockByCodeDb(opts: { registry?: unknown[]; membership?: unknown[]; links?: unknown[] }) {
+    const calls: { sql: string; params: unknown[] }[] = [];
+    vi.mocked(withClient).mockImplementation(async (_env: any, fn: any) =>
+      fn({
+        query: vi.fn().mockImplementation(async (sql: string, params: unknown[]) => {
+          calls.push({ sql, params });
+          if (sql.includes("short_code_registry")) return { rows: opts.registry ?? [registryRow] };
+          if (sql.includes("tenant_memberships")) return { rows: opts.membership ?? [{ ok: 1 }] };
+          return { rows: opts.links ?? [linkRow] };
+        }),
+      }),
+    );
+    return calls;
+  }
+
+  const member = { userId: "user-uuid", email: "owner@example.com" };
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockCacheDefaults();
+  });
+
+  it("returns the link and its tenant slug to a member of the owning tenant", async () => {
+    mockByCodeDb({});
+    const { c, jsonFn } = mockContext({ params: { code: "ywaoSiE" }, user: member });
+
+    await getLinkByCode(c as any);
+
+    expect(jsonFn).toHaveBeenCalledWith({
+      id: "link-uuid",
+      short_code: "ywaoSiE",
+      original_url: null,
+      client_ref: "ACME-0042",
+      tenant_slug: "acme",
+    });
+  });
+
+  it("checks membership against the tenant the code belongs to, for this user", async () => {
+    const calls = mockByCodeDb({});
+
+    await getLinkByCode(mockContext({ params: { code: "ywaoSiE" }, user: member }).c as any);
+
+    const membership = calls.find((q) => q.sql.includes("tenant_memberships"))!;
+    expect(membership.params).toEqual(["user-uuid", "tenant-uuid"]);
+  });
+
+  it("reads the link from the owning tenant's schema by short code", async () => {
+    const calls = mockByCodeDb({});
+
+    await getLinkByCode(mockContext({ params: { code: "ywaoSiE" }, user: member }).c as any);
+
+    const link = calls.find((q) => q.sql.includes("tenant_a7f3"))!;
+    expect(link.sql).toContain('"tenant_a7f3"."links"');
+    expect(link.params).toEqual(["ywaoSiE"]);
+  });
+
+  it("404s an unknown code without consulting memberships", async () => {
+    const calls = mockByCodeDb({ registry: [] });
+
+    await expect(
+      getLinkByCode(mockContext({ params: { code: "nope123" }, user: member }).c as any),
+    ).rejects.toMatchObject({ status: 404, code: "not_found", message: "Link not found" });
+    expect(calls.some((q) => q.sql.includes("tenant_memberships"))).toBe(false);
+  });
+
+  it("404s a non-member exactly like an unknown code, and never reads the link", async () => {
+    const calls = mockByCodeDb({ membership: [] });
+
+    await expect(
+      getLinkByCode(mockContext({ params: { code: "ywaoSiE" }, user: member }).c as any),
+    ).rejects.toMatchObject({ status: 404, code: "not_found", message: "Link not found" });
+    expect(calls.some((q) => q.sql.includes("tenant_a7f3"))).toBe(false);
+  });
+
+  it("404s when the registry names a link the tenant schema no longer has", async () => {
+    mockByCodeDb({ links: [] });
+
+    await expect(
+      getLinkByCode(mockContext({ params: { code: "ywaoSiE" }, user: member }).c as any),
+    ).rejects.toMatchObject({ status: 404, code: "not_found" });
+  });
+
+  it("refuses an unauthenticated call without touching the database", async () => {
+    mockByCodeDb({});
+
+    await expect(
+      getLinkByCode(mockContext({ params: { code: "ywaoSiE" } }).c as any),
+    ).rejects.toMatchObject({ status: 401 });
+    expect(withClient).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PATCH returns the destination it saved
+//
+// The card setup page navigates straight to the saved destination instead of
+// back through /:code, whose cached destination is only cleared after this
+// response is sent. It needs the value as stored — normalized — not as typed.
+// Additive: `ok: true` stays, and a PATCH that does not touch the destination
+// answers exactly as before.
+// ---------------------------------------------------------------------------
+
+describe("updateLink returns the saved destination", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockCacheDefaults();
+  });
+
+  it("returns the stored original_url alongside ok when the destination is set", async () => {
+    const calls = mockRecordingDb([
+      [{ short_code: "abc1234", is_active: true, original_url: "https://g.page/ACME/review" }],
+    ]);
+    const { c, jsonFn } = mockContext({
+      params: { id: "link-uuid" },
+      body: { original_url: "https://g.page/ACME/review" },
+    });
+
+    await updateLink(c as any);
+
+    const update = calls.find((q) => /^UPDATE/i.test(q.sql.trim()))!;
+    expect(update.sql).toMatch(/RETURNING[^;]*\boriginal_url\b/);
+    expect(jsonFn).toHaveBeenCalledWith({ ok: true, original_url: "https://g.page/ACME/review" });
+  });
+
+  it("returns null when the destination is cleared", async () => {
+    mockRecordingDb([[{ short_code: "abc1234", is_active: true, original_url: null }]]);
+    const { c, jsonFn } = mockContext({ params: { id: "link-uuid" }, body: { original_url: null } });
+
+    await updateLink(c as any);
+
+    expect(jsonFn).toHaveBeenCalledWith({ ok: true, original_url: null });
+  });
+
+  it("answers exactly as before when the destination is not part of the PATCH", async () => {
+    mockRecordingDb([[{ short_code: "abc1234", is_active: false, original_url: "https://x.example" }]]);
+    const { c, jsonFn } = mockContext({ params: { id: "link-uuid" }, body: { is_active: false } });
+
+    await updateLink(c as any);
+
+    expect(jsonFn).toHaveBeenCalledWith({ ok: true });
   });
 });

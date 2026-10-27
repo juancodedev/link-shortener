@@ -112,7 +112,7 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       .col-side { grid-area: side; }
       /* Scoped to .layout so it outranks the base .url-trunc rule, which
          comes later in this sheet. */
-      .layout .url-trunc { max-width: 28rem; }
+      .layout .url-trunc { max-width: 20rem; }
     }
     nav {
       background: var(--sticker);
@@ -539,6 +539,18 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       color: var(--ink-soft);
       margin-top: 0.375rem;
     }
+    .biz-group { border-top: 1px solid var(--edge); padding: 0.75rem 0; }
+    .biz-group:first-child { border-top: none; padding-top: 0; }
+    .biz-name { font-weight: 700; color: var(--ink-strong); }
+    .biz-branches { list-style: none; margin: 0.375rem 0 0.5rem; }
+    .biz-branch { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; padding: 0.25rem 0; flex-wrap: wrap; }
+    .feedback-code { font-family: "SF Mono", "Fira Code", monospace; font-size: 0.75rem; color: var(--tag); }
+    #links-table .badge, .owner-business { white-space: nowrap; }
+    .badge-gated { background: var(--kraft-deep); color: var(--tag); }
+    .badge-direct { background: var(--kraft); color: var(--ink-soft); }
+    .owner-business { display: block; font-weight: 600; color: var(--ink-strong); }
+    .owner-branch { display: block; font-size: 0.813rem; color: var(--ink-soft); }
+    .owner-none { font-size: 0.813rem; color: var(--ink-soft); }
     .check-row {
       display: flex;
       align-items: center;
@@ -677,6 +689,7 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       // toggled would be a request per keystroke of someone else's workflow.
       if (typeof loadFeedbackEmail === "function") loadFeedbackEmail();
       if (typeof loadFeedbackInbox === "function") loadFeedbackInbox();
+      if (typeof loadBranches === "function") loadBranches();
       if (typeof loadLinks === "function") loadLinks();
     })();
   </script>
@@ -773,6 +786,25 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
     </div>
 
     <!--
+      BUSINESSES AND BRANCHES.
+
+      A business ("local") groups one or more branches ("sucursales"), and each
+      link belongs to a branch. Operator-only: the businesses never see this.
+      Every comment and rating is then traceable to business, branch and link
+      (odd/tasks/business-branches.md).
+    -->
+    <div class="card" id="businesses-card">
+      <h3>Businesses and branches</h3>
+      <label for="new-business-name">New business</label>
+      <div class="field-row">
+        <input type="text" id="new-business-name" maxlength="120" placeholder="e.g. Café Central">
+        <button type="button" id="add-business" class="btn-sm btn-primary">Add</button>
+      </div>
+      <div id="businesses-msg" class="message"></div>
+      <div id="businesses-body" class="gap-top"><div class="loading">Loading...</div></div>
+    </div>
+
+    <!--
       WHERE FEEDBACK SHOULD GO.
 
       A card's QR leads to the review gate. A customer can leave a private
@@ -824,7 +856,9 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         <thead>
           <tr>
             <th>Short Code</th>
+            <th>Business / branch</th>
             <th>URL</th>
+            <th>Opens</th>
             <th>Clicks</th>
             <th>Status</th>
             <th></th>
@@ -855,6 +889,10 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         <h3>What customers wrote</h3>
         <button type="button" id="feedback-export" class="btn-sm">Download CSV</button>
       </div>
+      <label for="feedback-filter" class="gap-top-sm">Show comments from</label>
+      <select id="feedback-filter">
+        <option value="">All businesses</option>
+      </select>
       <div id="feedback-export-msg" class="message"></div>
       <div id="feedback-body"><div class="loading">Loading...</div></div>
     </div>
@@ -1154,11 +1192,56 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       // says so in this card and leaves the rest of the dashboard working;
       // the links table should not disappear because the inbox could not load.
       // ---------------------------------------------------------------------
+      /**
+       * The comment filter as the API's query string. "b:<id>" is a business,
+       * "l:<id>" a branch, "" everything. The list and the CSV read the same
+       * value, so the export is always what is on screen.
+       */
+      function feedbackQuery() {
+        const value = document.getElementById("feedback-filter").value;
+        if (value.indexOf("b:") === 0) return "?business_id=" + encodeURIComponent(value.slice(2));
+        if (value.indexOf("l:") === 0) return "?location_id=" + encodeURIComponent(value.slice(2));
+        return "";
+      }
+
+      /**
+       * Rebuilds the filter's options from the loaded businesses and branches,
+       * keeping the current choice. Built with DOM APIs: the names are typed
+       * by a person.
+       */
+      function fillFeedbackFilter() {
+        const select = document.getElementById("feedback-filter");
+        if (!select) return;
+        const current = select.value;
+        const businesses = window.__businesses || [];
+        const branches = window.__branches || [];
+        select.textContent = "";
+        select.add(new Option("All businesses", ""));
+        businesses.forEach((b) => {
+          select.add(new Option(b.name, "b:" + b.id));
+          branches
+            .filter((l) => l.business_id === b.id)
+            .forEach((l) => select.add(new Option("— " + l.name, "l:" + l.id)));
+        });
+        branches
+          .filter((l) => !l.business_id)
+          .forEach((l) => select.add(new Option(l.name + " (no business)", "l:" + l.id)));
+        select.value = current;
+        // The chosen business or branch no longer exists: fall back to all,
+        // and reload, or the list would stay filtered under an "All" label.
+        if (select.value !== current) {
+          select.value = "";
+          loadFeedbackInbox();
+        }
+      }
+
+      document.getElementById("feedback-filter").addEventListener("change", () => loadFeedbackInbox());
+
       async function loadFeedbackInbox() {
         const body = document.getElementById("feedback-body");
         if (!body) return;
         try {
-          const res = await window.__api("GET", "/api/review-gate/feedback");
+          const res = await window.__api("GET", "/api/review-gate/feedback" + feedbackQuery());
           // Checked before the body is read as an inbox: a 401 or 500 is JSON
           // too, and rendering it would either throw somewhere inside the
           // renderer or, worse, draw an empty inbox that looks like no one wrote.
@@ -1188,7 +1271,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         msg.className = "message";
         msg.textContent = "";
         try {
-          const res = await window.__api("GET", "/api/review-gate/feedback.csv");
+          const res = await window.__api("GET", "/api/review-gate/feedback.csv" + feedbackQuery());
           // A refused export answers with a JSON error body. Read as a blob it
           // would download as customer-feedback.csv and look like a file, so
           // the status is checked first and the owner is told instead.
@@ -1496,8 +1579,11 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
             // the state the owner asked for.
             setGated(el.dataset.id, el.checked);
             break;
-          case "load-destination":
-            loadDestination(el.dataset.id);
+          case "save-destination":
+            saveDestination(el.dataset.id);
+            break;
+          case "save-branch":
+            saveBranch(el.dataset.id);
             break;
           case "delete":
             deleteLink(el.dataset.id);
@@ -1608,13 +1694,19 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
             const shortUrl = l.short_url || "";
             return \`<tr>
               <td><span class="code" data-action="copy" data-url="\${esc(shortUrl)}" data-code="\${esc(l.short_code)}" title="Click to copy \${esc(shortUrl)}">\${esc(l.short_code)}</span></td>
+              <td>\${l.location_name
+                ? \`<span class="owner-business">\${esc(l.business_name || "No business")}</span><span class="owner-branch">\${esc(l.location_name)}</span>\`
+                : '<span class="owner-none">Unassigned</span>'}</td>
               <td><span class="url-trunc" title="\${esc(l.original_url)}">\${esc(l.original_url)}</span></td>
+              <td>\${l.is_gated
+                ? '<span class="badge badge-gated">Review screen</span>'
+                : '<span class="badge badge-direct">Direct</span>'}</td>
               <td><a href="#" data-action="metrics" data-id="\${esc(l.id)}" data-code="\${esc(l.short_code)}" class="clicks-link">\${esc(l.clicks_count)}</a></td>
               <td><span class="badge badge-\${status}">\${status}</span></td>
               <td><div class="row-actions"><button class="btn-sm btn-danger" data-action="delete" data-id="\${esc(l.id)}">Del</button></div></td>
             </tr>
             <tr id="metrics-\${esc(l.id)}" style="display:none;">
-              <td colspan="5" class="flush-cell">
+              <td colspan="7" class="flush-cell">
                 <div class="panel-pad">
                   <!-- WHAT LEFT THE ROW, AND WHY IT LIVES HERE
                        The client-ref field and the state change used to sit in
@@ -1645,24 +1737,30 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
                       </div>
                       <p class="field-note">The code that goes on the sticker. This is the destination the printed tag resolves to.</p>
                     </div>
-                    \${!l.original_url ? \`
                     <div class="field">
-                      <label>Destination</label>
+                      <label for="dest-\${esc(l.id)}">Destination</label>
                       <div class="field-row">
-                        <button class="btn-sm btn-primary" data-action="load-destination" data-id="\${esc(l.id)}">Load destination...</button>
+                        <input type="text" id="dest-\${esc(l.id)}" value="\${esc(l.original_url)}" placeholder="Not configured yet" class="client-ref-input">
+                        <button class="btn-sm btn-primary" data-action="save-destination" data-id="\${esc(l.id)}">Save</button>
                       </div>
                       <!--
-                        Rendered ONLY while the card has no destination, because
-                        that is the only state in which there is something to do.
-
-                        It exists because the flow promises one: a card is
-                        manufactured first and its destination loaded later. The
-                        API has always accepted it and invalidated the cache; what
-                        was missing was the door. Without this, "load them before
-                        exporting" was an instruction with nowhere to go.
+                        Editable on EVERY link, not only on card stock. The short
+                        code is what is printed, so the destination can change
+                        at any time without reprinting. Emptying the field turns
+                        the link back into card stock.
                       -->
-                      <p class="field-note">This card has no destination yet. Anyone who scans it opens a "not configured" page. Load the URL whenever it is settled — the printed sticker does not need reprinting.</p>
-                    </div>\` : ""}
+                      <p class="field-note">\${l.original_url
+                        ? "Where the printed code leads. Changing it does not need a reprint."
+                        : 'This card has no destination yet. Anyone who scans it opens a "not configured" page. Save the URL whenever it is settled — the printed sticker does not need reprinting.'}</p>
+                    </div>
+                    <div class="field">
+                      <label for="branch-\${esc(l.id)}">Branch</label>
+                      <div class="field-row">
+                        <select id="branch-\${esc(l.id)}" data-current="\${esc(l.location_id)}" class="client-ref-input"></select>
+                        <button class="btn-sm btn-outline" data-action="save-branch" data-id="\${esc(l.id)}">Save</button>
+                      </div>
+                      <p class="field-note">The business and branch this sticker belongs to. Its comments and ratings are grouped there.</p>
+                    </div>
                     <div class="field">
                       <label>Review screen</label>
                       <label class="check-row">
@@ -1716,6 +1814,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           }).join("");
 
           table.style.display = "";
+          fillBranchSelects();
         } catch (err) {
           empty.textContent = "Could not load links. " + (err instanceof Error ? err.message : "");
           empty.style.display = "";
@@ -1767,41 +1866,212 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       }
 
       /**
-       * Loads a destination onto a card that was manufactured without one.
+       * Saves a link's destination from its row field.
        *
-       * THE SECOND HALF OF THE FLOW. The card already exists, already has a
-       * short_code, and is already printed — what is missing is the row the QR
-       * resolves through. Setting it here is what makes an existing sticker work,
-       * with no reprinting, because the pixels never encoded the destination;
-       * they encoded the short code.
+       * Any link, not only card stock: the short code is what is printed, so
+       * the destination can change at any time without reprinting. An emptied
+       * field is sent as null, which turns the link back into card stock — the
+       * escape hatch for a typo'd URL.
        *
-       * \`prompt\` rather than a modal: this is a single field on a row the
-       * owner is already looking at, and a dialog that hides the rest of the
-       * table to ask for one string is heavier than the act deserves. It is
-       * dismissible and it validates nothing, which is why the server still
-       * validates — the prompt is a convenience, not a gate.
+       * Not validated here on purpose. The same URL rules apply as on create,
+       * and a second copy of them in the browser is how the two drift apart.
        */
-      async function loadDestination(id) {
-        const url = window.prompt(
-          "Where should this card go?\\n\\nPaste the full URL. Leave it blank to clear it again.",
-          "",
-        );
-
-        // Cancelled is null; an empty string is a deliberate clear. Treating
-        // them the same would let an owner undo a mistake by closing the dialog.
-        if (url === null) return;
-
-        const trimmed = url.trim();
-
-        // Not validated here on purpose — the same URL rules apply as on create,
-        // and reimplementing them in the browser is how the two drift apart.
-        // Sending an empty string clears the destination back to card stock.
-        await window.__api("PATCH", "/api/links/" + id, {
-          original_url: trimmed === "" ? null : trimmed,
-        });
-
+      async function saveDestination(id) {
+        const input = document.getElementById("dest-" + id);
+        if (!input) return;
+        const value = input.value.trim();
+        try {
+          const res = await window.__api("PATCH", "/api/links/" + id, {
+            original_url: value === "" ? null : value,
+          });
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.error || "Failed");
+          }
+        } catch (err) {
+          alert("Error: " + (err instanceof Error ? err.message : ""));
+        }
         loadLinks();
       }
+
+      /** Assigns a link to a branch (location), or to none with "". */
+      async function saveBranch(id) {
+        const select = document.getElementById("branch-" + id);
+        if (!select) return;
+        const value = select.value;
+        try {
+          const res = await window.__api("PATCH", "/api/links/" + id, {
+            location_id: value === "" ? null : value,
+          });
+          if (!res.ok) throw new Error("Failed");
+        } catch (err) {
+          alert("Error: " + (err instanceof Error ? err.message : ""));
+        }
+        loadLinks();
+      }
+
+      /**
+       * Fills every row's branch picker from the branches list.
+       *
+       * Done after the table is in the DOM rather than inside the row template,
+       * so the template stays a pure function of the link (the tests compile
+       * and run it on its own). Options are built with DOM APIs, never with
+       * innerHTML, because branch and business names are typed by a person.
+       */
+      function fillBranchSelects() {
+        const branches = window.__branches || [];
+        document.querySelectorAll('select[id^="branch-"]').forEach((select) => {
+          const current = select.dataset.current || "";
+          select.textContent = "";
+          select.add(new Option("Unassigned", ""));
+          branches.forEach((b) => {
+            const label = (b.business_name ? b.business_name + " — " : "") + b.name;
+            select.add(new Option(label, b.id, false, b.id === current));
+          });
+          // The branches list has not loaded (or failed), but the link HAS a
+          // branch. Without this the picker would show "Unassigned" selected,
+          // and one Save would silently detach the link.
+          if (current && !branches.some((b) => b.id === current)) {
+            select.add(new Option("Current branch", current, true, true));
+          }
+        });
+      }
+
+      /**
+       * Loads the tenant's branches (locations, with their business) for the
+       * row pickers, then refills any picker already on screen. Separate from
+       * loadLinks: the list changes when branches are managed, not when a link
+       * is toggled.
+       */
+      async function loadBranches() {
+        const card = document.getElementById("businesses-body");
+        try {
+          const [locRes, bizRes] = await Promise.all([
+            window.__api("GET", "/api/locations"),
+            window.__api("GET", "/api/businesses"),
+          ]);
+          if (!locRes.ok) throw new Error("branches: HTTP " + locRes.status);
+          if (!bizRes.ok) throw new Error("businesses: HTTP " + bizRes.status);
+          window.__branches = (await locRes.json()).locations || [];
+          window.__businesses = (await bizRes.json()).businesses || [];
+          if (card) card.innerHTML = renderBusinesses(window.__businesses, window.__branches);
+          fillFeedbackFilter();
+        } catch (err) {
+          console.error("branches failed to load", err);
+          if (card) card.innerHTML = '<p class="gate-empty">Could not load businesses.</p>';
+        }
+        fillBranchSelects();
+      }
+
+      /**
+       * The businesses card: each business with its branches, then the
+       * branches that belong to none, each with a picker to move it into one.
+       * Every name is escaped — they are typed by a person.
+       */
+      function renderBusinesses(businesses, branches) {
+        const branchLine = (l) =>
+          \`<li class="biz-branch"><span>\${esc(l.name)}</span><span class="field-note">\${esc(l.link_count)} links</span></li>\`;
+
+        const groups = businesses.map((b) => {
+          const own = branches.filter((l) => l.business_id === b.id);
+          return \`<div class="biz-group">
+            <div class="biz-name">\${esc(b.name)}</div>
+            <ul class="biz-branches">\${own.length ? own.map(branchLine).join("") : '<li class="field-note">No branches yet.</li>'}</ul>
+            <div class="field-row">
+              <input type="text" id="new-branch-\${esc(b.id)}" maxlength="120" placeholder="New branch, e.g. Providencia">
+              <button type="button" class="btn-sm btn-outline" data-biz-action="add-branch" data-business-id="\${esc(b.id)}">Add</button>
+            </div>
+          </div>\`;
+        });
+
+        const loose = branches.filter((l) => !l.business_id);
+        if (loose.length) {
+          const options = businesses
+            .map((b) => \`<option value="\${esc(b.id)}">\${esc(b.name)}</option>\`)
+            .join("");
+          groups.push(\`<div class="biz-group">
+            <div class="biz-name">Not in a business</div>
+            <ul class="biz-branches">\${loose.map((l) => \`<li class="biz-branch">
+              <span>\${esc(l.name)} <span class="field-note">\${esc(l.link_count)} links</span></span>
+              <span class="field-row">
+                <select id="move-\${esc(l.id)}"><option value="">Choose a business</option>\${options}</select>
+                <button type="button" class="btn-sm btn-outline" data-biz-action="move-branch" data-location-id="\${esc(l.id)}">Move</button>
+              </span>
+            </li>\`).join("")}</ul>
+          </div>\`);
+        }
+
+        return groups.length ? groups.join("") : '<p class="field-note">No businesses yet. Add the first one above.</p>';
+      }
+
+      /** Reloads everything that shows a business or branch name. */
+      function refreshOwnership() {
+        loadBranches();
+        loadLinks();
+      }
+
+      function showBusinessesMessage(text, kind) {
+        const msg = document.getElementById("businesses-msg");
+        msg.className = "message" + (kind ? " " + kind : "");
+        msg.textContent = text;
+      }
+
+      async function addBusiness() {
+        const input = document.getElementById("new-business-name");
+        const name = input.value.trim();
+        if (!name) return;
+        const res = await window.__api("POST", "/api/businesses", { name });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          showBusinessesMessage(body.error || "Could not add the business.", "error");
+          return;
+        }
+        input.value = "";
+        showBusinessesMessage("", "");
+        refreshOwnership();
+      }
+
+      async function addBranch(businessId) {
+        const input = document.getElementById("new-branch-" + businessId);
+        if (!input) return;
+        const name = input.value.trim();
+        if (!name) return;
+        const res = await window.__api("POST", "/api/locations", { name, business_id: businessId });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          showBusinessesMessage(body.error || "Could not add the branch.", "error");
+          return;
+        }
+        showBusinessesMessage("", "");
+        refreshOwnership();
+      }
+
+      async function moveBranch(locationId) {
+        const select = document.getElementById("move-" + locationId);
+        if (!select) return;
+        const value = select.value;
+        if (value === "") return;
+        const res = await window.__api("PATCH", "/api/locations/" + locationId, {
+          business_id: value === "" ? null : value,
+        });
+        if (!res.ok) {
+          showBusinessesMessage("Could not move the branch.", "error");
+          return;
+        }
+        showBusinessesMessage("", "");
+        refreshOwnership();
+      }
+
+      // Static and delegated listeners, like the create form's. Not routed
+      // through the links table's data-action switch: these act on businesses
+      // and branches, not on a link row.
+      document.getElementById("add-business").addEventListener("click", addBusiness);
+      document.getElementById("businesses-body").addEventListener("click", (e) => {
+        const el = e.target.closest("[data-biz-action]");
+        if (!el) return;
+        if (el.dataset.bizAction === "add-branch") addBranch(el.dataset.businessId);
+        else if (el.dataset.bizAction === "move-branch") moveBranch(el.dataset.locationId);
+      });
 
       async function showMetrics(linkId, code, e) {
         e.preventDefault();

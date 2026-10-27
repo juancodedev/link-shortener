@@ -243,6 +243,7 @@ function feedbackRow(over: Record<string, unknown> = {}) {
     short_code: "abc123",
     client_ref: "mesa-4",
     location_name: "Terraza",
+    business_name: "Sabores",
     ...over,
   };
 }
@@ -273,6 +274,7 @@ describe("review-gate feedback list", () => {
       short_code: "abc123",
       client_ref: "mesa-4",
       location_name: "Terraza",
+      business_name: "Sabores",
     });
     // The id breaks ties: two comments in the same instant must come back in
     // the same order on every read, or the list and the export disagree.
@@ -330,6 +332,37 @@ describe("review-gate feedback list", () => {
     expect(calls[0]!.params[0]).toBe("tenant-uuid");
     expect(calls[0]!.sql).toContain("f.tenant_id = $1");
     expect(calls[0]!.sql).toMatch(/"?tenant_a7f3"?\."?links"?/);
+  });
+
+  it("names the business of every comment, through its branch", async () => {
+    const calls = mockFeedbackDb([feedbackRow()]);
+    const { c, jsonFn } = feedbackContext();
+
+    await listFeedback(c as any, vi.fn() as any);
+
+    expect(calls[0]!.sql).toMatch(/LEFT JOIN public\.businesses b ON b\.id = loc\.business_id/);
+    expect((jsonFn.mock.calls[0]![0] as any).feedback[0].business_name).toBe("Sabores");
+  });
+
+  it("filters by business as a bind parameter", async () => {
+    const id = "44444444-4444-4444-8444-444444444444";
+    const calls = mockFeedbackDb([]);
+    const { c } = feedbackContext(`https://api.test/api/review-gate/feedback?business_id=${id}`);
+
+    await listFeedback(c as any, vi.fn() as any);
+
+    expect(calls[0]!.sql).toMatch(/loc\.business_id = \$2/);
+    expect(calls[0]!.params[1]).toBe(id);
+  });
+
+  it("rejects a business_id that is not a uuid before touching the database", async () => {
+    const calls = mockFeedbackDb([]);
+    const { c, jsonFn } = feedbackContext("https://api.test/api/review-gate/feedback?business_id=nope");
+
+    await listFeedback(c as any, vi.fn() as any);
+
+    expect(jsonFn).toHaveBeenCalledWith({ error: "invalid_business_id" }, 400);
+    expect(calls).toHaveLength(0);
   });
 
   it("passes valid filters as bind parameters, with since normalised to ISO", async () => {
@@ -430,10 +463,10 @@ describe("review-gate feedback CSV export", () => {
     const text = await res.text();
 
     expect(text.split("\n")[0]).toBe(
-      "scanned_at,location,client_ref,short_code,rating,customer_contact,comment,customer_phone",
+      "scanned_at,location,client_ref,short_code,rating,customer_contact,comment,customer_phone,business",
     );
     expect(text).toContain(
-      '2026-10-14T20:15:00.000Z,Terraza,mesa-4,abc123,,,"slow, and ""rude""\nnever again",',
+      '2026-10-14T20:15:00.000Z,Terraza,mesa-4,abc123,,,"slow, and ""rude""\nnever again",,Sabores',
     );
     expect(text).toContain(`"'=HYPERLINK(""http://evil.example"")"`);
     expect(text.endsWith("\n")).toBe(true);

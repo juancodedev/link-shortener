@@ -24,6 +24,7 @@ import {
 import { createLinksBatch } from "./api/batch";
 import { listClientRefMetrics } from "./api/clients";
 import { listLocations, createLocation, updateLocation } from "./api/locations";
+import { listBusinesses, createBusiness, updateBusiness } from "./api/businesses";
 import { linkQrSvg, batchQrSheet } from "./api/qr";
 import { exportFeedbackCsv, listFeedback, reviewGateMetrics } from "./api/review-gate";
 import {
@@ -173,6 +174,12 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
   app.get("/api/locations", auth, tenantMembershipMiddleware, listLocations);
   app.post("/api/locations", auth, tenantMembershipMiddleware, createLocation);
   app.patch("/api/locations/:id", auth, tenantMembershipMiddleware, updateLocation);
+
+  // Businesses ("locales") group locations ("sucursales"). Operator-only: the
+  // businesses themselves never log in.
+  app.get("/api/businesses", auth, tenantMembershipMiddleware, listBusinesses);
+  app.post("/api/businesses", auth, tenantMembershipMiddleware, createBusiness);
+  app.patch("/api/businesses/:id", auth, tenantMembershipMiddleware, updateBusiness);
 
   // The action screen's three views in one response. They describe the same
   // scans and the dashboard renders them on one screen, so fetching them

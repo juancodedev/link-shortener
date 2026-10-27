@@ -3,6 +3,7 @@ import type { AppEnv, HonoVars } from "../types/env";
 import { withClient } from "../db/client";
 import { qualifyTable } from "../db/schema";
 import { ValidationError, NotFoundError } from "../middleware/error";
+import { isUuid } from "../utils/validation";
 
 // ---------------------------------------------------------------------------
 // Locations — /api/locations
@@ -32,6 +33,9 @@ import { ValidationError, NotFoundError } from "../middleware/error";
 // archive route: deleting a location whose links point at it would either fail
 // or orphan them, and neither is worth the surface.
 //
+// A location is also a BRANCH ("sucursal") of a business ("local"), through the
+// nullable `business_id` added in 00018. See src/api/businesses.ts.
+//
 // Location ids are uuids, so they are safe to interpolate — but they are still
 // filtered on `tenant_id` in every query here. "A valid uuid" is not "yours",
 // and an unfiltered lookup would let one business enumerate another's tables.
@@ -43,6 +47,7 @@ interface LocationRow {
   slug: string;
   is_active: boolean;
   created_at: string;
+  business_id?: string | null;
 }
 
 /** Longest accepted display name. A label is not free storage. */
@@ -65,6 +70,9 @@ export interface LocationResource {
   is_active: boolean;
   /** Links currently attached to this location. Cheap: one grouped count. */
   link_count: number;
+  /** The business ("local") this branch belongs to, or null. */
+  business_id: string | null;
+  business_name: string | null;
 }
 
 /** Validates the parts shared by create and update. */
@@ -97,6 +105,38 @@ function validateSlug(raw: unknown): string {
     );
   }
   return slug;
+}
+
+/**
+ * Validates an optional `business_id` and proves the tenant owns it.
+ *
+ * Returns `undefined` when the field is absent (leave it alone), `null` for an
+ * explicit detach, and the id otherwise. Ownership is checked with its own
+ * tenant-filtered read BEFORE the write: the foreign key only proves the
+ * business exists, not that it is this tenant's, and a branch filed under
+ * another operator's business would show up in their grouping.
+ */
+async function resolveBusinessId(
+  env: AppEnv,
+  tenantId: string,
+  raw: unknown,
+): Promise<string | null | undefined> {
+  if (raw === undefined) return undefined;
+  if (raw === null) return null;
+  if (typeof raw !== "string" || !isUuid(raw)) {
+    throw new ValidationError("business_id must be a uuid or null", "invalid_business_id");
+  }
+  const found = await withClient(env, async (client) => {
+    const res = await client.query<{ id: string }>(
+      `SELECT id FROM public.businesses WHERE id = $1 AND tenant_id = $2`,
+      [raw, tenantId],
+    );
+    return res.rows.length > 0;
+  });
+  if (!found) {
+    throw new ValidationError("business_id does not belong to this tenant", "invalid_business_id");
+  }
+  return raw;
 }
 
 /** Turns an unknown thrown value into a 409 naming the collision. */
@@ -139,13 +179,19 @@ export const listLocations: Handler<{
   const table = qualifyTable(tenant.schemaName, "links");
 
   const rows = await withClient(c.env, async (client) => {
-    const res = await client.query<LocationRow & { link_count: string }>(
-      `SELECT l.id, l.name, l.slug, l.is_active, l.created_at,
+    // LEFT JOIN on businesses: a branch nobody has grouped yet must still be
+    // listed, with a null business, or it could never be assigned one.
+    const res = await client.query<
+      LocationRow & { link_count: string; business_name: string | null }
+    >(
+      `SELECT l.id, l.name, l.slug, l.is_active, l.created_at, l.business_id,
+              b.name AS business_name,
               (SELECT COUNT(*)::text FROM ${table} k WHERE k.location_id = l.id)
                 AS link_count
          FROM public.locations l
+         LEFT JOIN public.businesses b ON b.id = l.business_id
         WHERE l.tenant_id = $1
-        ORDER BY l.name ASC`,
+        ORDER BY b.name ASC NULLS LAST, l.name ASC`,
       [tenant.tenantId],
     );
     return res.rows;
@@ -159,6 +205,8 @@ export const listLocations: Handler<{
     // Postgres hands COUNT back as a string; a JSON number here would render as
     // "12" in the dashboard's copy and read as a defect.
     link_count: Number(r.link_count),
+    business_id: r.business_id ?? null,
+    business_name: r.business_name ?? null,
   }));
 
   return c.json({ locations });
@@ -183,7 +231,7 @@ export const createLocation: Handler<{
 }> = async (c) => {
   const tenant = c.get("tenant");
 
-  let body: { name?: unknown; slug?: unknown };
+  let body: { name?: unknown; slug?: unknown; business_id?: unknown };
   try {
     body = await c.req.json();
   } catch {
@@ -205,13 +253,15 @@ export const createLocation: Handler<{
     slug = validateSlug(body.slug);
   }
 
+  const businessId = (await resolveBusinessId(c.env, tenant.tenantId, body.business_id)) ?? null;
+
   try {
     const row = await withClient(c.env, async (client) => {
       const res = await client.query<LocationRow>(
-        `INSERT INTO public.locations (tenant_id, name, slug)
-         VALUES ($1, $2, $3)
-         RETURNING id, name, slug, is_active, created_at`,
-        [tenant.tenantId, name, slug],
+        `INSERT INTO public.locations (tenant_id, name, slug, business_id)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, name, slug, is_active, created_at, business_id`,
+        [tenant.tenantId, name, slug, businessId],
       );
       return res.rows[0]!;
     });
@@ -224,6 +274,7 @@ export const createLocation: Handler<{
           slug: row.slug,
           is_active: row.is_active,
           link_count: 0,
+          business_id: row.business_id ?? null,
         },
       },
       201,
@@ -253,7 +304,7 @@ export const updateLocation: Handler<{
   const tenant = c.get("tenant");
   const id = c.req.param("id")!;
 
-  let body: { name?: unknown; is_active?: unknown; slug?: unknown };
+  let body: { name?: unknown; is_active?: unknown; slug?: unknown; business_id?: unknown };
   try {
     body = await c.req.json();
   } catch {
@@ -268,7 +319,7 @@ export const updateLocation: Handler<{
   }
 
   const sets: string[] = [];
-  const vals: (string | boolean)[] = [];
+  const vals: (string | boolean | null)[] = [];
 
   if (body.name !== undefined) {
     sets.push(`name = $${vals.length + 1}`);
@@ -280,6 +331,12 @@ export const updateLocation: Handler<{
     }
     sets.push(`is_active = $${vals.length + 1}`);
     vals.push(body.is_active);
+  }
+
+  const businessId = await resolveBusinessId(c.env, tenant.tenantId, body.business_id);
+  if (businessId !== undefined) {
+    sets.push(`business_id = $${vals.length + 1}`);
+    vals.push(businessId);
   }
 
   if (sets.length === 0) {

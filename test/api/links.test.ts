@@ -1023,6 +1023,25 @@ describe("listLinks response shape", () => {
     expect(body.map((l) => l.is_gated)).toEqual([true, false]);
   });
 
+  it("reports each link's business through its branch", async () => {
+    const calls = mockRecordingDb([
+      [
+        {
+          id: "l1", short_code: "aaa1111", original_url: null, title: null, client_ref: null,
+          clicks_count: 0, is_active: true, is_gated: false, expires_at: null,
+          created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+          location_id: "loc-1", location_name: "Providencia", business_name: "Café Central",
+        },
+      ],
+    ]);
+
+    const { c, jsonFn } = mockContext();
+    await listLinks(c as any);
+
+    expect(calls[0]!.sql).toMatch(/LEFT JOIN public\.businesses b ON b\.id = loc\.business_id/);
+    expect((jsonFn.mock.calls[0]![0] as any[])[0].business_name).toBe("Café Central");
+  });
+
   it("serializes to a top-level JSON array on the wire", async () => {
     mockRecordingDb([
       [

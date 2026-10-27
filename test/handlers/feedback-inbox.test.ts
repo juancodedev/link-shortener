@@ -27,6 +27,7 @@ function row(over: Partial<FeedbackRow> = {}): FeedbackRow {
     short_code: "abc123",
     client_ref: "mesa-4",
     location_name: "Terraza",
+    business_name: "Sabores",
     ...over,
   };
 }
@@ -54,8 +55,10 @@ describe("rendering a comment", () => {
     const refOnly = renderFeedbackInbox(payload({ feedback: [row({ location_name: null })] }));
     expect(refOnly).toContain("mesa-4");
 
+    // No location means no business either: the business is reached through
+    // the location.
     const none = renderFeedbackInbox(
-      payload({ feedback: [row({ location_name: null, client_ref: null })] }),
+      payload({ feedback: [row({ business_name: null, location_name: null, client_ref: null })] }),
     );
     expect(none).toContain("No location");
   });
@@ -88,6 +91,22 @@ describe("rendering a comment", () => {
     expect(html).toContain("+56 9 1234 5678");
   });
 
+  it("traces every comment to business, branch and short code", () => {
+    const html = renderFeedbackInbox(payload());
+    const origin = html.slice(html.indexOf('class="feedback-origin"'));
+    expect(origin.indexOf("Sabores")).toBeGreaterThan(-1);
+    expect(origin.indexOf("Sabores")).toBeLessThan(origin.indexOf("Terraza"));
+    expect(html).toContain("abc123");
+  });
+
+  it("still shows the short code when the link has no branch", () => {
+    const html = renderFeedbackInbox(
+      payload({ feedback: [row({ business_name: null, location_name: null, client_ref: null })] }),
+    );
+    expect(html).toContain("No location");
+    expect(html).toContain("abc123");
+  });
+
   it("shows the date", () => {
     const html = renderFeedbackInbox(payload());
     expect(html).toContain('datetime="2026-10-14T20:15:00.000Z"');
@@ -101,6 +120,8 @@ describe("escaping customer text", () => {
     ["phone", { customer_phone: XSS }],
     ["location", { location_name: XSS }],
     ["client_ref", { location_name: null, client_ref: XSS }],
+    ["business", { business_name: XSS }],
+    ["short code", { short_code: XSS }],
   ])("escapes the %s", (_field, over) => {
     const html = renderFeedbackInbox(payload({ feedback: [row(over)] }));
     expect(html).not.toContain("<img");

@@ -48,6 +48,7 @@ import m00014 from "../../supabase/migrations/00014_subscription_updated_at.sql?
 import m00015 from "../../supabase/migrations/00015_original_url_nullable.sql?raw";
 import m00016 from "../../supabase/migrations/00016_business_feedback_email.sql?raw";
 import m00017 from "../../supabase/migrations/00017_feedback_customer_phone.sql?raw";
+import m00018 from "../../supabase/migrations/00018_businesses.sql?raw";
 
 interface Migration {
   version: number;
@@ -74,6 +75,7 @@ const MIGRATIONS: Migration[] = [
   { version: 15, name: "00015_original_url_nullable", sql: m00015 },
   { version: 16, name: "00016_business_feedback_email", sql: m00016 },
   { version: 17, name: "00017_feedback_customer_phone", sql: m00017 },
+  { version: 18, name: "00018_businesses", sql: m00018 },
 ];
 
 /** Strips `--` comments so a prose version number is never read as a claim. */
@@ -365,5 +367,37 @@ describe("00017_feedback_customer_phone", () => {
 
   it("records itself in the analytics bookkeeping table", () => {
     expect(m00017).toMatch(/INSERT INTO analytics\._migrations[\s\S]*\(4, '00017_feedback_customer_phone'\)/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 00018 — businesses (locales) group locations (branches)
+// ---------------------------------------------------------------------------
+
+describe("00018_businesses", () => {
+  it("creates public.businesses, owned by a tenant", () => {
+    expect(m00018).toMatch(/CREATE TABLE IF NOT EXISTS public\.businesses/);
+    expect(m00018).toMatch(/REFERENCES public\.tenants\(id\) ON DELETE CASCADE/);
+  });
+
+  it("keeps names unique per tenant, case-insensitively", () => {
+    expect(m00018).toMatch(
+      /CREATE UNIQUE INDEX IF NOT EXISTS idx_businesses_tenant_name\s+ON public\.businesses\s*\(tenant_id, lower\(name\)\)/,
+    );
+  });
+
+  it("enables RLS so the publishable key cannot read it", () => {
+    expect(m00018).toMatch(/ALTER TABLE public\.businesses ENABLE ROW LEVEL SECURITY/);
+  });
+
+  it("adds a nullable business_id to locations that survives a deleted business", () => {
+    expect(m00018).toMatch(
+      /ALTER TABLE public\.locations\s+ADD COLUMN IF NOT EXISTS business_id UUID\s+REFERENCES public\.businesses\(id\) ON DELETE SET NULL/,
+    );
+    expect(m00018).not.toMatch(/business_id UUID NOT NULL/);
+  });
+
+  it("records itself in public._migrations", () => {
+    expect(m00018).toMatch(/INSERT INTO public\._migrations[\s\S]*\(18, '00018_businesses'\)/);
   });
 });

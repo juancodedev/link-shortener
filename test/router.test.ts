@@ -669,6 +669,7 @@ describe("authenticated responses declare they are not cacheable", () => {
   it.each([
     ["/api/links", "GET"],
     ["/api/locations", "GET"],
+    ["/api/businesses", "GET"],
     ["/api/clients/metrics", "GET"],
     ["/api/review-gate/metrics", "GET"],
   ])("%s answers no-store, so a mutation cannot be replayed from cache", async (path, method) => {

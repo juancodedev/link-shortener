@@ -201,11 +201,14 @@ Every mutation flushes the tenant's `reg:{code}` KV entries so the change takes 
 | `GET` | `/api/links/:id/qr.svg` | One card's QR, as a print-ready SVG |
 | `POST` | `/api/links/qr-sheet.zip` | A batch of cards as a ZIP: one SVG per card plus `links.csv` |
 | `GET` | `/api/locations` | List locations (tables, zones) with a link count each |
-| `POST` | `/api/locations` | Create one location |
-| `PATCH` | `/api/locations/:id` | Rename a location or switch it off |
+| `POST` | `/api/locations` | Create one location, optionally inside a business (`business_id`) |
+| `PATCH` | `/api/locations/:id` | Rename a location, switch it off, or move it to a business (`business_id`, or `null` to detach) |
+| `GET` | `/api/businesses` | List businesses ("locales") with a branch count each |
+| `POST` | `/api/businesses` | Create one business |
+| `PATCH` | `/api/businesses/:id` | Rename a business or switch it off |
 | `GET` | `/api/clients/metrics` | Per-`client_ref` visitor rollup |
-| `GET` | `/api/review-gate/feedback` | What customers wrote, newest first |
-| `GET` | `/api/review-gate/feedback.csv` | The same, as a download |
+| `GET` | `/api/review-gate/feedback` | What customers wrote, newest first. Filters: `business_id`, `location_id`, `since` |
+| `GET` | `/api/review-gate/feedback.csv` | The same, as a download (same filters) |
 | `GET` | `/api/review-gate/metrics` | Action-screen views, sentiment, derivation rate |
 
 Tenant-scoped routes run `auth` → `createTenantMembershipMiddleware` → handler. **That chain is
@@ -446,11 +449,20 @@ public.profiles          id → auth.users, tenant_id, role (owner | admin | mem
 public.short_code_registry short_code (PK) → tenants.id (CASCADE), link_id, created_at
 analytics.link_clicks    id, tenant_id, link_id, ip_hash, user_agent_summary,
                          device_type, country_code, referrer, referrer_source, created_at
-public.locations         id, tenant_id (CASCADE), name, slug, is_active, created_at
+public.businesses        id, tenant_id (CASCADE), name, is_active, created_at
+public.locations         id, tenant_id (CASCADE), business_id (NULLABLE, SET NULL),
+                         name, slug, is_active, created_at
 {tenant}.links           id, original_url (NULLABLE), short_code, title, client_ref,
                          location_id, is_gated, clicks_count, is_active, expires_at,
                          created_at, updated_at
 ```
+
+A **business** ("local") groups one or more **locations** ("sucursales", branches), and every link,
+scan, rating and comment already points at a location — so grouping by business is a join, not a
+copy. Businesses live inside the operator's tenant; the businesses themselves never log in.
+
+**Apply migration `00018` before deploying that code.** The links list, the locations list and the
+feedback inbox all join `public.businesses`; against a database without it they fail with a 500.
 
 `public.short_code_registry` has RLS enabled with **no** policy for `anon`/`authenticated`, so a
 browser holding the publishable key cannot enumerate every tenant's short codes in one query.
@@ -579,6 +591,10 @@ optional and a blank one is stored as `NULL`. The phone lives in its own column,
 `analytics.tag_feedback.customer_phone`, added by migration `00017`. The inbox shows the phone before
 the email, and `feedback.csv` **appends** a `customer_phone` column at the end so exports read by
 column position keep working.
+
+Each comment carries its business, branch and short code: the inbox shows them as
+`Business · Branch · client_ref` plus the code, and `feedback.csv` appends a `business` column after
+`customer_phone`.
 
 **Apply `00017` before deploying this code.** The gate writes the column on every private comment, and
 that write is fire-and-forget: against a database without the column it fails after the customer has

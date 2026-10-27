@@ -293,3 +293,83 @@ describe("PATCH /api/locations/:id", () => {
     await expect(updateLocation(c as any)).rejects.toThrow(ValidationError);
   });
 });
+
+// ---------------------------------------------------------------------------
+// A location is a branch (sucursal) of a business (local).
+// odd/tasks/business-branches.md, S1-S2.
+// ---------------------------------------------------------------------------
+
+describe("locations belong to a business", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("lists each location with its business id and name", async () => {
+    const calls = mockDb(() => [
+      { ...LOCATION_ROW, link_count: "1", business_id: "biz-1", business_name: "Café Central" },
+      { ...LOCATION_ROW, id: "loc-2", link_count: "0", business_id: null, business_name: null },
+    ]);
+
+    const { c, jsonFn } = mockContext();
+    await listLocations(c as any);
+
+    // LEFT JOIN: a branch with no local must still be listed.
+    expect(calls[0]!.sql).toMatch(/LEFT JOIN public\.businesses b ON b\.id = l\.business_id/);
+    const body = jsonFn.mock.calls[0]![0] as any;
+    expect(body.locations[0]).toMatchObject({ business_id: "biz-1", business_name: "Café Central" });
+    expect(body.locations[1]).toMatchObject({ business_id: null, business_name: null });
+  });
+
+  it("creates a branch inside a business the tenant owns", async () => {
+    const calls = mockDb((sql) =>
+      sql.includes("FROM public.businesses") ? [{ id: "biz-1" }] : [{ ...LOCATION_ROW, business_id: "biz-1" }],
+    );
+
+    const { c, jsonFn } = mockContext({ name: "Mesa 1", business_id: "11111111-1111-4111-8111-111111111111" });
+    await createLocation(c as any);
+
+    const check = calls.find((q) => q.sql.includes("FROM public.businesses"))!;
+    expect(check.sql).toContain("tenant_id = $2");
+    expect(check.params).toEqual(["11111111-1111-4111-8111-111111111111", "tenant-uuid"]);
+    const insert = calls.find((q) => q.sql.includes("INSERT INTO public.locations"))!;
+    expect(insert.sql).toMatch(/\(tenant_id, name, slug, business_id\)/);
+    expect(insert.params).toContain("11111111-1111-4111-8111-111111111111");
+    expect((jsonFn.mock.calls[0]![0] as any).location.business_id).toBe("biz-1");
+  });
+
+  it("refuses a business that belongs to another tenant, without inserting", async () => {
+    const calls = mockDb((sql) => (sql.includes("FROM public.businesses") ? [] : [LOCATION_ROW]));
+
+    const { c } = mockContext({ name: "Mesa 1", business_id: "22222222-2222-4222-8222-222222222222" });
+    await expect(createLocation(c as any)).rejects.toMatchObject({ code: "invalid_business_id" });
+    expect(calls.find((q) => q.sql.includes("INSERT"))).toBeUndefined();
+  });
+
+  it("rejects a business_id that is not a uuid before touching the database", async () => {
+    const calls = mockDb(() => []);
+    const { c } = mockContext({ name: "Mesa 1", business_id: "nope" });
+    await expect(createLocation(c as any)).rejects.toMatchObject({ code: "invalid_business_id" });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("still creates a branch with no business, as before", async () => {
+    const calls = mockDb(() => [LOCATION_ROW]);
+    const { c } = mockContext({ name: "Mesa 1" });
+    await createLocation(c as any);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.params).toContain(null);
+  });
+
+  it("moves a branch to another business, or detaches it with null", async () => {
+    const calls = mockDb((sql) => (sql.includes("FROM public.businesses") ? [{ id: "biz-2" }] : [LOCATION_ROW]));
+    const { c } = mockContext({ business_id: "33333333-3333-4333-8333-333333333333" }, { id: "loc-1" });
+    await updateLocation(c as any);
+    const update = calls.find((q) => q.sql.includes("UPDATE public.locations"))!;
+    expect(update.sql).toMatch(/business_id = \$1/);
+    expect(update.params[0]).toBe("33333333-3333-4333-8333-333333333333");
+
+    const calls2 = mockDb(() => [LOCATION_ROW]);
+    const second = mockContext({ business_id: null }, { id: "loc-1" });
+    await updateLocation(second.c as any);
+    expect(calls2).toHaveLength(1);
+    expect(calls2[0]!.params[0]).toBeNull();
+  });
+});

@@ -12,8 +12,10 @@ const SHORT_URL_TTL = 86400;
  * ONLY backstop. At 24h that backstop is a 24-hour window on serving stale
  * billing state, which is not a backstop at all.
  *
- * The destination URL is left at 24h: it changes only when a client edits its
- * own link, so a stale one costs an extra redirect, never correctness.
+ * The short-URL entry is left at 24h: the redirect reads the link row from
+ * Postgres on every scan and serves that entry only when the query fails, so
+ * its age decides how old an outage snapshot can be, never what a normal scan
+ * sees.
  *
  * This makes the WORST case bounded without adding a query per scan. It does
  * not make the COMMON case fast -- if reactivations feel slow, that is this

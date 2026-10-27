@@ -736,10 +736,9 @@ export async function createLinkCore({
     isActive: true,
     expiresAt: expires_at ?? null,
     linkId: linkRow.id,
-    // The redirect reads isGated from the cache on a warm hit and the DB only
-    // on a miss. Omitting it here means a freshly created gated link 302s
-    // straight past its own gate for 24h: it looks created, every scan records
-    // nothing, the panel stays empty, and no error appears anywhere.
+    // The redirect serves this blob only when the link query fails. Omitting
+    // isGated here means a gated link 302s straight past its own gate during a
+    // database outage, and every scan in that window records nothing.
     isGated: input.is_gated === true,
   });
 

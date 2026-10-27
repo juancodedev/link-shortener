@@ -461,6 +461,10 @@ A **business** ("local") groups one or more **locations** ("sucursales", branche
 scan, rating and comment already points at a location — so grouping by business is a join, not a
 copy. Businesses live inside the operator's tenant; the businesses themselves never log in.
 
+From the *Businesses and branches* card a branch can move to another business (or out of one), and
+businesses and branches can be switched off. Switched-off ones stay in the card but leave the link and
+comment pickers; it changes no redirect, and a link keeps showing its current branch until reassigned.
+
 **Apply migration `00018` before deploying that code.** The links list, the locations list and the
 feedback inbox all join `public.businesses`; against a database without it they fail with a 500.
 

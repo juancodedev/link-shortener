@@ -1218,8 +1218,8 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         const select = document.getElementById("feedback-filter");
         if (!select) return;
         const current = select.value;
-        const businesses = window.__businesses || [];
-        const branches = window.__branches || [];
+        const businesses = (window.__businesses || []).filter((b) => b.is_active !== false);
+        const branches = pickableBranches(window.__branches || [], window.__businesses || []);
         select.textContent = "";
         select.add(new Option("All businesses", ""));
         businesses.forEach((b) => {
@@ -1927,20 +1927,22 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
        * innerHTML, because branch and business names are typed by a person.
        */
       function fillBranchSelects() {
-        const branches = window.__branches || [];
+        const all = window.__branches || [];
+        const branches = pickableBranches(all, window.__businesses || []);
+        const label = (b) => (b.business_name ? b.business_name + " — " : "") + b.name;
         document.querySelectorAll('select[id^="branch-"]').forEach((select) => {
           const current = select.dataset.current || "";
           select.textContent = "";
           select.add(new Option("Unassigned", ""));
-          branches.forEach((b) => {
-            const label = (b.business_name ? b.business_name + " — " : "") + b.name;
-            select.add(new Option(label, b.id, false, b.id === current));
-          });
+          branches.forEach((b) => select.add(new Option(label(b), b.id, false, b.id === current)));
           // The branches list has not loaded (or failed), but the link HAS a
           // branch. Without this the picker would show "Unassigned" selected,
           // and one Save would silently detach the link.
+          // The same holds for a link whose branch was switched off: it stays,
+          // named and marked, until someone picks another.
           if (current && !branches.some((b) => b.id === current)) {
-            select.add(new Option("Current branch", current, true, true));
+            const known = all.find((b) => b.id === current);
+            select.add(new Option(known ? label(known) + " (inactive)" : "Current branch", current, true, true));
           }
         });
       }
@@ -1976,14 +1978,45 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
        * branches that belong to none, each with a picker to move it into one.
        * Every name is escaped — they are typed by a person.
        */
+      /**
+       * Branches that can be chosen in a picker: switched on, and not inside a
+       * switched-off business. The card still lists everything, so an inactive
+       * one can be switched back on.
+       */
+      function pickableBranches(branches, businesses) {
+        const off = new Set(businesses.filter((b) => b.is_active === false).map((b) => b.id));
+        return branches.filter((l) => l.is_active !== false && !off.has(l.business_id));
+      }
+
       function renderBusinesses(businesses, branches) {
-        const branchLine = (l) =>
-          \`<li class="biz-branch"><span>\${esc(l.name)}</span><span class="field-note">\${esc(l.link_count)} links</span></li>\`;
+        const active = businesses.filter((b) => b.is_active !== false);
+        const toggle = (attrs, isActive) =>
+          \`<button type="button" class="btn-sm btn-outline" \${attrs} data-active="\${isActive ? "false" : "true"}">\${isActive ? "Deactivate" : "Activate"}</button>\`;
+        const inactiveNote = '<span class="field-note">Inactive</span>';
+
+        // Every branch can move: to another active business, or out of its own.
+        const branchLine = (l) => {
+          const targets = active
+            .filter((b) => b.id !== l.business_id)
+            .map((b) => \`<option value="\${esc(b.id)}">\${esc(b.name)}</option>\`)
+            .join("") + (l.business_id ? '<option value="none">No business</option>' : "");
+          const isActive = l.is_active !== false;
+          return \`<li class="biz-branch">
+            <span>\${esc(l.name)} <span class="field-note">\${esc(l.link_count)} links</span> \${isActive ? "" : inactiveNote}</span>
+            <span class="field-row">
+              <select id="move-\${esc(l.id)}"><option value="">Move to…</option>\${targets}</select>
+              <button type="button" class="btn-sm btn-outline" data-biz-action="move-branch" data-location-id="\${esc(l.id)}">Move</button>
+              \${toggle(\`data-biz-action="toggle-branch" data-location-id="\${esc(l.id)}"\`, isActive)}
+            </span>
+          </li>\`;
+        };
 
         const groups = businesses.map((b) => {
           const own = branches.filter((l) => l.business_id === b.id);
+          const isActive = b.is_active !== false;
           return \`<div class="biz-group">
-            <div class="biz-name">\${esc(b.name)}</div>
+            <div class="biz-name">\${esc(b.name)} \${isActive ? "" : inactiveNote}
+              \${toggle(\`data-biz-action="toggle-business" data-business-id="\${esc(b.id)}"\`, isActive)}</div>
             <ul class="biz-branches">\${own.length ? own.map(branchLine).join("") : '<li class="field-note">No branches yet.</li>'}</ul>
             <div class="field-row">
               <input type="text" id="new-branch-\${esc(b.id)}" maxlength="120" placeholder="New branch, e.g. Providencia">
@@ -1994,18 +2027,9 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
 
         const loose = branches.filter((l) => !l.business_id);
         if (loose.length) {
-          const options = businesses
-            .map((b) => \`<option value="\${esc(b.id)}">\${esc(b.name)}</option>\`)
-            .join("");
           groups.push(\`<div class="biz-group">
             <div class="biz-name">Not in a business</div>
-            <ul class="biz-branches">\${loose.map((l) => \`<li class="biz-branch">
-              <span>\${esc(l.name)} <span class="field-note">\${esc(l.link_count)} links</span></span>
-              <span class="field-row">
-                <select id="move-\${esc(l.id)}"><option value="">Choose a business</option>\${options}</select>
-                <button type="button" class="btn-sm btn-outline" data-biz-action="move-branch" data-location-id="\${esc(l.id)}">Move</button>
-              </span>
-            </li>\`).join("")}</ul>
+            <ul class="biz-branches">\${loose.map(branchLine).join("")}</ul>
           </div>\`);
         }
 
@@ -2059,11 +2083,32 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         if (!select) return;
         const value = select.value;
         if (value === "") return;
+        // "none" takes the branch out of its business.
         const res = await window.__api("PATCH", "/api/locations/" + locationId, {
-          business_id: value === "" ? null : value,
+          business_id: value === "none" ? null : value,
         });
         if (!res.ok) {
           showBusinessesMessage("Could not move the branch.", "error");
+          return;
+        }
+        showBusinessesMessage("", "");
+        refreshOwnership();
+      }
+
+      async function setBusinessActive(businessId, isActive) {
+        const res = await window.__api("PATCH", "/api/businesses/" + businessId, { is_active: isActive });
+        if (!res.ok) {
+          showBusinessesMessage("Could not update the business.", "error");
+          return;
+        }
+        showBusinessesMessage("", "");
+        refreshOwnership();
+      }
+
+      async function setBranchActive(locationId, isActive) {
+        const res = await window.__api("PATCH", "/api/locations/" + locationId, { is_active: isActive });
+        if (!res.ok) {
+          showBusinessesMessage("Could not update the branch.", "error");
           return;
         }
         showBusinessesMessage("", "");
@@ -2079,6 +2124,8 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         if (!el) return;
         if (el.dataset.bizAction === "add-branch") addBranch(el.dataset.businessId);
         else if (el.dataset.bizAction === "move-branch") moveBranch(el.dataset.locationId);
+        else if (el.dataset.bizAction === "toggle-business") setBusinessActive(el.dataset.businessId, el.dataset.active === "true");
+        else if (el.dataset.bizAction === "toggle-branch") setBranchActive(el.dataset.locationId, el.dataset.active === "true");
       });
 
       /**

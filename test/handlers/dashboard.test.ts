@@ -1641,7 +1641,8 @@ describe("links table shows how each link opens and where it belongs", () => {
   it("never shows an assigned link as Unassigned when the branches list is missing", async () => {
     // One Save on a picker that wrongly reads "Unassigned" would detach the
     // link. Runs the shipped function against a minimal DOM stand-in.
-    const fn = extractFunction(await clientScript(), "fillBranchSelects");
+    const script = await clientScript();
+    const fn = extractFunction(script, "fillBranchSelects") + "\n" + extractFunction(script, "pickableBranches");
     const options: { value: string; selected: boolean }[] = [];
     const select = {
       dataset: { current: "loc-1" },
@@ -2162,7 +2163,7 @@ describe("businesses and branches card", () => {
     expect(addBranch).toContain("business_id: businessId");
     const move = extractFunction(script, "moveBranch");
     expect(move).toContain('window.__api("PATCH", "/api/locations/" + locationId');
-    expect(move).toContain("business_id: value === \"\" ? null : value");
+    expect(move).toContain('business_id: value === "none" ? null : value');
     // A moved branch changes the business shown on every link row.
     expect(extractFunction(script, "refreshOwnership")).toContain("loadLinks()");
   });
@@ -2196,7 +2197,8 @@ describe("comments can be filtered by business or branch", () => {
   });
 
   it("reloads the comments when the chosen filter no longer exists", async () => {
-    const fn = extractFunction(await clientScript(), "fillFeedbackFilter");
+    const script = await clientScript();
+    const fn = extractFunction(script, "fillFeedbackFilter") + "\n" + extractFunction(script, "pickableBranches");
     const reload = vi.fn();
     // Before the rebuild the chosen option is still in the list, as in a real
     // <select>; the rebuild is what drops it.
@@ -2250,5 +2252,131 @@ describe("each row has an Edit button", () => {
     expect(fn).toContain("showMetrics(id, code, e)");
     expect(fn).toContain('document.getElementById("dest-" + id)');
     expect(fn).toContain(".focus()");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Moving grouped branches, and switching businesses and branches off
+//
+// Requested after PR #83: "Poder pasar a otro local una sucursal que ya tiene
+// uno" and "Ocultar los locales y sucursales desactivados en los selectores".
+// ---------------------------------------------------------------------------
+
+describe("grouped branches can move, and inactive ones leave the pickers", () => {
+  async function loadRenderer(): Promise<(b: unknown[], l: unknown[]) => string> {
+    const script = await clientScript();
+    const esc = await loadEsc();
+    const src = extractFunction(script, "renderBusinesses") + "\n" + extractFunction(script, "pickableBranches");
+    return new Function("esc", `${src}\nreturn renderBusinesses;`)(esc);
+  }
+  const businesses = [
+    { id: "biz-1", name: "Café Central", is_active: true },
+    { id: "biz-2", name: "Sabores", is_active: true },
+    { id: "biz-3", name: "Cerrado", is_active: false },
+  ];
+
+  it("lets a branch that has a business move to another one, or to none", async () => {
+    const html = (await loadRenderer())(businesses, [
+      { id: "loc-1", name: "Providencia", business_id: "biz-1", is_active: true, link_count: 3 },
+    ]);
+    const select = html.match(/<select[^>]*id="move-loc-1"[^>]*>([\s\S]*?)<\/select>/)?.[1] ?? "";
+    expect(select).toContain('<option value="biz-2">Sabores</option>');
+    expect(select).toContain('<option value="none">No business</option>');
+    // Not its own business, and never an inactive one.
+    expect(select).not.toContain('value="biz-1"');
+    expect(select).not.toContain('value="biz-3"');
+    expect(html).toMatch(/data-biz-action="move-branch"[^>]*data-location-id="loc-1"/);
+  });
+
+  it("offers Deactivate on active businesses and branches, Activate on inactive ones", async () => {
+    const html = (await loadRenderer())(businesses, [
+      { id: "loc-1", name: "Providencia", business_id: "biz-1", is_active: true, link_count: 0 },
+      { id: "loc-2", name: "Vieja", business_id: "biz-1", is_active: false, link_count: 0 },
+    ]);
+    expect(html).toMatch(/<button[^>]*data-biz-action="toggle-business"[^>]*data-business-id="biz-1"[^>]*data-active="false"[^>]*>Deactivate<\/button>/);
+    expect(html).toMatch(/<button[^>]*data-biz-action="toggle-business"[^>]*data-business-id="biz-3"[^>]*data-active="true"[^>]*>Activate<\/button>/);
+    expect(html).toMatch(/<button[^>]*data-biz-action="toggle-branch"[^>]*data-location-id="loc-1"[^>]*data-active="false"[^>]*>Deactivate<\/button>/);
+    expect(html).toMatch(/<button[^>]*data-biz-action="toggle-branch"[^>]*data-location-id="loc-2"[^>]*data-active="true"[^>]*>Activate<\/button>/);
+  });
+
+  it("keeps inactive branches and businesses out of a link's branch picker, except its current one", async () => {
+    const script = await clientScript();
+    const fn = extractFunction(script, "fillBranchSelects") + "\n" + extractFunction(script, "pickableBranches");
+    const options: { label: string; value: string; selected: boolean }[] = [];
+    const select = {
+      dataset: { current: "loc-old" },
+      set textContent(_v: string) { options.length = 0; },
+      add: (o: { label: string; value: string; selected: boolean }) => options.push(o),
+    };
+    new Function("window", "document", "Option", `${fn}\nfillBranchSelects();`)(
+      {
+        __businesses: businesses,
+        __branches: [
+          { id: "loc-1", name: "Providencia", business_id: "biz-1", business_name: "Café Central", is_active: true },
+          { id: "loc-old", name: "Vieja", business_id: "biz-1", business_name: "Café Central", is_active: false },
+          { id: "loc-3", name: "Centro", business_id: "biz-3", business_name: "Cerrado", is_active: true },
+        ],
+      },
+      { querySelectorAll: () => [select] },
+      function (label: string, value: string, _d?: boolean, selected = false) {
+        return { label, value, selected };
+      },
+    );
+    expect(options.map((o) => o.value)).toEqual(["", "loc-1", "loc-old"]);
+    // The link's own branch stays, named, so one Save does not detach it.
+    expect(options.find((o) => o.selected)).toEqual({ label: "Café Central — Vieja (inactive)", value: "loc-old", selected: true });
+  });
+
+  it("keeps inactive businesses and branches out of the comments filter", async () => {
+    const script = await clientScript();
+    const fn = extractFunction(script, "fillFeedbackFilter") + "\n" + extractFunction(script, "pickableBranches");
+    const options: string[] = [""];
+    const select = {
+      value: "",
+      set textContent(_v: string) { options.length = 0; },
+      add: (o: { value: string }) => options.push(o.value),
+    };
+    new Function("window", "document", "Option", "loadFeedbackInbox", `${fn}\nfillFeedbackFilter();`)(
+      {
+        __businesses: businesses,
+        __branches: [
+          { id: "loc-1", name: "Providencia", business_id: "biz-1", is_active: true },
+          { id: "loc-2", name: "Vieja", business_id: "biz-1", is_active: false },
+          { id: "loc-3", name: "Centro", business_id: "biz-3", is_active: true },
+          { id: "loc-4", name: "Suelta", business_id: null, is_active: false },
+        ],
+      },
+      { getElementById: () => select },
+      function (_l: string, value: string) { return { value }; },
+      () => {},
+    );
+    expect(options).toEqual(["", "b:biz-1", "l:loc-1", "b:biz-2"]);
+  });
+
+  it("moves to no business with null, and switches businesses and branches through PATCH", async () => {
+    const script = await clientScript();
+    const api = vi.fn().mockResolvedValue({ ok: true });
+    const refresh = vi.fn();
+    const deps = ["window", "document", "showBusinessesMessage", "refreshOwnership"];
+    const win = { __api: api };
+    const doc = { getElementById: () => ({ value: "none" }) };
+
+    await new Function(...deps, `async ${extractFunction(script, "moveBranch")}\nreturn moveBranch("loc-1");`)(win, doc, () => {}, refresh);
+    expect(api).toHaveBeenLastCalledWith("PATCH", "/api/locations/loc-1", { business_id: null });
+
+    await new Function(...deps, `async ${extractFunction(script, "setBusinessActive")}\nreturn setBusinessActive("biz-1", false);`)(win, doc, () => {}, refresh);
+    expect(api).toHaveBeenLastCalledWith("PATCH", "/api/businesses/biz-1", { is_active: false });
+
+    await new Function(...deps, `async ${extractFunction(script, "setBranchActive")}\nreturn setBranchActive("loc-1", true);`)(win, doc, () => {}, refresh);
+    expect(api).toHaveBeenLastCalledWith("PATCH", "/api/locations/loc-1", { is_active: true });
+    expect(refresh).toHaveBeenCalledTimes(3);
+  });
+
+  it("routes the new card actions through the delegated listener", async () => {
+    const script = await clientScript();
+    const listener = script.slice(script.indexOf('getElementById("businesses-body").addEventListener'));
+    expect(listener).toContain('"toggle-business"');
+    expect(listener).toContain('setBusinessActive(el.dataset.businessId, el.dataset.active === "true")');
+    expect(listener).toContain('setBranchActive(el.dataset.locationId, el.dataset.active === "true")');
   });
 });

@@ -258,7 +258,7 @@ describe("links table — no inline event handlers", () => {
 
     const actions = [...row.matchAll(/data-action="([^"]+)"/g)].map((m) => m[1]);
     expect(actions.sort()).toEqual(
-      ["copy", "delete", "metrics", "qr", "save-branch", "save-client-ref", "save-destination", "toggle", "toggle-gate"].sort(),
+      ["copy", "delete", "edit", "metrics", "qr", "save-branch", "save-client-ref", "save-destination", "toggle", "toggle-gate"].sort(),
     );
   });
 
@@ -268,7 +268,7 @@ describe("links table — no inline event handlers", () => {
     expect(script).toMatch(/getElementById\("links-body"\)\s*\n?\s*\.addEventListener\("click"/);
     expect(script).toContain('closest("[data-action]")');
     // Every action is dispatched from the dataset, never from a string literal.
-    for (const action of ["copy", "qr", "metrics", "save-client-ref", "save-destination", "save-branch", "toggle", "toggle-gate", "delete"]) {
+    for (const action of ["copy", "qr", "metrics", "edit", "save-client-ref", "save-destination", "save-branch", "toggle", "toggle-gate", "delete"]) {
       expect(script).toMatch(new RegExp(`case "${action}":`));
     }
   });
@@ -616,7 +616,7 @@ describe("Phase 2 markup did not regress the escaping and delegation guards", ()
 
     const actions = [...row.matchAll(/data-action="([^"]+)"/g)].map((m) => m[1]);
     expect(actions.sort()).toEqual(
-      ["copy", "delete", "metrics", "qr", "save-branch", "save-client-ref", "save-destination", "toggle", "toggle-gate"].sort(),
+      ["copy", "delete", "edit", "metrics", "qr", "save-branch", "save-client-ref", "save-destination", "toggle", "toggle-gate"].sort(),
     );
   });
 
@@ -1512,7 +1512,7 @@ describe("the dashboard can manufacture cards in bulk", () => {
     // code under test.
     expect(wired).not.toMatch(/data-action=/);
 
-    // And the switch carries exactly nine record actions, no more. Pinned
+    // And the switch carries exactly ten record actions, no more. Pinned
     // because this is the list that decides what a row may do: an action added
     // here reaches the handler with a row's own id, so an unlisted one silently
     // does nothing while looking wired.
@@ -1521,13 +1521,16 @@ describe("the dashboard can manufacture cards in bulk", () => {
     // is the second half of the flow this PR completes. toggle-gate joined for
     // the review-screen checkbox (odd/tasks/review-screen-refresh.md, S1).
     // load-destination became save-destination (any link's URL is editable
-    // now) and save-branch joined (odd/tasks/business-branches.md, S4).
+    // now) and save-branch joined (odd/tasks/business-branches.md, S4). edit
+    // joined because the panel was only reachable through the clicks count,
+    // and the operator could not find it.
     const actions = [...script.matchAll(/case "([a-z-]+)":/g)].map((m) => m[1]);
     expect(new Set(actions)).toEqual(
       new Set([
         "copy",
         "qr",
         "metrics",
+        "edit",
         "save-client-ref",
         "save-destination",
         "save-branch",
@@ -1638,7 +1641,8 @@ describe("links table shows how each link opens and where it belongs", () => {
   it("never shows an assigned link as Unassigned when the branches list is missing", async () => {
     // One Save on a picker that wrongly reads "Unassigned" would detach the
     // link. Runs the shipped function against a minimal DOM stand-in.
-    const fn = extractFunction(await clientScript(), "fillBranchSelects");
+    const script = await clientScript();
+    const fn = extractFunction(script, "fillBranchSelects") + "\n" + extractFunction(script, "pickableBranches");
     const options: { value: string; selected: boolean }[] = [];
     const select = {
       dataset: { current: "loc-1" },
@@ -2159,7 +2163,7 @@ describe("businesses and branches card", () => {
     expect(addBranch).toContain("business_id: businessId");
     const move = extractFunction(script, "moveBranch");
     expect(move).toContain('window.__api("PATCH", "/api/locations/" + locationId');
-    expect(move).toContain("business_id: value === \"\" ? null : value");
+    expect(move).toContain('business_id: value === "none" ? null : value');
     // A moved branch changes the business shown on every link row.
     expect(extractFunction(script, "refreshOwnership")).toContain("loadLinks()");
   });
@@ -2193,7 +2197,8 @@ describe("comments can be filtered by business or branch", () => {
   });
 
   it("reloads the comments when the chosen filter no longer exists", async () => {
-    const fn = extractFunction(await clientScript(), "fillFeedbackFilter");
+    const script = await clientScript();
+    const fn = extractFunction(script, "fillFeedbackFilter") + "\n" + extractFunction(script, "pickableBranches");
     const reload = vi.fn();
     // Before the rebuild the chosen option is still in the list, as in a real
     // <select>; the rebuild is what drops it.
@@ -2217,5 +2222,181 @@ describe("comments can be filtered by business or branch", () => {
 
   it("fills the filter from the businesses and branches it loaded", async () => {
     expect(extractFunction(await clientScript(), "loadBranches")).toContain("fillFeedbackFilter()");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// An explicit Edit button
+//
+// The editing panel (destination, branch, review screen) only opened from the
+// clicks count. Reported from production: "aun no veo el boton de editar".
+// ---------------------------------------------------------------------------
+
+describe("each row has an Edit button", () => {
+  it("renders a visible Edit button beside Del, carrying the row's id", async () => {
+    const row = await renderRow();
+    const actions = row.slice(row.indexOf('class="row-actions"'));
+    const edit = actions.match(/<button[^>]*data-action="edit"[^>]*>([^<]*)<\/button>/);
+    expect(edit?.[1]).toBe("Edit");
+    expect(edit?.[0]).toContain('data-id="link-uuid"');
+    expect(edit?.[0]).toContain('data-code="abc1234"');
+    expect(actions.indexOf('data-action="edit"')).toBeLessThan(actions.indexOf('data-action="delete"'));
+  });
+
+  it("opens a closed panel, never closes an open one, and always focuses the destination", async () => {
+    const fn = extractFunction(await clientScript(), "openEditor");
+    const run = (display: string) => {
+      const showMetrics = vi.fn();
+      const focus = vi.fn();
+      const els: Record<string, unknown> = { "metrics-l1": { style: { display } }, "dest-l1": { focus } };
+      new Function("document", "showMetrics", `${fn}\nopenEditor("l1", "abc", { preventDefault() {} });`)(
+        { getElementById: (id: string) => els[id] },
+        showMetrics,
+      );
+      return { showMetrics, focus };
+    };
+    const closed = run("none");
+    expect(closed.showMetrics).toHaveBeenCalledTimes(1);
+    expect(closed.focus).toHaveBeenCalledTimes(1);
+    const open = run("");
+    expect(open.showMetrics).not.toHaveBeenCalled();
+    expect(open.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the same panel as the clicks count and focuses the destination", async () => {
+    const script = await clientScript();
+    const sw = extractFunction(script, "onLinksTableClick");
+    const edit = sw.slice(sw.indexOf('case "edit":'), sw.indexOf("break;", sw.indexOf('case "edit":')));
+    expect(edit).toContain("openEditor(el.dataset.id, el.dataset.code, e)");
+    const fn = extractFunction(script, "openEditor");
+    expect(fn).toContain("showMetrics(id, code, e)");
+    expect(fn).toContain('document.getElementById("dest-" + id)');
+    expect(fn).toContain(".focus()");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Moving grouped branches, and switching businesses and branches off
+//
+// Requested after PR #83: "Poder pasar a otro local una sucursal que ya tiene
+// uno" and "Ocultar los locales y sucursales desactivados en los selectores".
+// ---------------------------------------------------------------------------
+
+describe("grouped branches can move, and inactive ones leave the pickers", () => {
+  async function loadRenderer(): Promise<(b: unknown[], l: unknown[]) => string> {
+    const script = await clientScript();
+    const esc = await loadEsc();
+    const src = extractFunction(script, "renderBusinesses") + "\n" + extractFunction(script, "pickableBranches");
+    return new Function("esc", `${src}\nreturn renderBusinesses;`)(esc);
+  }
+  const businesses = [
+    { id: "biz-1", name: "Café Central", is_active: true },
+    { id: "biz-2", name: "Sabores", is_active: true },
+    { id: "biz-3", name: "Cerrado", is_active: false },
+  ];
+
+  it("lets a branch that has a business move to another one, or to none", async () => {
+    const html = (await loadRenderer())(businesses, [
+      { id: "loc-1", name: "Providencia", business_id: "biz-1", is_active: true, link_count: 3 },
+    ]);
+    const select = html.match(/<select[^>]*id="move-loc-1"[^>]*>([\s\S]*?)<\/select>/)?.[1] ?? "";
+    expect(select).toContain('<option value="biz-2">Sabores</option>');
+    expect(select).toContain('<option value="none">No business</option>');
+    // Not its own business, and never an inactive one.
+    expect(select).not.toContain('value="biz-1"');
+    expect(select).not.toContain('value="biz-3"');
+    expect(html).toMatch(/data-biz-action="move-branch"[^>]*data-location-id="loc-1"/);
+  });
+
+  it("offers Deactivate on active businesses and branches, Activate on inactive ones", async () => {
+    const html = (await loadRenderer())(businesses, [
+      { id: "loc-1", name: "Providencia", business_id: "biz-1", is_active: true, link_count: 0 },
+      { id: "loc-2", name: "Vieja", business_id: "biz-1", is_active: false, link_count: 0 },
+    ]);
+    expect(html).toMatch(/<button[^>]*data-biz-action="toggle-business"[^>]*data-business-id="biz-1"[^>]*data-active="false"[^>]*>Deactivate<\/button>/);
+    expect(html).toMatch(/<button[^>]*data-biz-action="toggle-business"[^>]*data-business-id="biz-3"[^>]*data-active="true"[^>]*>Activate<\/button>/);
+    expect(html).toMatch(/<button[^>]*data-biz-action="toggle-branch"[^>]*data-location-id="loc-1"[^>]*data-active="false"[^>]*>Deactivate<\/button>/);
+    expect(html).toMatch(/<button[^>]*data-biz-action="toggle-branch"[^>]*data-location-id="loc-2"[^>]*data-active="true"[^>]*>Activate<\/button>/);
+  });
+
+  it("keeps inactive branches and businesses out of a link's branch picker, except its current one", async () => {
+    const script = await clientScript();
+    const fn = extractFunction(script, "fillBranchSelects") + "\n" + extractFunction(script, "pickableBranches");
+    const options: { label: string; value: string; selected: boolean }[] = [];
+    const select = {
+      dataset: { current: "loc-old" },
+      set textContent(_v: string) { options.length = 0; },
+      add: (o: { label: string; value: string; selected: boolean }) => options.push(o),
+    };
+    new Function("window", "document", "Option", `${fn}\nfillBranchSelects();`)(
+      {
+        __businesses: businesses,
+        __branches: [
+          { id: "loc-1", name: "Providencia", business_id: "biz-1", business_name: "Café Central", is_active: true },
+          { id: "loc-old", name: "Vieja", business_id: "biz-1", business_name: "Café Central", is_active: false },
+          { id: "loc-3", name: "Centro", business_id: "biz-3", business_name: "Cerrado", is_active: true },
+        ],
+      },
+      { querySelectorAll: () => [select] },
+      function (label: string, value: string, _d?: boolean, selected = false) {
+        return { label, value, selected };
+      },
+    );
+    expect(options.map((o) => o.value)).toEqual(["", "loc-1", "loc-old"]);
+    // The link's own branch stays, named, so one Save does not detach it.
+    expect(options.find((o) => o.selected)).toEqual({ label: "Café Central — Vieja (inactive)", value: "loc-old", selected: true });
+  });
+
+  it("keeps inactive businesses and branches out of the comments filter", async () => {
+    const script = await clientScript();
+    const fn = extractFunction(script, "fillFeedbackFilter") + "\n" + extractFunction(script, "pickableBranches");
+    const options: string[] = [""];
+    const select = {
+      value: "",
+      set textContent(_v: string) { options.length = 0; },
+      add: (o: { value: string }) => options.push(o.value),
+    };
+    new Function("window", "document", "Option", "loadFeedbackInbox", `${fn}\nfillFeedbackFilter();`)(
+      {
+        __businesses: businesses,
+        __branches: [
+          { id: "loc-1", name: "Providencia", business_id: "biz-1", is_active: true },
+          { id: "loc-2", name: "Vieja", business_id: "biz-1", is_active: false },
+          { id: "loc-3", name: "Centro", business_id: "biz-3", is_active: true },
+          { id: "loc-4", name: "Suelta", business_id: null, is_active: false },
+        ],
+      },
+      { getElementById: () => select },
+      function (_l: string, value: string) { return { value }; },
+      () => {},
+    );
+    expect(options).toEqual(["", "b:biz-1", "l:loc-1", "b:biz-2"]);
+  });
+
+  it("moves to no business with null, and switches businesses and branches through PATCH", async () => {
+    const script = await clientScript();
+    const api = vi.fn().mockResolvedValue({ ok: true });
+    const refresh = vi.fn();
+    const deps = ["window", "document", "showBusinessesMessage", "refreshOwnership"];
+    const win = { __api: api };
+    const doc = { getElementById: () => ({ value: "none" }) };
+
+    await new Function(...deps, `async ${extractFunction(script, "moveBranch")}\nreturn moveBranch("loc-1");`)(win, doc, () => {}, refresh);
+    expect(api).toHaveBeenLastCalledWith("PATCH", "/api/locations/loc-1", { business_id: null });
+
+    await new Function(...deps, `async ${extractFunction(script, "setBusinessActive")}\nreturn setBusinessActive("biz-1", false);`)(win, doc, () => {}, refresh);
+    expect(api).toHaveBeenLastCalledWith("PATCH", "/api/businesses/biz-1", { is_active: false });
+
+    await new Function(...deps, `async ${extractFunction(script, "setBranchActive")}\nreturn setBranchActive("loc-1", true);`)(win, doc, () => {}, refresh);
+    expect(api).toHaveBeenLastCalledWith("PATCH", "/api/locations/loc-1", { is_active: true });
+    expect(refresh).toHaveBeenCalledTimes(3);
+  });
+
+  it("routes the new card actions through the delegated listener", async () => {
+    const script = await clientScript();
+    const listener = script.slice(script.indexOf('getElementById("businesses-body").addEventListener'));
+    expect(listener).toContain('"toggle-business"');
+    expect(listener).toContain('setBusinessActive(el.dataset.businessId, el.dataset.active === "true")');
+    expect(listener).toContain('setBranchActive(el.dataset.locationId, el.dataset.active === "true")');
   });
 });

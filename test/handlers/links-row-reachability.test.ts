@@ -132,14 +132,17 @@ describe("links row — no editable field competes for width", () => {
     expect(row).not.toMatch(/<input[^>]*type="text"/);
   });
 
-  it("emits exactly one button — the destructive one", async () => {
+  it("emits exactly two short buttons — Edit and the destructive one", async () => {
     const { row } = split(await renderRow());
 
-    // The sharpest form of the width guarantee. Four buttons in this cell is
-    // what squeezed it to 92.7px and stacked all four vertically; one cannot
-    // stack, and it cannot be the column that falls off the edge.
-    const buttons = [...row.matchAll(/<button/g)];
-    expect(buttons, `row emits ${buttons.length} buttons`).toHaveLength(1);
+    // The sharpest form of the width guarantee. Four buttons and a text field
+    // in this cell is what squeezed it to 92.7px and stacked them vertically.
+    // It held ONE button until production showed the cost: the editing panel
+    // was only reachable through the clicks count, and the operator could not
+    // find it. Two short labels fit on one line (measured in headless Chrome
+    // at 500px, odd/tasks/link-edit-button.md); a third would reopen the bug.
+    const buttons = [...row.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((m) => m[1]);
+    expect(buttons, `row emits ${buttons.length} buttons`).toEqual(["Edit", "Del"]);
   });
 
   it("still renders the client_ref input for the metrics panel to address", async () => {
@@ -166,8 +169,8 @@ describe("links row — no editable field competes for width", () => {
     expect(actionsIn(row)).toContain("metrics");
     // Copy-to-clipboard on the code stays: it is the fastest path to the URL.
     expect(actionsIn(row)).toContain("copy");
-    // And nothing else competes for the cell.
-    expect([...new Set(actionsIn(row))].sort()).toEqual(["copy", "delete", "metrics"]);
+    // Edit opens the same panel as the clicks link; nothing else competes.
+    expect([...new Set(actionsIn(row))].sort()).toEqual(["copy", "delete", "edit", "metrics"]);
   });
 });
 
@@ -291,5 +294,35 @@ describe("the table header no longer reserves a column that is gone", () => {
     const html = await (await dashboardHandler(mockContext())).text();
 
     expect(html).toContain("Stores by Client Ref");
+  });
+});
+// ---------------------------------------------------------------------------
+// Narrow screens keep the actions on the card
+//
+// PR #83 added Business/branch and Opens. At 500px the table then pushed Opens,
+// Clicks, Status and the actions off the card (measured in headless Chrome).
+// Below 768px the informational columns hide; the panel still shows them.
+// ---------------------------------------------------------------------------
+
+async function serve(): Promise<string> {
+  return (await dashboardHandler(mockContext())).text();
+}
+
+describe("narrow screens hide informational columns, never the actions", () => {
+  it("marks business/branch, URL and Opens cells as hideable, and nothing else", async () => {
+    const { row } = split(await renderRow());
+    const hidden = [...row.matchAll(/<td class="hide-sm">/g)];
+    expect(hidden).toHaveLength(3);
+    expect(row).not.toMatch(/<td class="hide-sm">\s*<div class="row-actions"/);
+  });
+
+  it("hides the same three header cells", async () => {
+    const html = await serve();
+    const head = html.slice(html.indexOf('<table id="links-table"'), html.indexOf("</thead>"));
+    expect([...head.matchAll(/<th class="hide-sm">/g)]).toHaveLength(3);
+  });
+
+  it("applies only below 768px", async () => {
+    expect(await serve()).toMatch(/@media \(max-width: 767px\)\s*\{\s*\.hide-sm\s*\{\s*display:\s*none;?\s*\}/);
   });
 });

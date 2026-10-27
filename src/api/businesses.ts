@@ -2,6 +2,7 @@ import type { Handler } from "hono";
 import type { AppEnv, HonoVars } from "../types/env";
 import { withClient } from "../db/client";
 import { ValidationError, NotFoundError } from "../middleware/error";
+import { isUuid } from "../utils/validation";
 
 // ---------------------------------------------------------------------------
 // Businesses — /api/businesses
@@ -148,6 +149,9 @@ export const updateBusiness: Handler<{
 }> = async (c) => {
   const tenant = c.get("tenant");
   const id = c.req.param("id")!;
+  // Not a uuid cannot be one of yours; asking Postgres would fail the cast
+  // and surface as a 500.
+  if (!isUuid(id)) throw new NotFoundError("Business not found", "not_found");
 
   let body: { name?: unknown; is_active?: unknown };
   try {

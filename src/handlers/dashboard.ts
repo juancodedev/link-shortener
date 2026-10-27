@@ -286,7 +286,9 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     }
     .message.success { display: block; background: var(--live-wash); color: var(--live); border: 1px solid var(--live-edge); }
     .message.error { display: block; background: var(--retired-wash); color: var(--retired-ink); border: 1px solid var(--retired-edge); }
-    .row-actions { display: flex; gap: 0.25rem; flex-wrap: wrap; }
+    /* nowrap: Edit and Del stay on one line. Wrapping is what once stacked
+       four buttons vertically and pushed this column off the card. */
+    .row-actions { display: flex; gap: 0.25rem; flex-wrap: nowrap; }
     @media (min-width: 768px) { .row-actions { gap: 0.375rem; } }
     .empty { text-align: center; color: var(--ink-faint); padding: 2rem; }
     .empty-cell { color: var(--ink-faint); text-align: center; }
@@ -546,6 +548,9 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     .biz-branch { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; padding: 0.25rem 0; flex-wrap: wrap; }
     .feedback-code { font-family: "SF Mono", "Fira Code", monospace; font-size: 0.75rem; color: var(--tag); }
     #links-table .badge, .owner-business { white-space: nowrap; }
+    /* Narrow screens: Business/branch, URL and Opens step aside so Clicks,
+       Status and the actions stay on the card. The panel still shows all three. */
+    @media (max-width: 767px) { .hide-sm { display: none; } }
     .badge-gated { background: var(--kraft-deep); color: var(--tag); }
     .badge-direct { background: var(--kraft); color: var(--ink-soft); }
     .owner-business { display: block; font-weight: 600; color: var(--ink-strong); }
@@ -856,9 +861,9 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         <thead>
           <tr>
             <th>Short Code</th>
-            <th>Business / branch</th>
-            <th>URL</th>
-            <th>Opens</th>
+            <th class="hide-sm">Business / branch</th>
+            <th class="hide-sm">URL</th>
+            <th class="hide-sm">Opens</th>
             <th>Clicks</th>
             <th>Status</th>
             <th></th>
@@ -1213,8 +1218,8 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         const select = document.getElementById("feedback-filter");
         if (!select) return;
         const current = select.value;
-        const businesses = window.__businesses || [];
-        const branches = window.__branches || [];
+        const businesses = (window.__businesses || []).filter((b) => b.is_active !== false);
+        const branches = pickableBranches(window.__branches || [], window.__businesses || []);
         select.textContent = "";
         select.add(new Option("All businesses", ""));
         businesses.forEach((b) => {
@@ -1568,6 +1573,9 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           case "metrics":
             showMetrics(el.dataset.id, el.dataset.code, e);
             break;
+          case "edit":
+            openEditor(el.dataset.id, el.dataset.code, e);
+            break;
           case "save-client-ref":
             saveClientRef(el.dataset.id);
             break;
@@ -1694,16 +1702,16 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
             const shortUrl = l.short_url || "";
             return \`<tr>
               <td><span class="code" data-action="copy" data-url="\${esc(shortUrl)}" data-code="\${esc(l.short_code)}" title="Click to copy \${esc(shortUrl)}">\${esc(l.short_code)}</span></td>
-              <td>\${l.location_name
+              <td class="hide-sm">\${l.location_name
                 ? \`<span class="owner-business">\${esc(l.business_name || "No business")}</span><span class="owner-branch">\${esc(l.location_name)}</span>\`
                 : '<span class="owner-none">Unassigned</span>'}</td>
-              <td><span class="url-trunc" title="\${esc(l.original_url)}">\${esc(l.original_url)}</span></td>
-              <td>\${l.is_gated
+              <td class="hide-sm"><span class="url-trunc" title="\${esc(l.original_url)}">\${esc(l.original_url)}</span></td>
+              <td class="hide-sm">\${l.is_gated
                 ? '<span class="badge badge-gated">Review screen</span>'
                 : '<span class="badge badge-direct">Direct</span>'}</td>
               <td><a href="#" data-action="metrics" data-id="\${esc(l.id)}" data-code="\${esc(l.short_code)}" class="clicks-link">\${esc(l.clicks_count)}</a></td>
               <td><span class="badge badge-\${status}">\${status}</span></td>
-              <td><div class="row-actions"><button class="btn-sm btn-danger" data-action="delete" data-id="\${esc(l.id)}">Del</button></div></td>
+              <td><div class="row-actions"><button class="btn-sm btn-outline" data-action="edit" data-id="\${esc(l.id)}" data-code="\${esc(l.short_code)}">Edit</button><button class="btn-sm btn-danger" data-action="delete" data-id="\${esc(l.id)}">Del</button></div></td>
             </tr>
             <tr id="metrics-\${esc(l.id)}" style="display:none;">
               <td colspan="7" class="flush-cell">
@@ -1919,20 +1927,22 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
        * innerHTML, because branch and business names are typed by a person.
        */
       function fillBranchSelects() {
-        const branches = window.__branches || [];
+        const all = window.__branches || [];
+        const branches = pickableBranches(all, window.__businesses || []);
+        const label = (b) => (b.business_name ? b.business_name + " — " : "") + b.name;
         document.querySelectorAll('select[id^="branch-"]').forEach((select) => {
           const current = select.dataset.current || "";
           select.textContent = "";
           select.add(new Option("Unassigned", ""));
-          branches.forEach((b) => {
-            const label = (b.business_name ? b.business_name + " — " : "") + b.name;
-            select.add(new Option(label, b.id, false, b.id === current));
-          });
+          branches.forEach((b) => select.add(new Option(label(b), b.id, false, b.id === current)));
           // The branches list has not loaded (or failed), but the link HAS a
           // branch. Without this the picker would show "Unassigned" selected,
           // and one Save would silently detach the link.
+          // The same holds for a link whose branch was switched off: it stays,
+          // named and marked, until someone picks another.
           if (current && !branches.some((b) => b.id === current)) {
-            select.add(new Option("Current branch", current, true, true));
+            const known = all.find((b) => b.id === current);
+            select.add(new Option(known ? label(known) + " (inactive)" : "Current branch", current, true, true));
           }
         });
       }
@@ -1968,14 +1978,45 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
        * branches that belong to none, each with a picker to move it into one.
        * Every name is escaped — they are typed by a person.
        */
+      /**
+       * Branches that can be chosen in a picker: switched on, and not inside a
+       * switched-off business. The card still lists everything, so an inactive
+       * one can be switched back on.
+       */
+      function pickableBranches(branches, businesses) {
+        const off = new Set(businesses.filter((b) => b.is_active === false).map((b) => b.id));
+        return branches.filter((l) => l.is_active !== false && !off.has(l.business_id));
+      }
+
       function renderBusinesses(businesses, branches) {
-        const branchLine = (l) =>
-          \`<li class="biz-branch"><span>\${esc(l.name)}</span><span class="field-note">\${esc(l.link_count)} links</span></li>\`;
+        const active = businesses.filter((b) => b.is_active !== false);
+        const toggle = (attrs, isActive) =>
+          \`<button type="button" class="btn-sm btn-outline" \${attrs} data-active="\${isActive ? "false" : "true"}">\${isActive ? "Deactivate" : "Activate"}</button>\`;
+        const inactiveNote = '<span class="field-note">Inactive</span>';
+
+        // Every branch can move: to another active business, or out of its own.
+        const branchLine = (l) => {
+          const targets = active
+            .filter((b) => b.id !== l.business_id)
+            .map((b) => \`<option value="\${esc(b.id)}">\${esc(b.name)}</option>\`)
+            .join("") + (l.business_id ? '<option value="none">No business</option>' : "");
+          const isActive = l.is_active !== false;
+          return \`<li class="biz-branch">
+            <span>\${esc(l.name)} <span class="field-note">\${esc(l.link_count)} links</span> \${isActive ? "" : inactiveNote}</span>
+            <span class="field-row">
+              <select id="move-\${esc(l.id)}"><option value="">Move to…</option>\${targets}</select>
+              <button type="button" class="btn-sm btn-outline" data-biz-action="move-branch" data-location-id="\${esc(l.id)}">Move</button>
+              \${toggle(\`data-biz-action="toggle-branch" data-location-id="\${esc(l.id)}"\`, isActive)}
+            </span>
+          </li>\`;
+        };
 
         const groups = businesses.map((b) => {
           const own = branches.filter((l) => l.business_id === b.id);
+          const isActive = b.is_active !== false;
           return \`<div class="biz-group">
-            <div class="biz-name">\${esc(b.name)}</div>
+            <div class="biz-name">\${esc(b.name)} \${isActive ? "" : inactiveNote}
+              \${toggle(\`data-biz-action="toggle-business" data-business-id="\${esc(b.id)}"\`, isActive)}</div>
             <ul class="biz-branches">\${own.length ? own.map(branchLine).join("") : '<li class="field-note">No branches yet.</li>'}</ul>
             <div class="field-row">
               <input type="text" id="new-branch-\${esc(b.id)}" maxlength="120" placeholder="New branch, e.g. Providencia">
@@ -1986,18 +2027,9 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
 
         const loose = branches.filter((l) => !l.business_id);
         if (loose.length) {
-          const options = businesses
-            .map((b) => \`<option value="\${esc(b.id)}">\${esc(b.name)}</option>\`)
-            .join("");
           groups.push(\`<div class="biz-group">
             <div class="biz-name">Not in a business</div>
-            <ul class="biz-branches">\${loose.map((l) => \`<li class="biz-branch">
-              <span>\${esc(l.name)} <span class="field-note">\${esc(l.link_count)} links</span></span>
-              <span class="field-row">
-                <select id="move-\${esc(l.id)}"><option value="">Choose a business</option>\${options}</select>
-                <button type="button" class="btn-sm btn-outline" data-biz-action="move-branch" data-location-id="\${esc(l.id)}">Move</button>
-              </span>
-            </li>\`).join("")}</ul>
+            <ul class="biz-branches">\${loose.map(branchLine).join("")}</ul>
           </div>\`);
         }
 
@@ -2051,11 +2083,32 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         if (!select) return;
         const value = select.value;
         if (value === "") return;
+        // "none" takes the branch out of its business.
         const res = await window.__api("PATCH", "/api/locations/" + locationId, {
-          business_id: value === "" ? null : value,
+          business_id: value === "none" ? null : value,
         });
         if (!res.ok) {
           showBusinessesMessage("Could not move the branch.", "error");
+          return;
+        }
+        showBusinessesMessage("", "");
+        refreshOwnership();
+      }
+
+      async function setBusinessActive(businessId, isActive) {
+        const res = await window.__api("PATCH", "/api/businesses/" + businessId, { is_active: isActive });
+        if (!res.ok) {
+          showBusinessesMessage("Could not update the business.", "error");
+          return;
+        }
+        showBusinessesMessage("", "");
+        refreshOwnership();
+      }
+
+      async function setBranchActive(locationId, isActive) {
+        const res = await window.__api("PATCH", "/api/locations/" + locationId, { is_active: isActive });
+        if (!res.ok) {
+          showBusinessesMessage("Could not update the branch.", "error");
           return;
         }
         showBusinessesMessage("", "");
@@ -2071,7 +2124,23 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         if (!el) return;
         if (el.dataset.bizAction === "add-branch") addBranch(el.dataset.businessId);
         else if (el.dataset.bizAction === "move-branch") moveBranch(el.dataset.locationId);
+        else if (el.dataset.bizAction === "toggle-business") setBusinessActive(el.dataset.businessId, el.dataset.active === "true");
+        else if (el.dataset.bizAction === "toggle-branch") setBranchActive(el.dataset.locationId, el.dataset.active === "true");
       });
+
+      /**
+       * The row's Edit button. Opens the same panel the clicks count opens —
+       * destination, branch, review screen — and puts the cursor in the
+       * destination field. Unlike the clicks count it never CLOSES the panel:
+       * pressing Edit on an open row should keep it open.
+       */
+      function openEditor(id, code, e) {
+        e.preventDefault();
+        const row = document.getElementById("metrics-" + id);
+        if (row && row.style.display === "none") showMetrics(id, code, e);
+        const input = document.getElementById("dest-" + id);
+        if (input) input.focus();
+      }
 
       async function showMetrics(linkId, code, e) {
         e.preventDefault();

@@ -27,14 +27,25 @@ async function screen(): Promise<string> {
 }
 
 function feedbackForm(html: string): string {
-  const start = html.indexOf('<form method="POST" action="/api/gate">');
+  const start = html.indexOf('<form method="POST" action="/api/gate"');
   expect(start, "the feedback form is missing").toBeGreaterThan(-1);
   return html.slice(start, html.indexOf("</form>", start));
 }
 
+function ratingInputs(html: string): string[] {
+  return [...html.matchAll(/<input[^>]*name="rating"[^>]*>/g)].map((m) => m[0]);
+}
+
+/** Everything between the opening of the collapsible panel and its close. */
+function collapsedPanel(html: string): string {
+  const start = html.indexOf("<details");
+  if (start === -1) return "";
+  return html.slice(start, html.indexOf("</details>", start));
+}
+
 describe("the private feedback form", () => {
   it("posts to the gate endpoint", async () => {
-    expect(await screen()).toContain('<form method="POST" action="/api/gate">');
+    expect(await screen()).toContain('<form method="POST" action="/api/gate"');
   });
 
   it("declares the action the endpoint validates", async () => {
@@ -48,11 +59,23 @@ describe("the private feedback form", () => {
   });
 
   it("declares every field the endpoint reads", async () => {
-    const form = feedbackForm(await screen());
-    const required = ["code", "action_taken", "comment", "customer_contact"];
+    const html = await screen();
+    const form = feedbackForm(html);
+    const inside = ["code", "action_taken", "comment", "customer_phone", "customer_contact"];
 
-    for (const field of required) {
+    for (const field of inside) {
       expect(form, `missing field: ${field}`).toContain(`name="${field}"`);
+    }
+
+    // The stars sit outside the <form> element so they are visible before the
+    // panel opens, and join the submission through the HTML `form` attribute.
+    // A browser submits an associated control exactly like a nested one.
+    const formId = form.match(/<form[^>]*id="([^"]+)"/)?.[1];
+    expect(formId, "the form needs an id for its associated controls").toBeTruthy();
+    const ratings = ratingInputs(html);
+    expect(ratings.length).toBe(5);
+    for (const input of ratings) {
+      expect(input, "a star is not associated with the form").toContain(`form="${formId}"`);
     }
   });
 
@@ -90,6 +113,75 @@ describe("the private feedback form", () => {
     expect(email).not.toContain("required");
     expect(email).toContain('type="email"');
   });
+
+  it("offers the phone as a telephone field that is recommended, not required", async () => {
+    const form = feedbackForm(await screen());
+    const phone = form.match(/<input[^>]*name="customer_phone"[^>]*>/)?.[0] ?? "";
+    expect(phone, "the phone input is missing").not.toBe("");
+    expect(phone).toContain('type="tel"');
+    expect(phone).not.toContain("required");
+    expect(form).toContain("Teléfono (recomendado)");
+    expect(form).toContain("Correo (opcional)");
+  });
+
+  it("orders the fields message, phone, email, then submit", async () => {
+    const form = feedbackForm(await screen());
+    const comment = form.indexOf('name="comment"');
+    const phone = form.indexOf('name="customer_phone"');
+    const email = form.indexOf('name="customer_contact"');
+    const submit = form.indexOf('type="submit"');
+
+    expect(comment).toBeGreaterThan(-1);
+    expect(phone).toBeGreaterThan(comment);
+    expect(email).toBeGreaterThan(phone);
+    expect(submit).toBeGreaterThan(email);
+  });
+});
+
+describe("the star rating", () => {
+  it("renders five star inputs named rating with values 1 to 5", async () => {
+    const inputs = ratingInputs(await screen());
+    expect(inputs.length).toBe(5);
+    inputs.forEach((input, i) => {
+      expect(input).toContain('type="radio"');
+      expect(input).toContain(`value="${i + 1}"`);
+    });
+  });
+
+  it("is visible before the private panel opens", async () => {
+    // A rating hidden inside the collapsed panel would never be chosen by
+    // someone who goes straight to Google.
+    expect(collapsedPanel(await screen())).not.toContain('name="rating"');
+  });
+
+  it("is optional", async () => {
+    for (const input of ratingInputs(await screen())) {
+      expect(input).not.toContain("required");
+    }
+  });
+});
+
+describe("compliance: the rating never decides what the customer sees", () => {
+  // Review gating — showing Google only to happy customers — is prohibited by
+  // Google. These assertions pin the markup a customer sees on first paint,
+  // before any star is chosen.
+
+  it("shows the Google link on first paint, outside the collapsed panel", async () => {
+    const html = await screen();
+    const link = html.match(/<a[^>]*data-action="google_redirect"[^>]*>/)?.[0] ?? "";
+
+    expect(link, "the Google link is missing").not.toBe("");
+    expect(link).toContain(`href="${params.destinationUrl}"`);
+    expect(link).not.toMatch(/\b(hidden|disabled|aria-disabled|inert)\b/);
+    expect(collapsedPanel(html)).not.toContain('data-action="google_redirect"');
+  });
+
+  it("never toggles visibility from the rating in its script", async () => {
+    const html = await screen();
+    const script = html.slice(html.lastIndexOf("<script>"), html.lastIndexOf("</script>"));
+    // The only reason the script reads the rating is to record it.
+    expect(script).not.toMatch(/\.hidden\s*=|style\.display|classList\.(add|remove|toggle)/);
+  });
 });
 
 describe("the client's own fetches", () => {
@@ -102,6 +194,13 @@ describe("the client's own fetches", () => {
       // A fetch that omits it is a request that cannot succeed.
       expect(f[0], "a gate fetch omits action_taken").toContain("action_taken=");
     }
+  });
+
+  it("records the chosen rating on the Google click", async () => {
+    const html = await screen();
+    const fetchCall = html.match(/fetch\('\/api\/gate'[\s\S]*?\)\.catch/)?.[0] ?? "";
+    expect(fetchCall).toContain("action_taken=google_redirect");
+    expect(fetchCall).toContain("&rating=");
   });
 
   it("does not fire a feedback fetch that the endpoint will always reject", async () => {

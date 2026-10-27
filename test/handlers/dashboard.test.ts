@@ -1973,3 +1973,46 @@ describe("review screen checkbox", () => {
     expect(fn).toContain('window.__api("PATCH", "/api/links/" + id, { is_gated: gated })');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Full-width layout (odd/tasks/review-screen-refresh.md, S5)
+//
+// The page used to be a single 720px column centred in the window. It now uses
+// the width: a main column for what the owner reads, a side column for what
+// they configure, stacked on a phone.
+// ---------------------------------------------------------------------------
+
+describe("full-width layout", () => {
+  /** The markup between an element's opening tag and the next column marker. */
+  function column(html: string, cls: string): string {
+    const start = html.indexOf(`<div class="${cls}">`);
+    expect(start, `${cls} is missing`).toBeGreaterThan(-1);
+    const next = html.indexOf('<div class="col-', start + 1);
+    return html.slice(start, next > -1 ? next : html.indexOf("</main>", start));
+  }
+
+  it("no longer caps the page at a 720px column", async () => {
+    const html = await serve();
+    expect(html).not.toContain("max-width: 720px");
+    expect(html).toMatch(/\.container\s*\{[^}]*max-width:\s*1440px/);
+  });
+
+  it("splits into two columns on a wide screen", async () => {
+    const html = await serve();
+    expect(html).toMatch(/@media \(min-width: 1024px\)\s*\{\s*\.layout\s*\{[^}]*grid-template-columns/);
+  });
+
+  it("puts what the owner configures in the side column", async () => {
+    const side = column(await serve(), "col-side");
+    expect(side).toContain('id="create-form"');
+    expect(side).toContain('id="feedback-email-card"');
+  });
+
+  it("puts what the owner reads in the main column, satisfaction first", async () => {
+    const main = column(await serve(), "col-main");
+    const at = (needle: string) => main.indexOf(needle);
+    expect(at('id="gate-card"')).toBeGreaterThan(-1);
+    expect(at('id="links-table"')).toBeGreaterThan(at('id="gate-card"'));
+    expect(at('id="feedback-card"')).toBeGreaterThan(at('id="links-table"'));
+  });
+});

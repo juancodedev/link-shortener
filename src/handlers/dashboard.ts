@@ -89,13 +89,30 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       line-height: 1.6;
       min-height: 100dvh;
     }
+    /* Wide, not unbounded: past ~1440px a table row gets too long for the eye
+       to follow from the code to its actions. */
     .container {
-      max-width: 720px;
+      max-width: 1440px;
       margin: 0 auto;
       padding: 1rem;
     }
     @media (min-width: 768px) {
-      .container { padding: 1.5rem; }
+      .container { padding: 1.5rem 2rem; }
+    }
+    .layout { display: grid; grid-template-columns: minmax(0, 1fr); column-gap: 1.5rem; }
+    @media (min-width: 1024px) {
+      .layout {
+        grid-template-columns: minmax(0, 1fr) 22rem;
+        grid-template-areas: "main side";
+        align-items: start;
+      }
+      .col-main { grid-area: main; }
+      /* Not sticky: the side column can be taller than a laptop screen, and a
+         sticky column that tall hides its own bottom until the page ends. */
+      .col-side { grid-area: side; }
+      /* Scoped to .layout so it outranks the base .url-trunc rule, which
+         comes later in this sheet. */
+      .layout .url-trunc { max-width: 28rem; }
     }
     nav {
       background: var(--sticker);
@@ -679,6 +696,16 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
   const activeLinkLimit = resolveMaxActiveLinks(c.env);
 
   const body = `
+    <!--
+      TWO COLUMNS ON A WIDE SCREEN, ONE ON A PHONE.
+
+      The side column holds what the owner CONFIGURES (create a link, make
+      cards, set the feedback address); the main column holds what they READ
+      (satisfaction, links, comments). The side column comes first in the
+      markup so a phone still opens on "Create Short Link", as it always has.
+    -->
+    <div class="layout">
+    <div class="col-side">
     <div class="card">
       <h3>Create Short Link</h3>
       <form id="create-form">
@@ -745,6 +772,50 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       </button>
     </div>
 
+    <!--
+      WHERE FEEDBACK SHOULD GO.
+
+      A card's QR leads to the review gate. A customer can leave a private
+      comment there, and it lands in analytics.tag_feedback and shows up in the
+      satisfaction panel below.
+
+      They can also record here where that should be delivered.
+
+      IT DOES NOT SEND ANYTHING YET. The address is stored, shown and exported
+      into the print sheet's CSV, and nothing is emailed from it. That is the
+      honest state of this field, and the label says so, because a green
+      dashboard implying "reviews are being emailed" is worse than no field at
+      all: an owner would stop checking the panel.
+
+      Wired as static listeners with the other form controls, not through the
+      delegated switch — that switch is for record actions, and this acts on no
+      record.
+    -->
+    <div class="card" id="feedback-email-card">
+      <h3>Feedback email</h3>
+      <p class="field-help">
+        Where you would like private customer comments delivered. Stored now;
+        nothing is emailed yet — comments still arrive in the satisfaction panel
+        below.
+      </p>
+      <label for="feedback-email">Email address</label>
+      <input type="email" id="feedback-email" placeholder="you@yourbusiness.com"
+             autocomplete="email" maxlength="254">
+      <div id="feedback-email-msg" class="message"></div>
+      <button type="button" id="feedback-email-save" class="btn-sm btn-primary gap-top-sm">Save</button>
+    </div>
+
+    </div>
+    <div class="col-main">
+    <!-- Review gate. Presentable as a screenshot on purpose: this screen is
+         what the owner forwards as their monthly report, so every figure here
+         carries its own qualification in the markup rather than in a tooltip
+         that a screenshot would not capture. -->
+    <div class="card" id="gate-card" style="display:none;">
+      <h3>Customer satisfaction</h3>
+      <div id="gate-body"><div class="loading">Loading...</div></div>
+    </div>
+
     <div class="card">
       <h3>Your Links (<span id="link-count">0</span>/${activeLinkLimit})</h3>
       <div id="links-loading" class="loading">Loading...</div>
@@ -779,6 +850,15 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       <p class="estimate-note"><strong>About visitor figures:</strong> ${VISITOR_ESTIMATE_CAVEAT}</p>
     </div>
 
+    <div class="card" id="feedback-card">
+      <div class="feedback-head">
+        <h3>What customers wrote</h3>
+        <button type="button" id="feedback-export" class="btn-sm">Download CSV</button>
+      </div>
+      <div id="feedback-export-msg" class="message"></div>
+      <div id="feedback-body"><div class="loading">Loading...</div></div>
+    </div>
+
     <div class="card" id="clients-card" style="display:none;">
       <h3>Stores by Client Ref</h3>
       <div class="table-wrap">
@@ -797,55 +877,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       <p class="estimate-note">${VISITOR_ESTIMATE_CAVEAT}</p>
     </div>
 
-    <!-- Review gate. Presentable as a screenshot on purpose: this screen is
-         what the owner forwards as their monthly report, so every figure here
-         carries its own qualification in the markup rather than in a tooltip
-         that a screenshot would not capture. -->
-    <!--
-      WHERE FEEDBACK SHOULD GO.
-
-      A card's QR leads to the review gate. A customer can leave a private
-      comment there, and it lands in analytics.tag_feedback and shows up in the
-      satisfaction panel below.
-
-      They can also record here where that should be delivered.
-
-      IT DOES NOT SEND ANYTHING YET. The address is stored, shown and exported
-      into the print sheet's CSV, and nothing is emailed from it. That is the
-      honest state of this field, and the label says so, because a green
-      dashboard implying "reviews are being emailed" is worse than no field at
-      all: an owner would stop checking the panel.
-
-      Wired as static listeners with the other form controls, not through the
-      delegated switch — that switch is for record actions, and this acts on no
-      record.
-    -->
-    <div class="card" id="feedback-email-card">
-      <h3>Feedback email</h3>
-      <p class="field-help">
-        Where you would like private customer comments delivered. Stored now;
-        nothing is emailed yet — comments still arrive in the satisfaction panel
-        below.
-      </p>
-      <label for="feedback-email">Email address</label>
-      <input type="email" id="feedback-email" placeholder="you@yourbusiness.com"
-             autocomplete="email" maxlength="254">
-      <div id="feedback-email-msg" class="message"></div>
-      <button type="button" id="feedback-email-save" class="btn-sm btn-primary gap-top-sm">Save</button>
     </div>
-
-    <div class="card" id="gate-card" style="display:none;">
-      <h3>Customer satisfaction</h3>
-      <div id="gate-body"><div class="loading">Loading...</div></div>
-    </div>
-
-    <div class="card" id="feedback-card">
-      <div class="feedback-head">
-        <h3>What customers wrote</h3>
-        <button type="button" id="feedback-export" class="btn-sm">Download CSV</button>
-      </div>
-      <div id="feedback-export-msg" class="message"></div>
-      <div id="feedback-body"><div class="loading">Loading...</div></div>
     </div>
 
     <!-- QR code modal -->

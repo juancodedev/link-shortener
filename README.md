@@ -571,6 +571,19 @@ best — native binding, no client library) is a later step, and it needs a retr
 or a durable queue: a customer whose review silently vanishes has no way to know,
 and neither does the owner.
 
+#### Customer phone on private feedback
+
+The review screen asks for a **phone first** (recommended) and an **email second** (optional).
+`/api/gate` accepts `customer_phone` (max 40 chars) beside `customer_contact` (the email); both are
+optional and a blank one is stored as `NULL`. The phone lives in its own column,
+`analytics.tag_feedback.customer_phone`, added by migration `00017`. The inbox shows the phone before
+the email, and `feedback.csv` **appends** a `customer_phone` column at the end so exports read by
+column position keep working.
+
+**Apply `00017` before deploying this code.** The gate writes the column on every private comment, and
+that write is fire-and-forget: against a database without the column it fails after the customer has
+already seen "Gracias", so the comment is lost with nothing on screen to say so.
+
 #### Link and card-stock budgets
 
 Two budgets, counted separately, because a link and a piece of card stock are

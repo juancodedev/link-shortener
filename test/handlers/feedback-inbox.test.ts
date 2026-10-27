@@ -22,6 +22,7 @@ function row(over: Partial<FeedbackRow> = {}): FeedbackRow {
     comment: "The soup was cold",
     rating: 2,
     customer_contact: null,
+    customer_phone: null,
     scanned_at: "2026-10-14T20:15:00.000Z",
     short_code: "abc123",
     client_ref: "mesa-4",
@@ -68,6 +69,25 @@ describe("rendering a comment", () => {
     expect(html).toContain("ana@example.com");
   });
 
+  it("shows the phone first when the customer left both", () => {
+    const html = renderFeedbackInbox(
+      payload({
+        feedback: [row({ customer_phone: "+56 9 1234 5678", customer_contact: "ana@example.com" })],
+      }),
+    );
+    expect(html).toContain("+56 9 1234 5678");
+    expect(html).toContain("ana@example.com");
+    expect(html.indexOf("+56 9 1234 5678")).toBeLessThan(html.indexOf("ana@example.com"));
+  });
+
+  it("shows a phone-only contact", () => {
+    const html = renderFeedbackInbox(
+      payload({ feedback: [row({ customer_phone: "+56 9 1234 5678" })] }),
+    );
+    expect(html).toContain("Contact");
+    expect(html).toContain("+56 9 1234 5678");
+  });
+
   it("shows the date", () => {
     const html = renderFeedbackInbox(payload());
     expect(html).toContain('datetime="2026-10-14T20:15:00.000Z"');
@@ -78,6 +98,7 @@ describe("escaping customer text", () => {
   it.each([
     ["comment", { comment: XSS }],
     ["contact", { customer_contact: XSS }],
+    ["phone", { customer_phone: XSS }],
     ["location", { location_name: XSS }],
     ["client_ref", { location_name: null, client_ref: XSS }],
   ])("escapes the %s", (_field, over) => {

@@ -119,7 +119,10 @@ export interface FeedbackRow {
   id: string;
   comment: string;
   rating: number | null;
+  /** The email the customer left, if any. */
   customer_contact: string | null;
+  /** The phone the customer left, if any. Shown before the email. */
+  customer_phone: string | null;
   scanned_at: string;
   short_code: string | null;
   client_ref: string | null;
@@ -173,7 +176,7 @@ function buildFeedbackQuery(
 
   return {
     text: `
-      SELECT f.id, f.comment, f.rating, f.customer_contact, f.scanned_at,
+      SELECT f.id, f.comment, f.rating, f.customer_contact, f.customer_phone, f.scanned_at,
              l.short_code, l.client_ref, loc.name AS location_name
         FROM analytics.tag_feedback f
         LEFT JOIN ${linksTable} l ON l.id = f.link_id
@@ -194,6 +197,12 @@ function toFeedbackRow(row: Record<string, unknown>): FeedbackRow {
     comment: String(row.comment ?? ""),
     rating: row.rating === null || row.rating === undefined ? null : Number(row.rating),
     customer_contact: row.customer_contact === null ? null : String(row.customer_contact),
+    // `?? null` rather than `=== null`: a row read before 00017 was applied has
+    // no such key at all, and must still come out as "no phone".
+    customer_phone:
+      row.customer_phone === null || row.customer_phone === undefined
+        ? null
+        : String(row.customer_phone),
     // The driver hands timestamptz back as a Date. String() on a Date drops
     // the milliseconds, so it is used as is; only a string is parsed.
     scanned_at: (row.scanned_at instanceof Date
@@ -326,7 +335,18 @@ export const exportFeedbackCsv: Handler<{
   );
 
   const body = toCsv(
-    ["scanned_at", "location", "client_ref", "short_code", "rating", "customer_contact", "comment"],
+    // customer_phone is APPENDED, not slotted beside customer_contact: an owner's
+    // spreadsheet that reads the export by column position keeps working.
+    [
+      "scanned_at",
+      "location",
+      "client_ref",
+      "short_code",
+      "rating",
+      "customer_contact",
+      "comment",
+      "customer_phone",
+    ],
     rows.map((row) => [
       row.scanned_at,
       row.location_name ?? "",
@@ -335,6 +355,7 @@ export const exportFeedbackCsv: Handler<{
       row.rating === null ? "" : String(row.rating),
       row.customer_contact ?? "",
       row.comment,
+      row.customer_phone ?? "",
     ]),
   );
 

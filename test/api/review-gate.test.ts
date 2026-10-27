@@ -238,6 +238,7 @@ function feedbackRow(over: Record<string, unknown> = {}) {
     comment: "The soup was cold",
     rating: 2,
     customer_contact: null,
+    customer_phone: null,
     scanned_at: "2026-10-14T20:15:00.000Z",
     short_code: "abc123",
     client_ref: "mesa-4",
@@ -267,6 +268,7 @@ describe("review-gate feedback list", () => {
       comment: "The soup was cold",
       rating: 2,
       customer_contact: null,
+      customer_phone: null,
       scanned_at: "2026-10-14T20:15:00.000Z",
       short_code: "abc123",
       client_ref: "mesa-4",
@@ -277,6 +279,20 @@ describe("review-gate feedback list", () => {
     expect(calls[0]!.sql).toMatch(/ORDER BY f\.scanned_at DESC, f\.id DESC/);
     expect(body.truncated).toBe(false);
     expect(body.limit).toBe(FEEDBACK_PAGE_SIZE);
+  });
+
+  it("returns the phone the customer left, beside the email", async () => {
+    const calls = mockFeedbackDb([
+      feedbackRow({ customer_phone: "+56 9 1234 5678", customer_contact: "ana@example.com" }),
+    ]);
+    const { c, jsonFn } = feedbackContext();
+
+    await listFeedback(c as any, vi.fn() as any);
+
+    const body = jsonFn.mock.calls[0]![0] as any;
+    expect(calls[0]!.sql).toMatch(/f\.customer_phone/);
+    expect(body.feedback[0].customer_phone).toBe("+56 9 1234 5678");
+    expect(body.feedback[0].customer_contact).toBe("ana@example.com");
   });
 
   it("keeps the milliseconds when the driver returns scanned_at as a Date", async () => {
@@ -414,10 +430,10 @@ describe("review-gate feedback CSV export", () => {
     const text = await res.text();
 
     expect(text.split("\n")[0]).toBe(
-      "scanned_at,location,client_ref,short_code,rating,customer_contact,comment",
+      "scanned_at,location,client_ref,short_code,rating,customer_contact,comment,customer_phone",
     );
     expect(text).toContain(
-      '2026-10-14T20:15:00.000Z,Terraza,mesa-4,abc123,,,"slow, and ""rude""\nnever again"',
+      '2026-10-14T20:15:00.000Z,Terraza,mesa-4,abc123,,,"slow, and ""rude""\nnever again",',
     );
     expect(text).toContain(`"'=HYPERLINK(""http://evil.example"")"`);
     expect(text.endsWith("\n")).toBe(true);

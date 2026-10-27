@@ -855,9 +855,9 @@ export const listLinks: Handler<{
   const table = qualifyTable(tenant.schemaName, "links");
 
   const rows = await withClient(c.env, async (client) => {
-    const res = await client.query<LinkRow & { clicks_count: number; is_active: boolean; expires_at: string | null; updated_at: string; location_id: string | null; location_name: string | null }>(
+    const res = await client.query<LinkRow & { clicks_count: number; is_active: boolean; expires_at: string | null; updated_at: string; location_id: string | null; location_name: string | null; is_gated: boolean | null }>(
       `SELECT l.id, l.short_code, l.original_url, l.title, l.client_ref, l.clicks_count,
-              l.is_active, l.expires_at, l.created_at, l.updated_at,
+              l.is_active, l.is_gated, l.expires_at, l.created_at, l.updated_at,
               l.location_id, loc.name AS location_name
        FROM ${table} l
        LEFT JOIN public.locations loc ON loc.id = l.location_id
@@ -882,6 +882,10 @@ export const listLinks: Handler<{
       location_name: r.location_name ?? null,
       clicks_count: r.clicks_count,
       is_active: r.is_active,
+      // The dashboard's review-screen checkbox reads this. Coerced so a row the
+      // driver hands back without the column still renders as "straight to
+      // destination" — the same thing the redirect does with it.
+      is_gated: r.is_gated === true,
       expires_at: r.expires_at,
       created_at: r.created_at,
       updated_at: r.updated_at,

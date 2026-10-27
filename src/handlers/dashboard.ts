@@ -522,6 +522,15 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       color: var(--ink-soft);
       margin-top: 0.375rem;
     }
+    .check-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 0.75rem;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .check-row input[type="checkbox"] { width: 1.125rem; height: 1.125rem; margin: 0; flex: none; accent-color: var(--tag); }
     .gap-top { margin-top: 1rem; }
     .gap-top-sm { margin-top: 0.5rem; }
   </style>
@@ -704,6 +713,20 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         <input type="text" id="slug" placeholder="cafe-central" maxlength="32" pattern="[A-Za-z0-9_-]+">
         <label for="title">Title (optional)</label>
         <input type="text" id="title" placeholder="My awesome link" maxlength="200">
+        <!--
+          THE REVIEW SCREEN IS OPT-IN.
+
+          Unchecked, a scan is a plain 302 to the destination — for a Google
+          review link, the customer lands on Google's own form. Checked, the
+          scan shows our review screen first (stars, Google button, private
+          comment). Only checked links feed the satisfaction panel, because
+          only they record anything; the help text says so.
+        -->
+        <label class="check-row">
+          <input type="checkbox" id="gated">
+          <span>Show the review screen before redirecting</span>
+        </label>
+        <p class="field-help">Off: the scan goes straight to the destination. On: customers see the star rating and can leave you a private comment. Only links with this on feed the satisfaction panel.</p>
         <button type="submit">Shorten</button>
       </form>
       <div id="create-msg" class="message"></div>
@@ -887,6 +910,15 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         <input type="number" id="bulk-count" min="1" max="200" step="1" value="10">
         <label for="bulk-label" class="gap-top-sm">Label for this batch <span class="field-note">(optional)</span></label>
         <input type="text" id="bulk-label" maxlength="200" placeholder="e.g. Main room — tables 1 to 10">
+        <label class="check-row gap-top-sm">
+          <input type="checkbox" id="bulk-gated">
+          <span>Show the review screen before redirecting</span>
+        </label>
+        <p class="field-help">
+          Off: once a destination is loaded, scans go straight to it. On:
+          customers see the star rating and can leave a private comment — and
+          only these cards feed the satisfaction panel. Changeable per card later.
+        </p>
         <p class="field-help">
           Printed under the code on every card, and written to the sheet's CSV, so
           the designer knows which sticker is which before cutting. One field for
@@ -1012,6 +1044,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
             ...(urlValue ? { original_url: urlValue } : {}),
             title: document.getElementById("title").value || undefined,
             slug: slugValue || undefined,
+            is_gated: document.getElementById("gated").checked,
           });
 
           if (!res.ok) {
@@ -1025,6 +1058,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           document.getElementById("url").value = "";
           document.getElementById("title").value = "";
           document.getElementById("slug").value = "";
+          document.getElementById("gated").checked = false;
           msg.className = "message success";
           // A card and a link are different objects, and saying "Link created!" for one
           // that has nowhere to point yet is a small lie the owner discovers
@@ -1229,16 +1263,18 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         msg.textContent = "";
 
         try {
-          // No destination, and \`is_gated\` on: a card whose QR forwards
-          // straight past the gate records nothing, and the panel this product
-          // is measured by would stay empty.
+          // No destination, and \`is_gated\` as the owner chose it. It used to be
+          // forced on; it is opt-in now (odd/tasks/review-screen-refresh.md, S1)
+          // and the modal's help text states the cost: an ungated card goes
+          // straight to its destination and records nothing for the panel.
           // The label is applied to EVERY card in the batch on purpose. It is
           // one field for the whole run rather than one per card, because the
           // question being asked is "where does this batch go" — ten stickers
           // for the main room — not ten separate identities.
           const label = document.getElementById("bulk-label").value.trim();
+          const gated = document.getElementById("bulk-gated").checked;
           const links = Array.from({ length: count }, () => ({
-            is_gated: true,
+            is_gated: gated,
             ...(label ? { client_ref: label } : {}),
           }));
           const res = await window.__api("POST", "/api/links/batch", { links });
@@ -1423,6 +1459,11 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           case "toggle":
             toggleLink(el.dataset.id, el.dataset.active === "true");
             break;
+          case "toggle-gate":
+            // A click on a checkbox has already flipped it, so \`checked\` is
+            // the state the owner asked for.
+            setGated(el.dataset.id, el.checked);
+            break;
           case "load-destination":
             loadDestination(el.dataset.id);
             break;
@@ -1591,6 +1632,16 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
                       <p class="field-note">This card has no destination yet. Anyone who scans it opens a "not configured" page. Load the URL whenever it is settled — the printed sticker does not need reprinting.</p>
                     </div>\` : ""}
                     <div class="field">
+                      <label>Review screen</label>
+                      <label class="check-row">
+                        <input type="checkbox" data-action="toggle-gate" data-id="\${esc(l.id)}"\${l.is_gated ? " checked" : ""}>
+                        <span>Show before redirecting</span>
+                      </label>
+                      <p class="field-note">\${l.is_gated
+                        ? "Scans show the star rating, the Google button and a private comment form."
+                        : "Scans go straight to the destination. Nothing is recorded for the satisfaction panel."}</p>
+                    </div>
+                    <div class="field">
                       <label>Tag state</label>
                       <div class="field-row">
                         <button class="btn-sm btn-outline" data-action="toggle" data-id="\${esc(l.id)}" data-active="\${!l.is_active}">\${l.is_active ? "Disable" : "Enable"}</button>
@@ -1649,6 +1700,20 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         } catch (err) {
           alert("Error: " + (err instanceof Error ? err.message : ""));
         }
+      }
+
+      // Same update path as toggleLink. The server invalidates the cached
+      // redirect, so the next scan already follows the new choice.
+      // Re-renders on failure too: the checkbox already flipped in the browser,
+      // and only a reload puts it back to what the server actually holds.
+      async function setGated(id, gated) {
+        try {
+          const res = await window.__api("PATCH", "/api/links/" + id, { is_gated: gated });
+          if (!res.ok) throw new Error("Failed");
+        } catch (err) {
+          alert("Error: " + (err instanceof Error ? err.message : ""));
+        }
+        loadLinks();
       }
 
       // Same update path as toggleLink — PATCH then re-render. An emptied field

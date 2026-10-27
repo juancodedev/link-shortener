@@ -996,6 +996,33 @@ describe("listLinks response shape", () => {
     expect(body).not.toHaveProperty("clients");
   });
 
+  it("reports whether each link shows the review screen", async () => {
+    const base = {
+      short_code: "aaa1111",
+      original_url: "https://example.com",
+      title: null,
+      client_ref: null,
+      clicks_count: 0,
+      is_active: true,
+      expires_at: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-02T00:00:00Z",
+    };
+    const calls = mockRecordingDb([
+      [
+        { ...base, id: "gated", is_gated: true },
+        { ...base, id: "direct", is_gated: false },
+      ],
+    ]);
+
+    const { c, jsonFn } = mockContext();
+    await listLinks(c as any);
+
+    expect(calls[0]!.sql).toMatch(/l\.is_gated/);
+    const body = jsonFn.mock.calls[0]![0] as any[];
+    expect(body.map((l) => l.is_gated)).toEqual([true, false]);
+  });
+
   it("serializes to a top-level JSON array on the wire", async () => {
     mockRecordingDb([
       [

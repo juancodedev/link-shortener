@@ -256,7 +256,7 @@ describe("links table — no inline event handlers", () => {
 
     const actions = [...row.matchAll(/data-action="([^"]+)"/g)].map((m) => m[1]);
     expect(actions.sort()).toEqual(
-      ["copy", "delete", "metrics", "qr", "save-client-ref", "toggle"].sort(),
+      ["copy", "delete", "metrics", "qr", "save-client-ref", "toggle", "toggle-gate"].sort(),
     );
   });
 
@@ -266,7 +266,7 @@ describe("links table — no inline event handlers", () => {
     expect(script).toMatch(/getElementById\("links-body"\)\s*\n?\s*\.addEventListener\("click"/);
     expect(script).toContain('closest("[data-action]")');
     // Every action is dispatched from the dataset, never from a string literal.
-    for (const action of ["copy", "qr", "metrics", "save-client-ref", "toggle", "delete"]) {
+    for (const action of ["copy", "qr", "metrics", "save-client-ref", "toggle", "toggle-gate", "delete"]) {
       expect(script).toMatch(new RegExp(`case "${action}":`));
     }
   });
@@ -614,7 +614,7 @@ describe("Phase 2 markup did not regress the escaping and delegation guards", ()
 
     const actions = [...row.matchAll(/data-action="([^"]+)"/g)].map((m) => m[1]);
     expect(actions.sort()).toEqual(
-      ["copy", "delete", "metrics", "qr", "save-client-ref", "toggle"].sort(),
+      ["copy", "delete", "metrics", "qr", "save-client-ref", "toggle", "toggle-gate"].sort(),
     );
   });
 
@@ -914,9 +914,9 @@ describe("the dashboard script never triggers a load at parse time", () => {
     );
 
     // One call per handler that changes the table: create form submit, bulk
-    // create, load-destination, toggle, client-ref save, delete. A parse-time
-    // call anywhere pushes this to seven.
-    expect(statements).toHaveLength(6);
+    // create, load-destination, toggle, review-screen toggle, client-ref save,
+    // delete. A parse-time call anywhere pushes this to eight.
+    expect(statements).toHaveLength(7);
     expect(statements.every((indent) => indent > TOP_LEVEL_INDENT)).toBe(true);
   });
 
@@ -1350,7 +1350,7 @@ describe("the dashboard can manufacture cards in bulk", () => {
     // destination only if the owner typed a label. `...(label ? ...)` is what
     // makes "no destination" the default rather than a special case.
     expect(script).toContain("Array.from({ length: count }, () => ({");
-    expect(script).toContain("is_gated: true");
+    expect(script).toContain("is_gated: gated");
     // Scoped to the BULK BLOCK, not the whole script.
     //
     // The dashboard has two creation paths and only one of them must omit the
@@ -1362,13 +1362,17 @@ describe("the dashboard can manufacture cards in bulk", () => {
     expect(codeOnly(script.slice(start, end))).not.toContain("original_url:");
   });
 
-  it("creates them GATED, or the panel stays empty", async () => {
+  it("lets the owner choose the review screen for the batch, OFF by default", async () => {
+    const html = await serve();
     const script = await clientScript();
 
-    // The single most consequential field in the flow. A card whose QR forwards
-    // straight past the gate records nothing and the satisfaction panel reads
-    // zero forever, which is the bug three PRs ago.
-    expect(script).toContain("is_gated: true");
+    // The owner decides now (odd/tasks/review-screen-refresh.md, S1). Unchecked
+    // means the card goes straight to Google; the help text says that such
+    // cards do not feed the satisfaction panel, which is the trade being made.
+    const box = html.match(/<input[^>]*id="bulk-gated"[^>]*>/)?.[0] ?? "";
+    expect(box).toContain('type="checkbox"');
+    expect(box).not.toContain("checked");
+    expect(script).toContain('document.getElementById("bulk-gated").checked');
   });
 
   it("posts to the batch endpoint that already exists", async () => {
@@ -1505,13 +1509,14 @@ describe("the dashboard can manufacture cards in bulk", () => {
     // code under test.
     expect(wired).not.toMatch(/data-action=/);
 
-    // And the switch carries exactly seven record actions, no more. Pinned
+    // And the switch carries exactly eight record actions, no more. Pinned
     // because this is the list that decides what a row may do: an action added
     // here reaches the handler with a row's own id, so an unlisted one silently
     // does nothing while looking wired.
     //
     // load-destination joined the six on purpose — it IS a record action, and it
-    // is the second half of the flow this PR completes.
+    // is the second half of the flow this PR completes. toggle-gate joined for
+    // the review-screen checkbox (odd/tasks/review-screen-refresh.md, S1).
     const actions = [...script.matchAll(/case "([a-z-]+)":/g)].map((m) => m[1]);
     expect(new Set(actions)).toEqual(
       new Set([
@@ -1521,6 +1526,7 @@ describe("the dashboard can manufacture cards in bulk", () => {
         "save-client-ref",
         "load-destination",
         "toggle",
+        "toggle-gate",
         "delete",
       ]),
     );
@@ -1922,5 +1928,48 @@ describe("the feedback inbox, when the server refuses", () => {
     expect(render).not.toHaveBeenCalled();
     expect(body.innerHTML).toContain("Could not load comments.");
     expect(consoleStub.error).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The review-screen checkbox (odd/tasks/review-screen-refresh.md, S1)
+//
+// `is_gated` decides whether a scan shows the review screen or goes straight
+// to the destination. Unchecked is the default everywhere.
+// ---------------------------------------------------------------------------
+
+describe("review screen checkbox", () => {
+  it("is on the create form, unchecked by default", async () => {
+    const html = await serve();
+    const box = html.match(/<input[^>]*id="gated"[^>]*>/)?.[0] ?? "";
+    expect(box).toContain('type="checkbox"');
+    expect(box).not.toContain("checked");
+  });
+
+  it("sends the choice with the create request", async () => {
+    const script = await clientScript();
+    expect(script).toContain('is_gated: document.getElementById("gated").checked');
+  });
+
+  it("shows a checked box on a row whose link shows the review screen", async () => {
+    const row = await renderRow({ is_gated: true });
+    const box = row.match(/<input[^>]*data-action="toggle-gate"[^>]*>/)?.[0] ?? "";
+    expect(box).toContain('type="checkbox"');
+    expect(box).toContain('data-id="link-uuid"');
+    expect(box).toMatch(/\schecked/);
+  });
+
+  it("shows an unchecked box on a row that goes straight to the destination", async () => {
+    const row = await renderRow({ is_gated: false });
+    const box = row.match(/<input[^>]*data-action="toggle-gate"[^>]*>/)?.[0] ?? "";
+    expect(box).toContain('type="checkbox"');
+    expect(box).not.toMatch(/\schecked/);
+  });
+
+  it("updates the link through PATCH when the box changes", async () => {
+    const script = await clientScript();
+    expect(script).toContain('case "toggle-gate":');
+    const fn = extractFunction(script, "setGated");
+    expect(fn).toContain('window.__api("PATCH", "/api/links/" + id, { is_gated: gated })');
   });
 });

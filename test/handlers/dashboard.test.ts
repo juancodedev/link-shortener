@@ -2195,7 +2195,9 @@ describe("comments can be filtered by business or branch", () => {
   it("reloads the comments when the chosen filter no longer exists", async () => {
     const fn = extractFunction(await clientScript(), "fillFeedbackFilter");
     const reload = vi.fn();
-    const options: string[] = [];
+    // Before the rebuild the chosen option is still in the list, as in a real
+    // <select>; the rebuild is what drops it.
+    const options: string[] = ["", "b:gone"];
     const select = {
       _value: "b:gone",
       get value() { return options.includes(this._value) ? this._value : ""; },

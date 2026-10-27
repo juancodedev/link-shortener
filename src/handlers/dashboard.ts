@@ -286,7 +286,9 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     }
     .message.success { display: block; background: var(--live-wash); color: var(--live); border: 1px solid var(--live-edge); }
     .message.error { display: block; background: var(--retired-wash); color: var(--retired-ink); border: 1px solid var(--retired-edge); }
-    .row-actions { display: flex; gap: 0.25rem; flex-wrap: wrap; }
+    /* nowrap: Edit and Del stay on one line. Wrapping is what once stacked
+       four buttons vertically and pushed this column off the card. */
+    .row-actions { display: flex; gap: 0.25rem; flex-wrap: nowrap; }
     @media (min-width: 768px) { .row-actions { gap: 0.375rem; } }
     .empty { text-align: center; color: var(--ink-faint); padding: 2rem; }
     .empty-cell { color: var(--ink-faint); text-align: center; }
@@ -546,6 +548,9 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     .biz-branch { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; padding: 0.25rem 0; flex-wrap: wrap; }
     .feedback-code { font-family: "SF Mono", "Fira Code", monospace; font-size: 0.75rem; color: var(--tag); }
     #links-table .badge, .owner-business { white-space: nowrap; }
+    /* Narrow screens: Business/branch, URL and Opens step aside so Clicks,
+       Status and the actions stay on the card. The panel still shows all three. */
+    @media (max-width: 767px) { .hide-sm { display: none; } }
     .badge-gated { background: var(--kraft-deep); color: var(--tag); }
     .badge-direct { background: var(--kraft); color: var(--ink-soft); }
     .owner-business { display: block; font-weight: 600; color: var(--ink-strong); }
@@ -856,9 +861,9 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         <thead>
           <tr>
             <th>Short Code</th>
-            <th>Business / branch</th>
-            <th>URL</th>
-            <th>Opens</th>
+            <th class="hide-sm">Business / branch</th>
+            <th class="hide-sm">URL</th>
+            <th class="hide-sm">Opens</th>
             <th>Clicks</th>
             <th>Status</th>
             <th></th>
@@ -1568,6 +1573,9 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           case "metrics":
             showMetrics(el.dataset.id, el.dataset.code, e);
             break;
+          case "edit":
+            openEditor(el.dataset.id, el.dataset.code, e);
+            break;
           case "save-client-ref":
             saveClientRef(el.dataset.id);
             break;
@@ -1694,16 +1702,16 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
             const shortUrl = l.short_url || "";
             return \`<tr>
               <td><span class="code" data-action="copy" data-url="\${esc(shortUrl)}" data-code="\${esc(l.short_code)}" title="Click to copy \${esc(shortUrl)}">\${esc(l.short_code)}</span></td>
-              <td>\${l.location_name
+              <td class="hide-sm">\${l.location_name
                 ? \`<span class="owner-business">\${esc(l.business_name || "No business")}</span><span class="owner-branch">\${esc(l.location_name)}</span>\`
                 : '<span class="owner-none">Unassigned</span>'}</td>
-              <td><span class="url-trunc" title="\${esc(l.original_url)}">\${esc(l.original_url)}</span></td>
-              <td>\${l.is_gated
+              <td class="hide-sm"><span class="url-trunc" title="\${esc(l.original_url)}">\${esc(l.original_url)}</span></td>
+              <td class="hide-sm">\${l.is_gated
                 ? '<span class="badge badge-gated">Review screen</span>'
                 : '<span class="badge badge-direct">Direct</span>'}</td>
               <td><a href="#" data-action="metrics" data-id="\${esc(l.id)}" data-code="\${esc(l.short_code)}" class="clicks-link">\${esc(l.clicks_count)}</a></td>
               <td><span class="badge badge-\${status}">\${status}</span></td>
-              <td><div class="row-actions"><button class="btn-sm btn-danger" data-action="delete" data-id="\${esc(l.id)}">Del</button></div></td>
+              <td><div class="row-actions"><button class="btn-sm btn-outline" data-action="edit" data-id="\${esc(l.id)}" data-code="\${esc(l.short_code)}">Edit</button><button class="btn-sm btn-danger" data-action="delete" data-id="\${esc(l.id)}">Del</button></div></td>
             </tr>
             <tr id="metrics-\${esc(l.id)}" style="display:none;">
               <td colspan="7" class="flush-cell">
@@ -2072,6 +2080,20 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         if (el.dataset.bizAction === "add-branch") addBranch(el.dataset.businessId);
         else if (el.dataset.bizAction === "move-branch") moveBranch(el.dataset.locationId);
       });
+
+      /**
+       * The row's Edit button. Opens the same panel the clicks count opens —
+       * destination, branch, review screen — and puts the cursor in the
+       * destination field. Unlike the clicks count it never CLOSES the panel:
+       * pressing Edit on an open row should keep it open.
+       */
+      function openEditor(id, code, e) {
+        e.preventDefault();
+        const row = document.getElementById("metrics-" + id);
+        if (row && row.style.display === "none") showMetrics(id, code, e);
+        const input = document.getElementById("dest-" + id);
+        if (input) input.focus();
+      }
 
       async function showMetrics(linkId, code, e) {
         e.preventDefault();

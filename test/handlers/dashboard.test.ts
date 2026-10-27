@@ -258,7 +258,7 @@ describe("links table — no inline event handlers", () => {
 
     const actions = [...row.matchAll(/data-action="([^"]+)"/g)].map((m) => m[1]);
     expect(actions.sort()).toEqual(
-      ["copy", "delete", "metrics", "qr", "save-branch", "save-client-ref", "save-destination", "toggle", "toggle-gate"].sort(),
+      ["copy", "delete", "edit", "metrics", "qr", "save-branch", "save-client-ref", "save-destination", "toggle", "toggle-gate"].sort(),
     );
   });
 
@@ -268,7 +268,7 @@ describe("links table — no inline event handlers", () => {
     expect(script).toMatch(/getElementById\("links-body"\)\s*\n?\s*\.addEventListener\("click"/);
     expect(script).toContain('closest("[data-action]")');
     // Every action is dispatched from the dataset, never from a string literal.
-    for (const action of ["copy", "qr", "metrics", "save-client-ref", "save-destination", "save-branch", "toggle", "toggle-gate", "delete"]) {
+    for (const action of ["copy", "qr", "metrics", "edit", "save-client-ref", "save-destination", "save-branch", "toggle", "toggle-gate", "delete"]) {
       expect(script).toMatch(new RegExp(`case "${action}":`));
     }
   });
@@ -616,7 +616,7 @@ describe("Phase 2 markup did not regress the escaping and delegation guards", ()
 
     const actions = [...row.matchAll(/data-action="([^"]+)"/g)].map((m) => m[1]);
     expect(actions.sort()).toEqual(
-      ["copy", "delete", "metrics", "qr", "save-branch", "save-client-ref", "save-destination", "toggle", "toggle-gate"].sort(),
+      ["copy", "delete", "edit", "metrics", "qr", "save-branch", "save-client-ref", "save-destination", "toggle", "toggle-gate"].sort(),
     );
   });
 
@@ -1512,7 +1512,7 @@ describe("the dashboard can manufacture cards in bulk", () => {
     // code under test.
     expect(wired).not.toMatch(/data-action=/);
 
-    // And the switch carries exactly nine record actions, no more. Pinned
+    // And the switch carries exactly ten record actions, no more. Pinned
     // because this is the list that decides what a row may do: an action added
     // here reaches the handler with a row's own id, so an unlisted one silently
     // does nothing while looking wired.
@@ -1521,13 +1521,16 @@ describe("the dashboard can manufacture cards in bulk", () => {
     // is the second half of the flow this PR completes. toggle-gate joined for
     // the review-screen checkbox (odd/tasks/review-screen-refresh.md, S1).
     // load-destination became save-destination (any link's URL is editable
-    // now) and save-branch joined (odd/tasks/business-branches.md, S4).
+    // now) and save-branch joined (odd/tasks/business-branches.md, S4). edit
+    // joined because the panel was only reachable through the clicks count,
+    // and the operator could not find it.
     const actions = [...script.matchAll(/case "([a-z-]+)":/g)].map((m) => m[1]);
     expect(new Set(actions)).toEqual(
       new Set([
         "copy",
         "qr",
         "metrics",
+        "edit",
         "save-client-ref",
         "save-destination",
         "save-branch",
@@ -2217,5 +2220,35 @@ describe("comments can be filtered by business or branch", () => {
 
   it("fills the filter from the businesses and branches it loaded", async () => {
     expect(extractFunction(await clientScript(), "loadBranches")).toContain("fillFeedbackFilter()");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// An explicit Edit button
+//
+// The editing panel (destination, branch, review screen) only opened from the
+// clicks count. Reported from production: "aun no veo el boton de editar".
+// ---------------------------------------------------------------------------
+
+describe("each row has an Edit button", () => {
+  it("renders a visible Edit button beside Del, carrying the row's id", async () => {
+    const row = await renderRow();
+    const actions = row.slice(row.indexOf('class="row-actions"'));
+    const edit = actions.match(/<button[^>]*data-action="edit"[^>]*>([^<]*)<\/button>/);
+    expect(edit?.[1]).toBe("Edit");
+    expect(edit?.[0]).toContain('data-id="link-uuid"');
+    expect(edit?.[0]).toContain('data-code="abc1234"');
+    expect(actions.indexOf('data-action="edit"')).toBeLessThan(actions.indexOf('data-action="delete"'));
+  });
+
+  it("opens the same panel as the clicks count and focuses the destination", async () => {
+    const script = await clientScript();
+    const sw = extractFunction(script, "onLinksTableClick");
+    const edit = sw.slice(sw.indexOf('case "edit":'), sw.indexOf("break;", sw.indexOf('case "edit":')));
+    expect(edit).toContain("openEditor(el.dataset.id, el.dataset.code, e)");
+    const fn = extractFunction(script, "openEditor");
+    expect(fn).toContain("showMetrics(id, code, e)");
+    expect(fn).toContain('document.getElementById("dest-" + id)');
+    expect(fn).toContain(".focus()");
   });
 });

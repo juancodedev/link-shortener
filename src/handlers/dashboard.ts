@@ -112,7 +112,7 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       .col-side { grid-area: side; }
       /* Scoped to .layout so it outranks the base .url-trunc rule, which
          comes later in this sheet. */
-      .layout .url-trunc { max-width: 28rem; }
+      .layout .url-trunc { max-width: 20rem; }
     }
     nav {
       background: var(--sticker);
@@ -545,6 +545,7 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     .biz-branches { list-style: none; margin: 0.375rem 0 0.5rem; }
     .biz-branch { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; padding: 0.25rem 0; flex-wrap: wrap; }
     .feedback-code { font-family: "SF Mono", "Fira Code", monospace; font-size: 0.75rem; color: var(--tag); }
+    #links-table .badge, .owner-business { white-space: nowrap; }
     .badge-gated { background: var(--kraft-deep); color: var(--tag); }
     .badge-direct { background: var(--kraft); color: var(--ink-soft); }
     .owner-business { display: block; font-weight: 600; color: var(--ink-strong); }

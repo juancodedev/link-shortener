@@ -2192,6 +2192,27 @@ describe("comments can be filtered by business or branch", () => {
     expect(extractFunction(script, "exportFeedbackCsv")).toContain('"/api/review-gate/feedback.csv" + feedbackQuery()');
   });
 
+  it("reloads the comments when the chosen filter no longer exists", async () => {
+    const fn = extractFunction(await clientScript(), "fillFeedbackFilter");
+    const reload = vi.fn();
+    const options: string[] = [];
+    const select = {
+      _value: "b:gone",
+      get value() { return options.includes(this._value) ? this._value : ""; },
+      set value(v: string) { this._value = v; },
+      set textContent(_v: string) { options.length = 0; },
+      add: (o: { value: string }) => options.push(o.value),
+    };
+    new Function("window", "document", "Option", "loadFeedbackInbox", `${fn}\nfillFeedbackFilter();`)(
+      { __businesses: [], __branches: [] },
+      { getElementById: () => select },
+      function (_l: string, value: string) { return { value }; },
+      reload,
+    );
+    expect(select.value).toBe("");
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
   it("fills the filter from the businesses and branches it loaded", async () => {
     expect(extractFunction(await clientScript(), "loadBranches")).toContain("fillFeedbackFilter()");
   });

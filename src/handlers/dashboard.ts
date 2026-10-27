@@ -1227,7 +1227,12 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           .filter((l) => !l.business_id)
           .forEach((l) => select.add(new Option(l.name + " (no business)", "l:" + l.id)));
         select.value = current;
-        if (select.value !== current) select.value = "";
+        // The chosen business or branch no longer exists: fall back to all,
+        // and reload, or the list would stay filtered under an "All" label.
+        if (select.value !== current) {
+          select.value = "";
+          loadFeedbackInbox();
+        }
       }
 
       document.getElementById("feedback-filter").addEventListener("change", () => loadFeedbackInbox());

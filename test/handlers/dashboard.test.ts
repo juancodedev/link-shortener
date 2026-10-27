@@ -2243,6 +2243,26 @@ describe("each row has an Edit button", () => {
     expect(actions.indexOf('data-action="edit"')).toBeLessThan(actions.indexOf('data-action="delete"'));
   });
 
+  it("opens a closed panel, never closes an open one, and always focuses the destination", async () => {
+    const fn = extractFunction(await clientScript(), "openEditor");
+    const run = (display: string) => {
+      const showMetrics = vi.fn();
+      const focus = vi.fn();
+      const els: Record<string, unknown> = { "metrics-l1": { style: { display } }, "dest-l1": { focus } };
+      new Function("document", "showMetrics", `${fn}\nopenEditor("l1", "abc", { preventDefault() {} });`)(
+        { getElementById: (id: string) => els[id] },
+        showMetrics,
+      );
+      return { showMetrics, focus };
+    };
+    const closed = run("none");
+    expect(closed.showMetrics).toHaveBeenCalledTimes(1);
+    expect(closed.focus).toHaveBeenCalledTimes(1);
+    const open = run("");
+    expect(open.showMetrics).not.toHaveBeenCalled();
+    expect(open.focus).toHaveBeenCalledTimes(1);
+  });
+
   it("opens the same panel as the clicks count and focuses the destination", async () => {
     const script = await clientScript();
     const sw = extractFunction(script, "onLinksTableClick");

@@ -131,37 +131,45 @@ describe("PATCH /api/businesses/:id", () => {
   it("renames a local, scoped by tenant", async () => {
     const calls = mockDb(() => [BUSINESS_ROW]);
 
-    const { c, jsonFn } = mockContext({ name: "Café Central SpA" }, { id: "biz-1" });
+    const { c, jsonFn } = mockContext({ name: "Café Central SpA" }, { id: "55555555-5555-4555-8555-555555555555" });
     await updateBusiness(c as any, vi.fn() as any);
 
     expect(calls[0]!.sql).toMatch(/UPDATE public\.businesses SET name = \$1/);
     expect(calls[0]!.sql).toMatch(/WHERE id = \$2 AND tenant_id = \$3/);
-    expect(calls[0]!.params).toEqual(["Café Central SpA", "biz-1", "tenant-uuid"]);
+    expect(calls[0]!.params).toEqual(["Café Central SpA", "55555555-5555-4555-8555-555555555555", "tenant-uuid"]);
     expect(jsonFn).toHaveBeenCalledWith({ ok: true });
   });
 
   it("switches a local off", async () => {
     const calls = mockDb(() => [BUSINESS_ROW]);
-    const { c } = mockContext({ is_active: false }, { id: "biz-1" });
+    const { c } = mockContext({ is_active: false }, { id: "55555555-5555-4555-8555-555555555555" });
     await updateBusiness(c as any, vi.fn() as any);
     expect(calls[0]!.params[0]).toBe(false);
   });
 
   it("404s a local the tenant does not own", async () => {
     mockDb(() => []);
-    const { c } = mockContext({ name: "X" }, { id: "biz-other" });
+    const { c } = mockContext({ name: "X" }, { id: "66666666-6666-4666-8666-666666666666" });
     await expect(updateBusiness(c as any, vi.fn() as any)).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it("404s an id that is not a uuid, without reaching Postgres", async () => {
+    // Postgres would refuse the uuid cast and surface as a 500.
+    const calls = mockDb(() => []);
+    const { c } = mockContext({ name: "X" }, { id: "not-a-uuid" });
+    await expect(updateBusiness(c as any, vi.fn() as any)).rejects.toBeInstanceOf(NotFoundError);
+    expect(calls).toHaveLength(0);
   });
 
   it("rejects an update with nothing to change", async () => {
     mockDb(() => []);
-    const { c } = mockContext({}, { id: "biz-1" });
+    const { c } = mockContext({}, { id: "55555555-5555-4555-8555-555555555555" });
     await expect(updateBusiness(c as any, vi.fn() as any)).rejects.toBeInstanceOf(ValidationError);
   });
 
   it("rejects a wrong-typed is_active", async () => {
     mockDb(() => []);
-    const { c } = mockContext({ is_active: "no" }, { id: "biz-1" });
+    const { c } = mockContext({ is_active: "no" }, { id: "55555555-5555-4555-8555-555555555555" });
     await expect(updateBusiness(c as any, vi.fn() as any)).rejects.toBeInstanceOf(ValidationError);
   });
 });

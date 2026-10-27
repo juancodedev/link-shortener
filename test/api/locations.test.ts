@@ -358,6 +358,15 @@ describe("locations belong to a business", () => {
     expect(calls[0]!.params).toContain(null);
   });
 
+  it("refuses to move a branch into another tenant's business, without updating", async () => {
+    const calls = mockDb((sql) => (sql.includes("FROM public.businesses") ? [] : [LOCATION_ROW]));
+    const { c } = mockContext({ business_id: "44444444-4444-4444-8444-444444444444" }, { id: "loc-1" });
+    await expect(updateLocation(c as any)).rejects.toMatchObject({ code: "invalid_business_id" });
+    const check = calls.find((q) => q.sql.includes("FROM public.businesses"))!;
+    expect(check.params).toEqual(["44444444-4444-4444-8444-444444444444", "tenant-uuid"]);
+    expect(calls.find((q) => q.sql.includes("UPDATE"))).toBeUndefined();
+  });
+
   it("moves a branch to another business, or detaches it with null", async () => {
     const calls = mockDb((sql) => (sql.includes("FROM public.businesses") ? [{ id: "biz-2" }] : [LOCATION_ROW]));
     const { c } = mockContext({ business_id: "33333333-3333-4333-8333-333333333333" }, { id: "loc-1" });

@@ -89,13 +89,30 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       line-height: 1.6;
       min-height: 100dvh;
     }
+    /* Wide, not unbounded: past ~1440px a table row gets too long for the eye
+       to follow from the code to its actions. */
     .container {
-      max-width: 720px;
+      max-width: 1440px;
       margin: 0 auto;
       padding: 1rem;
     }
     @media (min-width: 768px) {
-      .container { padding: 1.5rem; }
+      .container { padding: 1.5rem 2rem; }
+    }
+    .layout { display: grid; grid-template-columns: minmax(0, 1fr); column-gap: 1.5rem; }
+    @media (min-width: 1024px) {
+      .layout {
+        grid-template-columns: minmax(0, 1fr) 22rem;
+        grid-template-areas: "main side";
+        align-items: start;
+      }
+      .col-main { grid-area: main; }
+      /* Not sticky: the side column can be taller than a laptop screen, and a
+         sticky column that tall hides its own bottom until the page ends. */
+      .col-side { grid-area: side; }
+      /* Scoped to .layout so it outranks the base .url-trunc rule, which
+         comes later in this sheet. */
+      .layout .url-trunc { max-width: 28rem; }
     }
     nav {
       background: var(--sticker);
@@ -522,6 +539,15 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       color: var(--ink-soft);
       margin-top: 0.375rem;
     }
+    .check-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 0.75rem;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .check-row input[type="checkbox"] { width: 1.125rem; height: 1.125rem; margin: 0; flex: none; accent-color: var(--tag); }
     .gap-top { margin-top: 1rem; }
     .gap-top-sm { margin-top: 0.5rem; }
   </style>
@@ -670,6 +696,16 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
   const activeLinkLimit = resolveMaxActiveLinks(c.env);
 
   const body = `
+    <!--
+      TWO COLUMNS ON A WIDE SCREEN, ONE ON A PHONE.
+
+      The side column holds what the owner CONFIGURES (create a link, make
+      cards, set the feedback address); the main column holds what they READ
+      (satisfaction, links, comments). The side column comes first in the
+      markup so a phone still opens on "Create Short Link", as it always has.
+    -->
+    <div class="layout">
+    <div class="col-side">
     <div class="card">
       <h3>Create Short Link</h3>
       <form id="create-form">
@@ -704,6 +740,20 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         <input type="text" id="slug" placeholder="cafe-central" maxlength="32" pattern="[A-Za-z0-9_-]+">
         <label for="title">Title (optional)</label>
         <input type="text" id="title" placeholder="My awesome link" maxlength="200">
+        <!--
+          THE REVIEW SCREEN IS OPT-IN.
+
+          Unchecked, a scan is a plain 302 to the destination — for a Google
+          review link, the customer lands on Google's own form. Checked, the
+          scan shows our review screen first (stars, Google button, private
+          comment). Only checked links feed the satisfaction panel, because
+          only they record anything; the help text says so.
+        -->
+        <label class="check-row">
+          <input type="checkbox" id="gated">
+          <span>Show the review screen before redirecting</span>
+        </label>
+        <p class="field-help">Off: the scan goes straight to the destination. On: customers see the star rating and can leave you a private comment. Only links with this on feed the satisfaction panel.</p>
         <button type="submit">Shorten</button>
       </form>
       <div id="create-msg" class="message"></div>
@@ -720,6 +770,50 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       <button type="button" id="open-bulk" class="btn-sm btn-outline">
         Create cards in bulk...
       </button>
+    </div>
+
+    <!--
+      WHERE FEEDBACK SHOULD GO.
+
+      A card's QR leads to the review gate. A customer can leave a private
+      comment there, and it lands in analytics.tag_feedback and shows up in the
+      satisfaction panel below.
+
+      They can also record here where that should be delivered.
+
+      IT DOES NOT SEND ANYTHING YET. The address is stored, shown and exported
+      into the print sheet's CSV, and nothing is emailed from it. That is the
+      honest state of this field, and the label says so, because a green
+      dashboard implying "reviews are being emailed" is worse than no field at
+      all: an owner would stop checking the panel.
+
+      Wired as static listeners with the other form controls, not through the
+      delegated switch — that switch is for record actions, and this acts on no
+      record.
+    -->
+    <div class="card" id="feedback-email-card">
+      <h3>Feedback email</h3>
+      <p class="field-help">
+        Where you would like private customer comments delivered. Stored now;
+        nothing is emailed yet — comments still arrive in the satisfaction panel
+        below.
+      </p>
+      <label for="feedback-email">Email address</label>
+      <input type="email" id="feedback-email" placeholder="you@yourbusiness.com"
+             autocomplete="email" maxlength="254">
+      <div id="feedback-email-msg" class="message"></div>
+      <button type="button" id="feedback-email-save" class="btn-sm btn-primary gap-top-sm">Save</button>
+    </div>
+
+    </div>
+    <div class="col-main">
+    <!-- Review gate. Presentable as a screenshot on purpose: this screen is
+         what the owner forwards as their monthly report, so every figure here
+         carries its own qualification in the markup rather than in a tooltip
+         that a screenshot would not capture. -->
+    <div class="card" id="gate-card" style="display:none;">
+      <h3>Customer satisfaction</h3>
+      <div id="gate-body"><div class="loading">Loading...</div></div>
     </div>
 
     <div class="card">
@@ -756,6 +850,15 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       <p class="estimate-note"><strong>About visitor figures:</strong> ${VISITOR_ESTIMATE_CAVEAT}</p>
     </div>
 
+    <div class="card" id="feedback-card">
+      <div class="feedback-head">
+        <h3>What customers wrote</h3>
+        <button type="button" id="feedback-export" class="btn-sm">Download CSV</button>
+      </div>
+      <div id="feedback-export-msg" class="message"></div>
+      <div id="feedback-body"><div class="loading">Loading...</div></div>
+    </div>
+
     <div class="card" id="clients-card" style="display:none;">
       <h3>Stores by Client Ref</h3>
       <div class="table-wrap">
@@ -774,55 +877,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       <p class="estimate-note">${VISITOR_ESTIMATE_CAVEAT}</p>
     </div>
 
-    <!-- Review gate. Presentable as a screenshot on purpose: this screen is
-         what the owner forwards as their monthly report, so every figure here
-         carries its own qualification in the markup rather than in a tooltip
-         that a screenshot would not capture. -->
-    <!--
-      WHERE FEEDBACK SHOULD GO.
-
-      A card's QR leads to the review gate. A customer can leave a private
-      comment there, and it lands in analytics.tag_feedback and shows up in the
-      satisfaction panel below.
-
-      They can also record here where that should be delivered.
-
-      IT DOES NOT SEND ANYTHING YET. The address is stored, shown and exported
-      into the print sheet's CSV, and nothing is emailed from it. That is the
-      honest state of this field, and the label says so, because a green
-      dashboard implying "reviews are being emailed" is worse than no field at
-      all: an owner would stop checking the panel.
-
-      Wired as static listeners with the other form controls, not through the
-      delegated switch — that switch is for record actions, and this acts on no
-      record.
-    -->
-    <div class="card" id="feedback-email-card">
-      <h3>Feedback email</h3>
-      <p class="field-help">
-        Where you would like private customer comments delivered. Stored now;
-        nothing is emailed yet — comments still arrive in the satisfaction panel
-        below.
-      </p>
-      <label for="feedback-email">Email address</label>
-      <input type="email" id="feedback-email" placeholder="you@yourbusiness.com"
-             autocomplete="email" maxlength="254">
-      <div id="feedback-email-msg" class="message"></div>
-      <button type="button" id="feedback-email-save" class="btn-sm btn-primary gap-top-sm">Save</button>
     </div>
-
-    <div class="card" id="gate-card" style="display:none;">
-      <h3>Customer satisfaction</h3>
-      <div id="gate-body"><div class="loading">Loading...</div></div>
-    </div>
-
-    <div class="card" id="feedback-card">
-      <div class="feedback-head">
-        <h3>What customers wrote</h3>
-        <button type="button" id="feedback-export" class="btn-sm">Download CSV</button>
-      </div>
-      <div id="feedback-export-msg" class="message"></div>
-      <div id="feedback-body"><div class="loading">Loading...</div></div>
     </div>
 
     <!-- QR code modal -->
@@ -887,6 +942,15 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         <input type="number" id="bulk-count" min="1" max="200" step="1" value="10">
         <label for="bulk-label" class="gap-top-sm">Label for this batch <span class="field-note">(optional)</span></label>
         <input type="text" id="bulk-label" maxlength="200" placeholder="e.g. Main room — tables 1 to 10">
+        <label class="check-row gap-top-sm">
+          <input type="checkbox" id="bulk-gated">
+          <span>Show the review screen before redirecting</span>
+        </label>
+        <p class="field-help">
+          Off: once a destination is loaded, scans go straight to it. On:
+          customers see the star rating and can leave a private comment — and
+          only these cards feed the satisfaction panel. Changeable per card later.
+        </p>
         <p class="field-help">
           Printed under the code on every card, and written to the sheet's CSV, so
           the designer knows which sticker is which before cutting. One field for
@@ -1012,6 +1076,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
             ...(urlValue ? { original_url: urlValue } : {}),
             title: document.getElementById("title").value || undefined,
             slug: slugValue || undefined,
+            is_gated: document.getElementById("gated").checked,
           });
 
           if (!res.ok) {
@@ -1025,6 +1090,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           document.getElementById("url").value = "";
           document.getElementById("title").value = "";
           document.getElementById("slug").value = "";
+          document.getElementById("gated").checked = false;
           msg.className = "message success";
           // A card and a link are different objects, and saying "Link created!" for one
           // that has nowhere to point yet is a small lie the owner discovers
@@ -1229,16 +1295,18 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         msg.textContent = "";
 
         try {
-          // No destination, and \`is_gated\` on: a card whose QR forwards
-          // straight past the gate records nothing, and the panel this product
-          // is measured by would stay empty.
+          // No destination, and \`is_gated\` as the owner chose it. It used to be
+          // forced on; it is opt-in now (odd/tasks/review-screen-refresh.md, S1)
+          // and the modal's help text states the cost: an ungated card goes
+          // straight to its destination and records nothing for the panel.
           // The label is applied to EVERY card in the batch on purpose. It is
           // one field for the whole run rather than one per card, because the
           // question being asked is "where does this batch go" — ten stickers
           // for the main room — not ten separate identities.
           const label = document.getElementById("bulk-label").value.trim();
+          const gated = document.getElementById("bulk-gated").checked;
           const links = Array.from({ length: count }, () => ({
-            is_gated: true,
+            is_gated: gated,
             ...(label ? { client_ref: label } : {}),
           }));
           const res = await window.__api("POST", "/api/links/batch", { links });
@@ -1423,6 +1491,11 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           case "toggle":
             toggleLink(el.dataset.id, el.dataset.active === "true");
             break;
+          case "toggle-gate":
+            // A click on a checkbox has already flipped it, so \`checked\` is
+            // the state the owner asked for.
+            setGated(el.dataset.id, el.checked);
+            break;
           case "load-destination":
             loadDestination(el.dataset.id);
             break;
@@ -1591,6 +1664,16 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
                       <p class="field-note">This card has no destination yet. Anyone who scans it opens a "not configured" page. Load the URL whenever it is settled — the printed sticker does not need reprinting.</p>
                     </div>\` : ""}
                     <div class="field">
+                      <label>Review screen</label>
+                      <label class="check-row">
+                        <input type="checkbox" data-action="toggle-gate" data-id="\${esc(l.id)}"\${l.is_gated ? " checked" : ""}>
+                        <span>Show before redirecting</span>
+                      </label>
+                      <p class="field-note">\${l.is_gated
+                        ? "Scans show the star rating, the Google button and a private comment form."
+                        : "Scans go straight to the destination. Nothing is recorded for the satisfaction panel."}</p>
+                    </div>
+                    <div class="field">
                       <label>Tag state</label>
                       <div class="field-row">
                         <button class="btn-sm btn-outline" data-action="toggle" data-id="\${esc(l.id)}" data-active="\${!l.is_active}">\${l.is_active ? "Disable" : "Enable"}</button>
@@ -1649,6 +1732,20 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         } catch (err) {
           alert("Error: " + (err instanceof Error ? err.message : ""));
         }
+      }
+
+      // Same update path as toggleLink. The server invalidates the cached
+      // redirect, so the next scan already follows the new choice.
+      // Re-renders on failure too: the checkbox already flipped in the browser,
+      // and only a reload puts it back to what the server actually holds.
+      async function setGated(id, gated) {
+        try {
+          const res = await window.__api("PATCH", "/api/links/" + id, { is_gated: gated });
+          if (!res.ok) throw new Error("Failed");
+        } catch (err) {
+          alert("Error: " + (err instanceof Error ? err.message : ""));
+        }
+        loadLinks();
       }
 
       // Same update path as toggleLink — PATCH then re-render. An emptied field

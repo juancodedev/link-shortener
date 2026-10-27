@@ -161,6 +161,48 @@ describe("POST /api/gate", () => {
     expect(insert!.params).toContain("juan@mail.com");
   });
 
+  it("stores the phone in its own column, beside the email", async () => {
+    const calls = mockDb([[], ...DESTINATION_ROWS]);
+    const { c, flush } = mockContext(
+      "code=mesa-01&action_taken=internal_feedback&comment=Hola&customer_phone=%2B56+9+1234+5678&customer_contact=juan%40mail.com",
+    );
+
+    await gateHandler(c as any, vi.fn() as any);
+    await flush();
+
+    const insert = calls.find((q) => q.sql.includes("tag_feedback"));
+    expect(insert!.sql).toMatch(/customer_contact, customer_phone/);
+    // Param order is (tenant, link, location, rating, comment, email, phone).
+    expect(insert!.params[5]).toBe("juan@mail.com");
+    expect(insert!.params[6]).toBe("+56 9 1234 5678");
+  });
+
+  it("stores NULL for a phone the customer left blank, not an empty string", async () => {
+    const calls = mockDb([[], ...DESTINATION_ROWS]);
+    const { c, flush } = mockContext(
+      "code=mesa-01&action_taken=internal_feedback&comment=Hola&customer_phone=+++",
+    );
+
+    await gateHandler(c as any, vi.fn() as any);
+    await flush();
+
+    const insert = calls.find((q) => q.sql.includes("tag_feedback"));
+    expect(insert!.params[6]).toBeNull();
+  });
+
+  it("caps the phone length", async () => {
+    const { c, jsonFn } = mockContext(
+      `code=mesa-01&action_taken=internal_feedback&comment=Hola&customer_phone=${"9".repeat(41)}`,
+    );
+
+    await gateHandler(c as any, vi.fn() as any);
+
+    expect(jsonFn).toHaveBeenCalledWith(
+      expect.objectContaining({ error: "invalid_request" }),
+      400,
+    );
+  });
+
   it("acknowledges the private branch with the thanks page, not a JSON envelope", async () => {
     const { c, jsonFn } = mockContext(
       "code=mesa-01&action_taken=internal_feedback&comment=Hola",

@@ -46,6 +46,8 @@ import m00012 from "../../supabase/migrations/00012_owner_delete_restrict.sql?ra
 import m00013 from "../../supabase/migrations/00013_subscription_status.sql?raw";
 import m00014 from "../../supabase/migrations/00014_subscription_updated_at.sql?raw";
 import m00015 from "../../supabase/migrations/00015_original_url_nullable.sql?raw";
+import m00016 from "../../supabase/migrations/00016_business_feedback_email.sql?raw";
+import m00017 from "../../supabase/migrations/00017_feedback_customer_phone.sql?raw";
 
 interface Migration {
   version: number;
@@ -70,6 +72,8 @@ const MIGRATIONS: Migration[] = [
   { version: 13, name: "00013_subscription_status", sql: m00013 },
   { version: 14, name: "00014_subscription_updated_at", sql: m00014 },
   { version: 15, name: "00015_original_url_nullable", sql: m00015 },
+  { version: 16, name: "00016_business_feedback_email", sql: m00016 },
+  { version: 17, name: "00017_feedback_customer_phone", sql: m00017 },
 ];
 
 /** Strips `--` comments so a prose version number is never read as a claim. */
@@ -343,5 +347,23 @@ describe("00013 subscription_status", () => {
     // ADD CONSTRAINT has no IF NOT EXISTS form, so the CHECK must be guarded.
     expect(sql).toContain("tenants_subscription_status_check");
     expect(sql).toContain("IF NOT EXISTS");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 00017 — the phone is a column of its own, beside the email
+// ---------------------------------------------------------------------------
+
+describe("00017_feedback_customer_phone", () => {
+  it("adds a nullable customer_phone to tag_feedback, idempotently", () => {
+    expect(m00017).toMatch(
+      /ALTER TABLE analytics\.tag_feedback\s+ADD COLUMN IF NOT EXISTS customer_phone TEXT\s*;/i,
+    );
+    // Every existing comment has no phone; NOT NULL would fail on the first row.
+    expect(m00017).not.toMatch(/customer_phone TEXT NOT NULL/i);
+  });
+
+  it("records itself in the analytics bookkeeping table", () => {
+    expect(m00017).toMatch(/INSERT INTO analytics\._migrations[\s\S]*\(4, '00017_feedback_customer_phone'\)/);
   });
 });

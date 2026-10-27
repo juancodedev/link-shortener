@@ -34,6 +34,9 @@ const MAX_COMMENT_LENGTH = 2000;
 /** Longest accepted contact string. */
 const MAX_CONTACT_LENGTH = 200;
 
+/** Longest accepted phone. Generous for spaces and a country prefix. */
+const MAX_PHONE_LENGTH = 40;
+
 const VALID_ACTIONS = new Set(["google_redirect", "internal_feedback"]);
 
 /**
@@ -55,7 +58,10 @@ interface GateInput {
   action: string;
   rating: number | null;
   comment: string;
+  /** The email, optional and secondary. Stored in `customer_contact`. */
   contact: string;
+  /** The phone, optional but the recommended way to be called back. */
+  phone: string;
 }
 
 /**
@@ -80,6 +86,7 @@ function parseBody(raw: string, contentType: string | undefined): GateInput | nu
         comment: typeof parsed.comment === "string" ? parsed.comment : "",
         contact:
           typeof parsed.customer_contact === "string" ? parsed.customer_contact : "",
+        phone: typeof parsed.customer_phone === "string" ? parsed.customer_phone : "",
       };
     } catch {
       return null;
@@ -92,6 +99,7 @@ function parseBody(raw: string, contentType: string | undefined): GateInput | nu
     rating: toRating(params.get("rating")),
     comment: params.get("comment") ?? "",
     contact: params.get("customer_contact") ?? "",
+    phone: params.get("customer_phone") ?? "",
   };
 }
 
@@ -127,6 +135,9 @@ export const gateHandler: Handler<{
     return c.json({ error: "invalid_request", code: "invalid_request" }, 400);
   }
   if (input.contact.length > MAX_CONTACT_LENGTH) {
+    return c.json({ error: "invalid_request", code: "invalid_request" }, 400);
+  }
+  if (input.phone.length > MAX_PHONE_LENGTH) {
     return c.json({ error: "invalid_request", code: "invalid_request" }, 400);
   }
   // A private submission with no comment carries no information; accepting it
@@ -216,8 +227,8 @@ export const gateHandler: Handler<{
       if (input.action === "internal_feedback") {
         await client.query(
           `INSERT INTO analytics.tag_feedback
-             (tenant_id, link_id, location_id, rating, comment, customer_contact)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
+             (tenant_id, link_id, location_id, rating, comment, customer_contact, customer_phone)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
           [
             entry.tenantId,
             linkId,
@@ -225,6 +236,7 @@ export const gateHandler: Handler<{
             input.rating,
             input.comment.trim(),
             input.contact.trim() || null,
+            input.phone.trim() || null,
           ],
         );
       }

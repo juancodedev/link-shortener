@@ -76,9 +76,14 @@ export function renderFeedbackInbox(payload: FeedbackInboxPayload): string {
         ? `<span class="feedback-rating withheld">No rating</span>`
         : `<span class="feedback-rating">${r.rating} / 5</span>`;
 
+    // Phone first: it is the contact the screen recommends, and the one an
+    // owner uses to call back about a bad night.
+    const contacts = [r.customer_phone, r.customer_contact].filter(
+      (v): v is string => typeof v === "string" && v !== "",
+    );
     const contact =
-      r.customer_contact !== null && r.customer_contact !== ""
-        ? `<div class="feedback-contact">Contact: ${escapeHtml(r.customer_contact)}</div>`
+      contacts.length > 0
+        ? `<div class="feedback-contact">Contact: ${contacts.map(escapeHtml).join(" · ")}</div>`
         : "";
 
     const when = new Date(r.scanned_at);

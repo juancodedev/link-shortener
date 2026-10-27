@@ -539,6 +539,11 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       color: var(--ink-soft);
       margin-top: 0.375rem;
     }
+    .biz-group { border-top: 1px solid var(--edge); padding: 0.75rem 0; }
+    .biz-group:first-child { border-top: none; padding-top: 0; }
+    .biz-name { font-weight: 700; color: var(--ink-strong); }
+    .biz-branches { list-style: none; margin: 0.375rem 0 0.5rem; }
+    .biz-branch { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; padding: 0.25rem 0; flex-wrap: wrap; }
     .badge-gated { background: var(--kraft-deep); color: var(--tag); }
     .badge-direct { background: var(--kraft); color: var(--ink-soft); }
     .owner-business { display: block; font-weight: 600; color: var(--ink-strong); }
@@ -776,6 +781,25 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       <button type="button" id="open-bulk" class="btn-sm btn-outline">
         Create cards in bulk...
       </button>
+    </div>
+
+    <!--
+      BUSINESSES AND BRANCHES.
+
+      A business ("local") groups one or more branches ("sucursales"), and each
+      link belongs to a branch. Operator-only: the businesses never see this.
+      Every comment and rating is then traceable to business, branch and link
+      (odd/tasks/business-branches.md).
+    -->
+    <div class="card" id="businesses-card">
+      <h3>Businesses and branches</h3>
+      <label for="new-business-name">New business</label>
+      <div class="field-row">
+        <input type="text" id="new-business-name" maxlength="120" placeholder="e.g. Café Central">
+        <button type="button" id="add-business" class="btn-sm btn-primary">Add</button>
+      </div>
+      <div id="businesses-msg" class="message"></div>
+      <div id="businesses-body" class="gap-top"><div class="loading">Loading...</div></div>
     </div>
 
     <!--
@@ -1869,16 +1893,133 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
        * is toggled.
        */
       async function loadBranches() {
+        const card = document.getElementById("businesses-body");
         try {
-          const res = await window.__api("GET", "/api/locations");
-          if (!res.ok) throw new Error("branches: HTTP " + res.status);
-          const body = await res.json();
-          window.__branches = body.locations || [];
+          const [locRes, bizRes] = await Promise.all([
+            window.__api("GET", "/api/locations"),
+            window.__api("GET", "/api/businesses"),
+          ]);
+          if (!locRes.ok) throw new Error("branches: HTTP " + locRes.status);
+          if (!bizRes.ok) throw new Error("businesses: HTTP " + bizRes.status);
+          window.__branches = (await locRes.json()).locations || [];
+          window.__businesses = (await bizRes.json()).businesses || [];
+          if (card) card.innerHTML = renderBusinesses(window.__businesses, window.__branches);
         } catch (err) {
           console.error("branches failed to load", err);
+          if (card) card.innerHTML = '<p class="gate-empty">Could not load businesses.</p>';
         }
         fillBranchSelects();
       }
+
+      /**
+       * The businesses card: each business with its branches, then the
+       * branches that belong to none, each with a picker to move it into one.
+       * Every name is escaped — they are typed by a person.
+       */
+      function renderBusinesses(businesses, branches) {
+        const branchLine = (l) =>
+          \`<li class="biz-branch"><span>\${esc(l.name)}</span><span class="field-note">\${esc(l.link_count)} links</span></li>\`;
+
+        const groups = businesses.map((b) => {
+          const own = branches.filter((l) => l.business_id === b.id);
+          return \`<div class="biz-group">
+            <div class="biz-name">\${esc(b.name)}</div>
+            <ul class="biz-branches">\${own.length ? own.map(branchLine).join("") : '<li class="field-note">No branches yet.</li>'}</ul>
+            <div class="field-row">
+              <input type="text" id="new-branch-\${esc(b.id)}" maxlength="120" placeholder="New branch, e.g. Providencia">
+              <button type="button" class="btn-sm btn-outline" data-biz-action="add-branch" data-business-id="\${esc(b.id)}">Add</button>
+            </div>
+          </div>\`;
+        });
+
+        const loose = branches.filter((l) => !l.business_id);
+        if (loose.length) {
+          const options = businesses
+            .map((b) => \`<option value="\${esc(b.id)}">\${esc(b.name)}</option>\`)
+            .join("");
+          groups.push(\`<div class="biz-group">
+            <div class="biz-name">Not in a business</div>
+            <ul class="biz-branches">\${loose.map((l) => \`<li class="biz-branch">
+              <span>\${esc(l.name)} <span class="field-note">\${esc(l.link_count)} links</span></span>
+              <span class="field-row">
+                <select id="move-\${esc(l.id)}"><option value="">Choose a business</option>\${options}</select>
+                <button type="button" class="btn-sm btn-outline" data-biz-action="move-branch" data-location-id="\${esc(l.id)}">Move</button>
+              </span>
+            </li>\`).join("")}</ul>
+          </div>\`);
+        }
+
+        return groups.length ? groups.join("") : '<p class="field-note">No businesses yet. Add the first one above.</p>';
+      }
+
+      /** Reloads everything that shows a business or branch name. */
+      function refreshOwnership() {
+        loadBranches();
+        loadLinks();
+      }
+
+      function showBusinessesMessage(text, kind) {
+        const msg = document.getElementById("businesses-msg");
+        msg.className = "message" + (kind ? " " + kind : "");
+        msg.textContent = text;
+      }
+
+      async function addBusiness() {
+        const input = document.getElementById("new-business-name");
+        const name = input.value.trim();
+        if (!name) return;
+        const res = await window.__api("POST", "/api/businesses", { name });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          showBusinessesMessage(body.error || "Could not add the business.", "error");
+          return;
+        }
+        input.value = "";
+        showBusinessesMessage("", "");
+        refreshOwnership();
+      }
+
+      async function addBranch(businessId) {
+        const input = document.getElementById("new-branch-" + businessId);
+        if (!input) return;
+        const name = input.value.trim();
+        if (!name) return;
+        const res = await window.__api("POST", "/api/locations", { name, business_id: businessId });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          showBusinessesMessage(body.error || "Could not add the branch.", "error");
+          return;
+        }
+        showBusinessesMessage("", "");
+        refreshOwnership();
+      }
+
+      async function moveBranch(locationId) {
+        const select = document.getElementById("move-" + locationId);
+        if (!select) return;
+        const value = select.value;
+        if (value === "") return;
+        const res = await window.__api("PATCH", "/api/locations/" + locationId, {
+          business_id: value === "" ? null : value,
+        });
+        if (!res.ok) {
+          showBusinessesMessage("Could not move the branch.", "error");
+          return;
+        }
+        showBusinessesMessage("", "");
+        refreshOwnership();
+      }
+
+      // Static and delegated listeners, like the create form's. Not routed
+      // through the links table's data-action switch: these act on businesses
+      // and branches, not on a link row.
+      document.getElementById("add-business").addEventListener("click", addBusiness);
+      document.getElementById("businesses-body").addEventListener("click", (e) => {
+        const el = e.target.closest("[data-biz-action]");
+        if (!el) return;
+        if (el.dataset.bizAction === "add-branch") addBranch(el.dataset.businessId);
+        else if (el.dataset.bizAction === "move-branch") moveBranch(el.dataset.locationId);
+      });
 
       async function showMetrics(linkId, code, e) {
         e.preventDefault();

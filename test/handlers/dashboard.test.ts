@@ -917,8 +917,9 @@ describe("the dashboard script never triggers a load at parse time", () => {
 
     // One call per handler that changes the table: create form submit, bulk
     // create, destination save, branch save, toggle, review-screen toggle,
-    // client-ref save, delete. A parse-time call anywhere pushes this to nine.
-    expect(statements).toHaveLength(8);
+    // client-ref save, delete, and refreshOwnership (a business or branch
+    // changed). A parse-time call anywhere pushes this to ten.
+    expect(statements).toHaveLength(9);
     expect(statements.every((indent) => indent > TOP_LEVEL_INDENT)).toBe(true);
   });
 
@@ -2078,5 +2079,80 @@ describe("full-width layout", () => {
     expect(at('id="gate-card"')).toBeGreaterThan(-1);
     expect(at('id="links-table"')).toBeGreaterThan(at('id="gate-card"'));
     expect(at('id="feedback-card"')).toBeGreaterThan(at('id="links-table"'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Businesses and branches card (odd/tasks/business-branches.md, S3)
+// ---------------------------------------------------------------------------
+
+describe("businesses and branches card", () => {
+  async function loadRenderer(): Promise<(b: unknown[], l: unknown[]) => string> {
+    const script = await clientScript();
+    const esc = await loadEsc();
+    const src = extractFunction(script, "renderBusinesses");
+    return new Function("esc", `${src}\nreturn renderBusinesses;`)(esc);
+  }
+
+  it("lives in the side column, with a field to add a business", async () => {
+    const html = await serve();
+    const side = html.slice(html.indexOf('<div class="col-side">'), html.indexOf('<div class="col-main">'));
+    expect(side).toContain('id="businesses-card"');
+    expect(side).toMatch(/<input[^>]*id="new-business-name"/);
+    expect(side).toContain('id="add-business"');
+  });
+
+  it("groups each branch under its business, with a field to add one more", async () => {
+    const render = await loadRenderer();
+    const html = render(
+      [{ id: "biz-1", name: "Café Central", location_count: 2 }],
+      [
+        { id: "loc-1", name: "Providencia", business_id: "biz-1", link_count: 3 },
+        { id: "loc-2", name: "Ñuñoa", business_id: "biz-1", link_count: 0 },
+      ],
+    );
+    const group = html.slice(html.indexOf("Café Central"));
+    expect(group.indexOf("Providencia")).toBeGreaterThan(-1);
+    expect(group.indexOf("Ñuñoa")).toBeGreaterThan(-1);
+    expect(html).toMatch(/<input[^>]*id="new-branch-biz-1"/);
+    expect(html).toMatch(/data-biz-action="add-branch"[^>]*data-business-id="biz-1"/);
+  });
+
+  it("lists branches without a business separately, so they can be moved into one", async () => {
+    const render = await loadRenderer();
+    const html = render(
+      [{ id: "biz-1", name: "Café Central", location_count: 0 }],
+      [{ id: "loc-9", name: "Cards", business_id: null, link_count: 59 }],
+    );
+    expect(html).toContain("Not in a business");
+    expect(html).toMatch(/<select[^>]*id="move-loc-9"/);
+    expect(html).toMatch(/<option value="biz-1">Café Central<\/option>/);
+    expect(html).toMatch(/data-biz-action="move-branch"[^>]*data-location-id="loc-9"/);
+  });
+
+  it("escapes business and branch names", async () => {
+    const render = await loadRenderer();
+    const html = render(
+      [{ id: "biz-1", name: XSS_URL, location_count: 1 }],
+      [{ id: "loc-1", name: XSS_URL, business_id: "biz-1", link_count: 0 }],
+    );
+    expect(html).not.toContain("<img");
+  });
+
+  it("creates businesses and branches through the API, then refreshes everything that names them", async () => {
+    const script = await clientScript();
+    expect(extractFunction(script, "addBusiness")).toContain('window.__api("POST", "/api/businesses"');
+    const addBranch = extractFunction(script, "addBranch");
+    expect(addBranch).toContain('window.__api("POST", "/api/locations"');
+    expect(addBranch).toContain("business_id: businessId");
+    const move = extractFunction(script, "moveBranch");
+    expect(move).toContain('window.__api("PATCH", "/api/locations/" + locationId');
+    expect(move).toContain("business_id: value === \"\" ? null : value");
+    // A moved branch changes the business shown on every link row.
+    expect(extractFunction(script, "refreshOwnership")).toContain("loadLinks()");
+  });
+
+  it("loads businesses with the branches", async () => {
+    expect(extractFunction(await clientScript(), "loadBranches")).toContain('"/api/businesses"');
   });
 });

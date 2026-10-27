@@ -207,8 +207,8 @@ Every mutation flushes the tenant's `reg:{code}` KV entries so the change takes 
 | `POST` | `/api/businesses` | Create one business |
 | `PATCH` | `/api/businesses/:id` | Rename a business or switch it off |
 | `GET` | `/api/clients/metrics` | Per-`client_ref` visitor rollup |
-| `GET` | `/api/review-gate/feedback` | What customers wrote, newest first |
-| `GET` | `/api/review-gate/feedback.csv` | The same, as a download |
+| `GET` | `/api/review-gate/feedback` | What customers wrote, newest first. Filters: `business_id`, `location_id`, `since` |
+| `GET` | `/api/review-gate/feedback.csv` | The same, as a download (same filters) |
 | `GET` | `/api/review-gate/metrics` | Action-screen views, sentiment, derivation rate |
 
 Tenant-scoped routes run `auth` → `createTenantMembershipMiddleware` → handler. **That chain is
@@ -588,6 +588,10 @@ optional and a blank one is stored as `NULL`. The phone lives in its own column,
 `analytics.tag_feedback.customer_phone`, added by migration `00017`. The inbox shows the phone before
 the email, and `feedback.csv` **appends** a `customer_phone` column at the end so exports read by
 column position keep working.
+
+Each comment carries its business, branch and short code: the inbox shows them as
+`Business · Branch · client_ref` plus the code, and `feedback.csv` appends a `business` column after
+`customer_phone`.
 
 **Apply `00017` before deploying this code.** The gate writes the column on every private comment, and
 that write is fire-and-forget: against a database without the column it fails after the customer has

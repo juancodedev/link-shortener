@@ -1871,7 +1871,7 @@ describe("the feedback inbox", () => {
 
   it("loads the inbox once at boot, not inside loadLinks", async () => {
     const script = await clientScript();
-    expect(script).toContain('window.__api("GET", "/api/review-gate/feedback")');
+    expect(script).toContain('window.__api("GET", "/api/review-gate/feedback" + feedbackQuery())');
     expect(extractFunction(script, "loadLinks")).not.toContain("/api/review-gate/feedback");
 
     const html = await serve();
@@ -1893,7 +1893,7 @@ describe("the feedback inbox", () => {
       'getElementById("feedback-export").addEventListener("click", (e) =>',
     );
     const handler = extractFunction(script, "exportFeedbackCsv");
-    expect(handler).toContain('window.__api("GET", "/api/review-gate/feedback.csv")');
+    expect(handler).toContain('window.__api("GET", "/api/review-gate/feedback.csv" + feedbackQuery())');
     expect(handler).toContain("URL.createObjectURL");
     expect(handler).toContain('res.headers.get("X-Truncated")');
   });
@@ -1930,9 +1930,16 @@ function errorResponse(status: number, body: Record<string, unknown>) {
 
 describe("the feedback export, when the server refuses", () => {
   async function runExport(res: unknown) {
-    const src = extractFunction(await clientScript(), "exportFeedbackCsv");
+    const script = await clientScript();
+    // feedbackQuery rides along: the exporter calls it, and without it the
+    // compiled function would throw before reaching the code under test.
+    const src = extractFunction(script, "exportFeedbackCsv") + "\n" + extractFunction(script, "feedbackQuery");
     const URLStub = { createObjectURL: vi.fn(), revokeObjectURL: vi.fn() };
-    const documentStub = { createElement: vi.fn(), body: { appendChild: vi.fn() } };
+    const documentStub = {
+      createElement: vi.fn(),
+      body: { appendChild: vi.fn() },
+      getElementById: () => ({ value: "" }),
+    };
     const windowStub = { __api: vi.fn().mockResolvedValue(res) };
     const fn = new Function(
       "window",
@@ -1971,8 +1978,10 @@ describe("the feedback export, when the server refuses", () => {
 
 describe("the feedback inbox, when the server refuses", () => {
   it("says it could not load, instead of rendering the error as an inbox", async () => {
-    const src = extractFunction(await clientScript(), "loadFeedbackInbox");
-    const body = { innerHTML: "" };
+    const script = await clientScript();
+    const src = extractFunction(script, "loadFeedbackInbox") + "\n" + extractFunction(script, "feedbackQuery");
+    const body = { innerHTML: "", value: "" };
+    const api = vi.fn().mockResolvedValue(errorResponse(401, { error: "unauthorized" }));
     const render = vi.fn().mockReturnValue("<p>inbox</p>");
     const consoleStub = { error: vi.fn() };
     const fn = new Function(
@@ -1982,7 +1991,7 @@ describe("the feedback inbox, when the server refuses", () => {
       "console",
       `async ${src}\nreturn loadFeedbackInbox;`,
     )(
-      { __api: vi.fn().mockResolvedValue(errorResponse(401, { error: "unauthorized" })) },
+      { __api: api },
       { getElementById: () => body },
       render,
       consoleStub,
@@ -1990,6 +1999,9 @@ describe("the feedback inbox, when the server refuses", () => {
 
     await fn();
 
+    // Proves the request was made: an error thrown before it would also land
+    // on "Could not load", for the wrong reason.
+    expect(api).toHaveBeenCalledWith("GET", "/api/review-gate/feedback");
     expect(render).not.toHaveBeenCalled();
     expect(body.innerHTML).toContain("Could not load comments.");
     expect(consoleStub.error).toHaveBeenCalled();
@@ -2154,5 +2166,33 @@ describe("businesses and branches card", () => {
 
   it("loads businesses with the branches", async () => {
     expect(extractFunction(await clientScript(), "loadBranches")).toContain('"/api/businesses"');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Filtering comments by business or branch (odd/tasks/business-branches.md, S5)
+// ---------------------------------------------------------------------------
+
+describe("comments can be filtered by business or branch", () => {
+  it("offers a filter above the comments", async () => {
+    const html = await serve();
+    const card = html.slice(html.indexOf('id="feedback-card"'));
+    expect(card).toMatch(/<select[^>]*id="feedback-filter"/);
+  });
+
+  it("turns the filter into the API's query string, for the list and the CSV alike", async () => {
+    const script = await clientScript();
+    const fn = extractFunction(script, "feedbackQuery");
+    const run = new Function("document", `${fn}\nreturn feedbackQuery();`);
+    const doc = (value: string) => ({ getElementById: () => ({ value }) });
+    expect(run(doc(""))).toBe("");
+    expect(run(doc("b:biz-1"))).toBe("?business_id=biz-1");
+    expect(run(doc("l:loc-1"))).toBe("?location_id=loc-1");
+    expect(extractFunction(script, "loadFeedbackInbox")).toContain('"/api/review-gate/feedback" + feedbackQuery()');
+    expect(extractFunction(script, "exportFeedbackCsv")).toContain('"/api/review-gate/feedback.csv" + feedbackQuery()');
+  });
+
+  it("fills the filter from the businesses and branches it loaded", async () => {
+    expect(extractFunction(await clientScript(), "loadBranches")).toContain("fillFeedbackFilter()");
   });
 });

@@ -127,9 +127,12 @@ export interface FeedbackRow {
   short_code: string | null;
   client_ref: string | null;
   location_name: string | null;
+  /** The branch's business ("local"), or null when the branch has none. */
+  business_name: string | null;
 }
 
 interface FeedbackFilters {
+  businessId?: string;
   locationId?: string;
   since?: string;
 }
@@ -164,6 +167,12 @@ function buildFeedbackQuery(
   // registry row the tenant was resolved to.
   const linksTable = qualifyTable(schemaName, "links");
 
+  if (filters.businessId) {
+    // Through the branch: a comment carries its location, and the location
+    // carries its business. Comments with no location never match a business.
+    params.push(filters.businessId);
+    clauses.push(`loc.business_id = $${params.length}`);
+  }
   if (filters.locationId) {
     params.push(filters.locationId);
     clauses.push(`f.location_id = $${params.length}`);
@@ -177,10 +186,12 @@ function buildFeedbackQuery(
   return {
     text: `
       SELECT f.id, f.comment, f.rating, f.customer_contact, f.customer_phone, f.scanned_at,
-             l.short_code, l.client_ref, loc.name AS location_name
+             l.short_code, l.client_ref, loc.name AS location_name,
+             b.name AS business_name
         FROM analytics.tag_feedback f
         LEFT JOIN ${linksTable} l ON l.id = f.link_id
         LEFT JOIN public.locations loc ON loc.id = f.location_id
+        LEFT JOIN public.businesses b ON b.id = loc.business_id
        WHERE ${clauses.join(" AND ")}
        ORDER BY f.scanned_at DESC, f.id DESC
        LIMIT $${params.length}`,
@@ -212,6 +223,10 @@ function toFeedbackRow(row: Record<string, unknown>): FeedbackRow {
     short_code: row.short_code === null ? null : String(row.short_code),
     client_ref: row.client_ref === null ? null : String(row.client_ref),
     location_name: row.location_name === null ? null : String(row.location_name),
+    business_name:
+      row.business_name === null || row.business_name === undefined
+        ? null
+        : String(row.business_name),
   };
 }
 
@@ -220,7 +235,7 @@ const SINCE_MAX_YEAR = 9999;
 
 type FilterResult =
   | { ok: true; filters: FeedbackFilters }
-  | { ok: false; error: "invalid_location_id" | "invalid_since" };
+  | { ok: false; error: "invalid_business_id" | "invalid_location_id" | "invalid_since" };
 
 /**
  * Reads and validates the list's filters.
@@ -237,9 +252,13 @@ type FilterResult =
  * the line that matters: anything it accepts names a real instant.
  */
 function readFilters(url: URL): FilterResult {
+  const businessId = url.searchParams.get("business_id") || undefined;
   const locationId = url.searchParams.get("location_id") || undefined;
   const sinceRaw = url.searchParams.get("since") || undefined;
 
+  if (businessId !== undefined && !isUuid(businessId)) {
+    return { ok: false, error: "invalid_business_id" };
+  }
   if (locationId !== undefined && !isUuid(locationId)) {
     return { ok: false, error: "invalid_location_id" };
   }
@@ -258,7 +277,7 @@ function readFilters(url: URL): FilterResult {
     since = parsed.toISOString();
   }
 
-  return { ok: true, filters: { locationId, since } };
+  return { ok: true, filters: { businessId, locationId, since } };
 }
 
 /**
@@ -335,8 +354,9 @@ export const exportFeedbackCsv: Handler<{
   );
 
   const body = toCsv(
-    // customer_phone is APPENDED, not slotted beside customer_contact: an owner's
-    // spreadsheet that reads the export by column position keeps working.
+    // customer_phone and business are APPENDED, not slotted beside their
+    // neighbours: a spreadsheet that reads the export by column position keeps
+    // working.
     [
       "scanned_at",
       "location",
@@ -346,6 +366,7 @@ export const exportFeedbackCsv: Handler<{
       "customer_contact",
       "comment",
       "customer_phone",
+      "business",
     ],
     rows.map((row) => [
       row.scanned_at,
@@ -356,6 +377,7 @@ export const exportFeedbackCsv: Handler<{
       row.customer_contact ?? "",
       row.comment,
       row.customer_phone ?? "",
+      row.business_name ?? "",
     ]),
   );
 

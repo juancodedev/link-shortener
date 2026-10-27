@@ -544,6 +544,7 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     .biz-name { font-weight: 700; color: var(--ink-strong); }
     .biz-branches { list-style: none; margin: 0.375rem 0 0.5rem; }
     .biz-branch { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; padding: 0.25rem 0; flex-wrap: wrap; }
+    .feedback-code { font-family: "SF Mono", "Fira Code", monospace; font-size: 0.75rem; color: var(--tag); }
     .badge-gated { background: var(--kraft-deep); color: var(--tag); }
     .badge-direct { background: var(--kraft); color: var(--ink-soft); }
     .owner-business { display: block; font-weight: 600; color: var(--ink-strong); }
@@ -887,6 +888,10 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         <h3>What customers wrote</h3>
         <button type="button" id="feedback-export" class="btn-sm">Download CSV</button>
       </div>
+      <label for="feedback-filter" class="gap-top-sm">Show comments from</label>
+      <select id="feedback-filter">
+        <option value="">All businesses</option>
+      </select>
       <div id="feedback-export-msg" class="message"></div>
       <div id="feedback-body"><div class="loading">Loading...</div></div>
     </div>
@@ -1186,11 +1191,51 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       // says so in this card and leaves the rest of the dashboard working;
       // the links table should not disappear because the inbox could not load.
       // ---------------------------------------------------------------------
+      /**
+       * The comment filter as the API's query string. "b:<id>" is a business,
+       * "l:<id>" a branch, "" everything. The list and the CSV read the same
+       * value, so the export is always what is on screen.
+       */
+      function feedbackQuery() {
+        const value = document.getElementById("feedback-filter").value;
+        if (value.indexOf("b:") === 0) return "?business_id=" + encodeURIComponent(value.slice(2));
+        if (value.indexOf("l:") === 0) return "?location_id=" + encodeURIComponent(value.slice(2));
+        return "";
+      }
+
+      /**
+       * Rebuilds the filter's options from the loaded businesses and branches,
+       * keeping the current choice. Built with DOM APIs: the names are typed
+       * by a person.
+       */
+      function fillFeedbackFilter() {
+        const select = document.getElementById("feedback-filter");
+        if (!select) return;
+        const current = select.value;
+        const businesses = window.__businesses || [];
+        const branches = window.__branches || [];
+        select.textContent = "";
+        select.add(new Option("All businesses", ""));
+        businesses.forEach((b) => {
+          select.add(new Option(b.name, "b:" + b.id));
+          branches
+            .filter((l) => l.business_id === b.id)
+            .forEach((l) => select.add(new Option("— " + l.name, "l:" + l.id)));
+        });
+        branches
+          .filter((l) => !l.business_id)
+          .forEach((l) => select.add(new Option(l.name + " (no business)", "l:" + l.id)));
+        select.value = current;
+        if (select.value !== current) select.value = "";
+      }
+
+      document.getElementById("feedback-filter").addEventListener("change", () => loadFeedbackInbox());
+
       async function loadFeedbackInbox() {
         const body = document.getElementById("feedback-body");
         if (!body) return;
         try {
-          const res = await window.__api("GET", "/api/review-gate/feedback");
+          const res = await window.__api("GET", "/api/review-gate/feedback" + feedbackQuery());
           // Checked before the body is read as an inbox: a 401 or 500 is JSON
           // too, and rendering it would either throw somewhere inside the
           // renderer or, worse, draw an empty inbox that looks like no one wrote.
@@ -1220,7 +1265,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         msg.className = "message";
         msg.textContent = "";
         try {
-          const res = await window.__api("GET", "/api/review-gate/feedback.csv");
+          const res = await window.__api("GET", "/api/review-gate/feedback.csv" + feedbackQuery());
           // A refused export answers with a JSON error body. Read as a blob it
           // would download as customer-feedback.csv and look like a file, so
           // the status is checked first and the owner is told instead.
@@ -1904,6 +1949,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           window.__branches = (await locRes.json()).locations || [];
           window.__businesses = (await bizRes.json()).businesses || [];
           if (card) card.innerHTML = renderBusinesses(window.__businesses, window.__branches);
+          fillFeedbackFilter();
         } catch (err) {
           console.error("branches failed to load", err);
           if (card) card.innerHTML = '<p class="gate-empty">Could not load businesses.</p>';

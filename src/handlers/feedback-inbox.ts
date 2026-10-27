@@ -62,10 +62,19 @@ export function renderFeedbackInbox(payload: FeedbackInboxPayload): string {
    * table".
    */
   function origin(r: FeedbackRow): string {
-    const parts = [r.location_name, r.client_ref].filter(
+    // Business first, then branch, then the sticker's own label: the order an
+    // operator managing several businesses reads it in.
+    const parts = [r.business_name, r.location_name, r.client_ref].filter(
       (p): p is string => typeof p === "string" && p !== "",
     );
-    return parts.length > 0 ? parts.map(escapeHtml).join(" · ") : "No location";
+    const where = parts.length > 0 ? parts.map(escapeHtml).join(" · ") : "No location";
+    // The short code always, so a comment is traceable to its exact link even
+    // when the link was never placed in a branch.
+    const code =
+      r.short_code !== null && r.short_code !== ""
+        ? ` <code class="feedback-code">${escapeHtml(r.short_code)}</code>`
+        : "";
+    return where + code;
   }
 
   function item(r: FeedbackRow): string {

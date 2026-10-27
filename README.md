@@ -461,6 +461,9 @@ A **business** ("local") groups one or more **locations** ("sucursales", branche
 scan, rating and comment already points at a location — so grouping by business is a join, not a
 copy. Businesses live inside the operator's tenant; the businesses themselves never log in.
 
+**Apply migration `00018` before deploying that code.** The links list, the locations list and the
+feedback inbox all join `public.businesses`; against a database without it they fail with a 500.
+
 `public.short_code_registry` has RLS enabled with **no** policy for `anon`/`authenticated`, so a
 browser holding the publishable key cannot enumerate every tenant's short codes in one query.
 The Worker connects as the service role and bypasses RLS.

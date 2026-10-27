@@ -197,9 +197,11 @@ describe("links table — HTML-context escaping", () => {
     const row = await renderRow({ original_url: XSS_ATTR });
 
     expect(row).not.toContain('"><img');
-    // Both render positions — the title attribute and the text node — escaped.
+    // Every render position escaped: the title attribute, the text node, and
+    // the panel's editable destination field.
     expect(row.split(`title="${ESCAPED_ATTR}"`).length - 1).toBe(1);
-    expect(row.split(ESCAPED_ATTR).length - 1).toBe(2);
+    expect(row.split(`value="${ESCAPED_ATTR}"`).length - 1).toBe(1);
+    expect(row.split(ESCAPED_ATTR).length - 1).toBe(3);
   });
 
   it("escapes client_ref in the input value", async () => {
@@ -256,7 +258,7 @@ describe("links table — no inline event handlers", () => {
 
     const actions = [...row.matchAll(/data-action="([^"]+)"/g)].map((m) => m[1]);
     expect(actions.sort()).toEqual(
-      ["copy", "delete", "metrics", "qr", "save-client-ref", "toggle", "toggle-gate"].sort(),
+      ["copy", "delete", "metrics", "qr", "save-branch", "save-client-ref", "save-destination", "toggle", "toggle-gate"].sort(),
     );
   });
 
@@ -266,7 +268,7 @@ describe("links table — no inline event handlers", () => {
     expect(script).toMatch(/getElementById\("links-body"\)\s*\n?\s*\.addEventListener\("click"/);
     expect(script).toContain('closest("[data-action]")');
     // Every action is dispatched from the dataset, never from a string literal.
-    for (const action of ["copy", "qr", "metrics", "save-client-ref", "toggle", "toggle-gate", "delete"]) {
+    for (const action of ["copy", "qr", "metrics", "save-client-ref", "save-destination", "save-branch", "toggle", "toggle-gate", "delete"]) {
       expect(script).toMatch(new RegExp(`case "${action}":`));
     }
   });
@@ -614,7 +616,7 @@ describe("Phase 2 markup did not regress the escaping and delegation guards", ()
 
     const actions = [...row.matchAll(/data-action="([^"]+)"/g)].map((m) => m[1]);
     expect(actions.sort()).toEqual(
-      ["copy", "delete", "metrics", "qr", "save-client-ref", "toggle", "toggle-gate"].sort(),
+      ["copy", "delete", "metrics", "qr", "save-branch", "save-client-ref", "save-destination", "toggle", "toggle-gate"].sort(),
     );
   });
 
@@ -914,9 +916,9 @@ describe("the dashboard script never triggers a load at parse time", () => {
     );
 
     // One call per handler that changes the table: create form submit, bulk
-    // create, load-destination, toggle, review-screen toggle, client-ref save,
-    // delete. A parse-time call anywhere pushes this to eight.
-    expect(statements).toHaveLength(7);
+    // create, destination save, branch save, toggle, review-screen toggle,
+    // client-ref save, delete. A parse-time call anywhere pushes this to nine.
+    expect(statements).toHaveLength(8);
     expect(statements.every((indent) => indent > TOP_LEVEL_INDENT)).toBe(true);
   });
 
@@ -1509,7 +1511,7 @@ describe("the dashboard can manufacture cards in bulk", () => {
     // code under test.
     expect(wired).not.toMatch(/data-action=/);
 
-    // And the switch carries exactly eight record actions, no more. Pinned
+    // And the switch carries exactly nine record actions, no more. Pinned
     // because this is the list that decides what a row may do: an action added
     // here reaches the handler with a row's own id, so an unlisted one silently
     // does nothing while looking wired.
@@ -1517,6 +1519,8 @@ describe("the dashboard can manufacture cards in bulk", () => {
     // load-destination joined the six on purpose — it IS a record action, and it
     // is the second half of the flow this PR completes. toggle-gate joined for
     // the review-screen checkbox (odd/tasks/review-screen-refresh.md, S1).
+    // load-destination became save-destination (any link's URL is editable
+    // now) and save-branch joined (odd/tasks/business-branches.md, S4).
     const actions = [...script.matchAll(/case "([a-z-]+)":/g)].map((m) => m[1]);
     expect(new Set(actions)).toEqual(
       new Set([
@@ -1524,7 +1528,8 @@ describe("the dashboard can manufacture cards in bulk", () => {
         "qr",
         "metrics",
         "save-client-ref",
-        "load-destination",
+        "save-destination",
+        "save-branch",
         "toggle",
         "toggle-gate",
         "delete",
@@ -1541,76 +1546,129 @@ describe("the dashboard can manufacture cards in bulk", () => {
 // was the door — so "load them before exporting" was an instruction with nowhere
 // to go, and the owner's only way to fill ten cards was the API.
 // ---------------------------------------------------------------------------
-describe("the dashboard can load a destination onto a card", () => {
-  it("offers the action only while a card has no destination", async () => {
-    const html = await serve();
-
-    // Rendered conditionally, because a configured card has nothing to load.
-    // Offering it forever would be offering an action that does nothing.
-    expect(html).toContain('data-action="load-destination"');
-    expect(html).toContain("!l.original_url");
+describe("the dashboard can edit any link's destination", () => {
+  // It used to offer "Load destination..." only on card stock, through a
+  // prompt. A configured link could not be corrected at all from the
+  // dashboard (odd/tasks/business-branches.md, S4).
+  it("shows the current destination in an editable field on every row", async () => {
+    const row = await renderRow({ original_url: "https://g.page/r/abc/review" });
+    const input = row.match(/<input[^>]*id="dest-link-uuid"[^>]*>/)?.[0] ?? "";
+    expect(input).toContain('value="https://g.page/r/abc/review"');
+    expect(row).toMatch(/data-action="save-destination"[^>]*data-id="link-uuid"/);
   });
 
-  it("says what an unconfigured card does when scanned", async () => {
-    const html = await serve();
+  it("offers the same field on card stock, empty", async () => {
+    const row = await renderRow({ original_url: null });
+    const input = row.match(/<input[^>]*id="dest-link-uuid"[^>]*>/)?.[0] ?? "";
+    expect(input).toContain('value=""');
+    expect(row).toContain('data-action="save-destination"');
+  });
 
+  it("says what an unconfigured card does when scanned, and that no reprint is needed", async () => {
+    const row = await renderRow({ original_url: null });
     // The owner has to know the QR is not broken — it is waiting.
-    expect(html).toContain("not configured");
-    expect(html).toContain("does not need reprinting");
+    expect(row).toContain("not configured");
+    expect(row).toContain("does not need reprinting");
+    expect(await renderRow()).not.toContain("not configured");
   });
 
-  it("explains that no reprinting is needed", async () => {
-    const html = await serve();
-
-    // The pixels never encoded the destination; they encoded the short code.
-    // Saying so is what makes an owner willing to paste the sticker first.
-    expect(html).toMatch(/reprint/i);
+  it("escapes the destination it puts in the field", async () => {
+    const row = await renderRow({ original_url: XSS_ATTR });
+    expect(row).not.toContain(XSS_ATTR);
+    expect(row).toContain(ESCAPED_ATTR);
   });
 
-  it("PATCHes the existing link rather than creating one", async () => {
-    const script = await clientScript();
-
-    // The card exists and is already printed. Creating a second one would give
-    // the owner two cards and one of them would be dead on arrival.
-    expect(script).toContain('window.__api("PATCH", "/api/links/" + id');
-    expect(script).toContain("original_url: trimmed === \"\" ? null : trimmed");
-  });
-
-  it("lets an empty entry clear the destination back to card stock", async () => {
-    const script = await clientScript();
-
-    // The escape hatch matters: loading a typo'd URL with no way back would
-    // strand the owner on a card they cannot fix.
-    expect(script).toContain('trimmed === "" ? null : trimmed');
-  });
-
-  it("distinguishes a CANCELLED prompt from an empty one", async () => {
-    const script = await clientScript();
-
-    // `null` is dismiss; `""` is a deliberate clear. Treating them alike would
-    // let an owner undo a mistake by pressing Escape.
-    expect(script).toContain("if (url === null) return");
+  it("PATCHes the existing link, and an emptied field clears it back to card stock", async () => {
+    const fn = extractFunction(await clientScript(), "saveDestination");
+    // The card exists and is already printed: never create a second one.
+    expect(fn).toContain('window.__api("PATCH", "/api/links/" + id');
+    expect(fn).toContain('original_url: value === "" ? null : value');
   });
 
   it("does NOT re-validate the URL in the browser", async () => {
-    const script = await clientScript();
-
-    // The server owns URL validation, and it owns it for create too. A second
-    // copy of the rules in the browser is how the two drift apart and how a
-    // card ends up with a destination the redirect layer rejects.
-    const fn = script.slice(script.indexOf("async function loadDestination"));
-    const body = fn.slice(0, fn.indexOf("async function showMetrics"));
-    expect(body).not.toMatch(/https?:\/\//);
+    // The server owns URL validation for create and update alike.
+    const fn = codeOnly(extractFunction(await clientScript(), "saveDestination"));
+    expect(fn).not.toMatch(/https?:\/\//);
   });
 
-  it("refreshes the row so the button disappears once loaded", async () => {
-    const script = await clientScript();
+  it("refreshes the table after saving", async () => {
+    expect(extractFunction(await clientScript(), "saveDestination")).toContain("loadLinks()");
+  });
+});
 
-    // The button's presence is the record's state. Without a re-render the
-    // owner clicks "Load destination..." forever on a card that is already
-    // configured.
-    const fn = script.slice(script.indexOf("async function loadDestination"));
-    expect(fn.slice(0, fn.indexOf("async function showMetrics"))).toContain("loadLinks()");
+describe("links table shows how each link opens and where it belongs", () => {
+  it("labels a gated link as opening the review screen", async () => {
+    const row = await renderRow({ is_gated: true });
+    expect(row).toContain("Review screen");
+  });
+
+  it("labels an ungated link as going straight to its destination", async () => {
+    const row = await renderRow({ is_gated: false });
+    expect(row).toContain("Direct");
+    expect(row).not.toContain("Review screen</span>");
+  });
+
+  it("shows the business and branch of a link", async () => {
+    const row = await renderRow({ business_name: "Café Central", location_name: "Providencia" });
+    expect(row).toContain("Café Central");
+    expect(row).toContain("Providencia");
+  });
+
+  it("escapes the business and branch names", async () => {
+    const row = await renderRow({ business_name: XSS_URL, location_name: XSS_URL });
+    expect(row).not.toContain("<img");
+  });
+
+  it("says 'Unassigned' for a link with no branch", async () => {
+    const row = await renderRow({ business_name: null, location_name: null });
+    expect(row).toContain("Unassigned");
+  });
+
+  it("offers a branch picker in the row panel, filled after render", async () => {
+    const row = await renderRow({ location_id: "loc-1" });
+    const select = row.match(/<select[^>]*id="branch-link-uuid"[^>]*>/)?.[0] ?? "";
+    expect(select).toContain('data-current="loc-1"');
+    expect(row).toMatch(/data-action="save-branch"[^>]*data-id="link-uuid"/);
+    // The row template stays a pure function of the link; the options come
+    // from the branches list once the table is in the DOM.
+    expect(await clientScript()).toContain("fillBranchSelects()");
+  });
+
+  it("never shows an assigned link as Unassigned when the branches list is missing", async () => {
+    // One Save on a picker that wrongly reads "Unassigned" would detach the
+    // link. Runs the shipped function against a minimal DOM stand-in.
+    const fn = extractFunction(await clientScript(), "fillBranchSelects");
+    const options: { value: string; selected: boolean }[] = [];
+    const select = {
+      dataset: { current: "loc-1" },
+      set textContent(_v: string) { options.length = 0; },
+      add: (o: { value: string; selected: boolean }) => options.push(o),
+    };
+    const run = new Function(
+      "window", "document", "Option",
+      `${fn}\nfillBranchSelects();`,
+    );
+    run(
+      { __branches: [] },
+      { querySelectorAll: () => [select] },
+      function (this: any, _l: string, value: string, _d?: boolean, selected = false) {
+        return { value, selected };
+      },
+    );
+    expect(options.find((o) => o.selected)?.value).toBe("loc-1");
+  });
+
+  it("loads the branches at boot, beside the links", async () => {
+    const html = await serve();
+    expect(html).toContain('if (typeof loadBranches === "function") loadBranches();');
+    expect(extractFunction(await clientScript(), "loadBranches")).toContain('"/api/locations"');
+  });
+
+  it("assigns the branch through PATCH, null for none", async () => {
+    const fn = extractFunction(await clientScript(), "saveBranch");
+    expect(fn).toContain('window.__api("PATCH", "/api/links/" + id');
+    expect(fn).toContain('location_id: value === "" ? null : value');
+    expect(fn).toContain("loadLinks()");
   });
 });
 
@@ -1654,11 +1712,17 @@ describe("the served client script parses", () => {
     // Asserted here because it is invisible in review: the handler compiles, the
     // typecheck passes, and every substring assertion still matches. Only the
     // parser sees it.
+    //
+    // The prompt that carried that escape was replaced by an inline field
+    // (odd/tasks/business-branches.md, S4). What remains true: no escaped
+    // newline in the handler may reach the browser as a real one inside a
+    // string. The parse test above is what proves it for the whole block; this
+    // one pins that no window.prompt with multi-line text came back.
     const html = await serve();
     const blocks = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
     const client = blocks.find((b) => b.includes("links-body"))!;
 
-    expect(client).toContain("\\n\\nPaste the full URL");
+    expect(client).not.toMatch(/window\.prompt\("[^"]*\n/);
   });
 });
 

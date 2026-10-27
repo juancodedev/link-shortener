@@ -855,12 +855,13 @@ export const listLinks: Handler<{
   const table = qualifyTable(tenant.schemaName, "links");
 
   const rows = await withClient(c.env, async (client) => {
-    const res = await client.query<LinkRow & { clicks_count: number; is_active: boolean; expires_at: string | null; updated_at: string; location_id: string | null; location_name: string | null; is_gated: boolean | null }>(
+    const res = await client.query<LinkRow & { clicks_count: number; is_active: boolean; expires_at: string | null; updated_at: string; location_id: string | null; location_name: string | null; business_name: string | null; is_gated: boolean | null }>(
       `SELECT l.id, l.short_code, l.original_url, l.title, l.client_ref, l.clicks_count,
               l.is_active, l.is_gated, l.expires_at, l.created_at, l.updated_at,
-              l.location_id, loc.name AS location_name
+              l.location_id, loc.name AS location_name, b.name AS business_name
        FROM ${table} l
        LEFT JOIN public.locations loc ON loc.id = l.location_id
+       LEFT JOIN public.businesses b ON b.id = loc.business_id
        ORDER BY l.created_at DESC
        LIMIT 100`,
     );
@@ -880,6 +881,9 @@ export const listLinks: Handler<{
       client_ref: r.client_ref ?? null,
       location_id: r.location_id ?? null,
       location_name: r.location_name ?? null,
+      // The branch's business ("local"), so the table can say which business
+      // a sticker belongs to without a second request.
+      business_name: r.business_name ?? null,
       clicks_count: r.clicks_count,
       is_active: r.is_active,
       // The dashboard's review-screen checkbox reads this. Coerced so a row the

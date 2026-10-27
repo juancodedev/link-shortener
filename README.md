@@ -325,9 +325,8 @@ curl -s -X PATCH "$BASE/api/links/<link-id>" \
   -d '{"original_url":"https://g.page/<review-id>"}'
 ```
 
-This invalidates the redirect cache. **Skipping it leaves the sticker serving the previous
-destination for up to 24 hours** — the owner pastes the card, the customer scans, and gets the old
-target with no error anywhere.
+The next scan follows the new destination: the redirect reads the link row from Postgres on every
+scan, so an edit never waits on a cache.
 
 Send `null` or `""` to clear it back to unconfigured. A wrong destination is worse than an absent
 one: absent reaches a page that says so, wrong forwards customers somewhere unintended with no signal
@@ -493,16 +492,19 @@ caller-supplied `slug` is also accepted for pre-printed tags — see the walkthr
 
 | Namespace | Key | Value | TTL |
 | --- | --- | --- | --- |
-| `SHORT_URL_CACHE` | `{slug}:{code}` | `{url, isActive, expiresAt, linkId}` | 24 h |
+| `SHORT_URL_CACHE` | `{slug}:{code}` | `{url, isActive, expiresAt, linkId, isGated}` (fallback snapshot) | 24 h |
 | `SHORT_URL_CACHE` | `reg:{code}` | `{tenantId, schemaName, tenantSalt, subdomain, linkId}` | 24 h |
 | `TENANT_CACHE` | `{slug}` | `{schemaName, tenantId, tenantSalt}` | 1 h |
 
 The `reg:` prefix keeps the registry entry from ever colliding with a `{slug}:{code}` short-URL
 entry; a slug cannot contain `:`.
 
-A redirect served from `SHORT_URL_CACHE` skips the link query but still records the click.
-Cache entries are invalidated on link update/delete and tenant deprovision — but **not** when
-`original_url` changes, since the update endpoint only exposes `is_active` and `title`.
+The redirect queries `{schema}.links` on every scan, so a dashboard edit (destination, enabled,
+review screen) shows on the next scan. The `{slug}:{code}` entry is only a snapshot of the last
+successful read: a scan serves it when the link query fails, so a printed sticker keeps working
+through a database outage. KV is not the source of truth for link state because its deletes and
+edge reads are eventually consistent — an invalidated entry can be served for about a minute, and
+a scan racing an edit can write the old row back for the full TTL.
 
 Click tracking runs inside `waitUntil`, so a Worker evicted mid-request can drop the event.
 
@@ -529,7 +531,7 @@ openspec/         archived MVP spec, design, and verification report
 pnpm test
 ```
 
-Vitest runs against the Workers pool. Redirect lifecycle (cache hit and miss), short-code
+Vitest runs against the Workers pool. Redirect lifecycle (database read and KV fallback), short-code
 registry resolution, the reserved-route/router consistency guard, and tracker error handling are
 covered. Device-type detection, referrer-source categorization, click-count consistency across
 cache paths, and the dashboard handler are not.

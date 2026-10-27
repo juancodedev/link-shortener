@@ -29,6 +29,17 @@ interface CachedLink {
   isGated?: boolean;
 }
 
+/** The `{schema}.links` columns a scan needs to decide what to serve. */
+interface LinkStateRow {
+  id: string;
+  // nullable: card stock has no destination yet
+  original_url: string | null;
+  client_ref: string | null;
+  is_active: boolean;
+  expires_at: string | null;
+  is_gated: boolean | null;
+}
+
 // ---------------------------------------------------------------------------
 // Redirect handler
 // ---------------------------------------------------------------------------
@@ -42,9 +53,10 @@ interface CachedLink {
  *    (registry KV → registry join → warm cache)
  * 3. A registry miss is a 404 — no tenant schema is touched, and no other
  *    schema is tried
- * 4. Look up the link in the short-URL KV cache (24h TTL)
- * 5. KV hit → validate isActive/expiresAt from JSON blob → 302 or 410
- * 6. KV miss → query `{schema}.links` → 302 (cache) or 404/410
+ * 4. Query `{schema}.links` on every scan → 302 or 404/410, and refresh the
+ *    short-URL KV snapshot
+ * 5. Link query fails → serve the KV snapshot (validate isActive/expiresAt)
+ * 6. No snapshot either → 503
  * 7. On 302 → fire-and-forget click tracking via ctx.waitUntil
  *
  * The tenant used to come from the URL (`/r/:tenant/:code`) and was the
@@ -119,7 +131,18 @@ export const redirectHandler: Handler<{
     );
   }
 
-  // --- 2. KV cache lookup ---
+  // --- 2. Link state from Postgres ---
+  //
+  // Read on EVERY scan, not only on a cache miss. Everything this row holds is
+  // something the owner edits from the dashboard and then checks by scanning
+  // the sticker: the destination, is_active, is_gated. KV cannot answer that
+  // check. Its deletes and edge reads are eventually consistent, so the entry
+  // the PATCH invalidates keeps being served for about a minute, and a scan that
+  // races the PATCH can write the old row back for the entry's whole TTL.
+  //
+  // KV stays as the snapshot a scan falls back on when this query fails. A
+  // printed sticker must keep working through a database outage; it just
+  // serves the last state a successful scan saw.
   let cacheHit = false;
   let redirectUrl: string | null = null;
   // Defaults to false so every pre-deploy code path that never learns about
@@ -129,151 +152,134 @@ export const redirectHandler: Handler<{
   // and it saves a round trip when the short-URL entry is cold.
   let linkId = entry.linkId ?? "";
 
+  let rows: LinkStateRow[] | null = null;
   try {
-    const cached = await getCachedUrl(env, slug, code);
-
-    if (cached !== null) {
-      cacheHit = true;
-
-      // Try parsing as JSON blob (new format with metadata)
-      try {
-        const parsed: CachedLink = JSON.parse(cached);
-        if (!parsed.isActive) {
-          return c.json({ error: "link_inactive" }, 410);
-        }
-        if (parsed.expiresAt && new Date(parsed.expiresAt) < new Date()) {
-          return c.json({ error: "link_expired" }, 410);
-        }
-        redirectUrl = parsed.url;
-        linkId = parsed.linkId || "";
-        isGated = parsed.isGated === true;
-        // Cache missing linkId (old format) — force DB refresh
-        if (!parsed.linkId) cacheHit = false;
-      } catch {
-        // Legacy plain-URL format — treat as active with no expiry
-        redirectUrl = cached;
-      }
-    }
-  } catch {
-    // KV error — graceful degradation to DB query
+    rows = await withClient(env, async (client) => {
+      const table = qualifyTable(schemaName, "links");
+      const query = `
+        SELECT id, original_url, client_ref, is_active, expires_at, is_gated
+        FROM ${table}
+        WHERE short_code = $1
+        LIMIT 1
+      `;
+      const res = await client.query<LinkStateRow>(query, [code]);
+      return res.rows;
+    });
+  } catch (err) {
+    console.error(
+      JSON.stringify({
+        event: "error",
+        type: "db_query_failed",
+        message: err instanceof Error ? err.message : String(err),
+        tenant: slug,
+        code,
+      }),
+    );
   }
 
-  // --- 3. Database fallback (cache miss) ---
-  if (!cacheHit || redirectUrl === null) {
-    try {
-      const rows = await withClient(env, async (client) => {
-        const table = qualifyTable(schemaName, "links");
-        const query = `
-          SELECT id, original_url, client_ref, is_active, expires_at, is_gated
-          FROM ${table}
-          WHERE short_code = $1
-          LIMIT 1
-        `;
-        const res = await client.query<{
-          id: string;
-          // nullable: card stock has no destination yet
-          original_url: string | null;
-          client_ref: string | null;
-          is_active: boolean;
-          expires_at: string | null;
-          is_gated: boolean | null;
-        }>(query, [code]);
-        return res.rows;
-      });
-
-      if (rows.length === 0) {
-        return c.json({ error: "not_found" }, 404);
-      }
-
-      const row = rows[0]!;
-      linkId = row.id;
-
-      // Evaluate lifecycle
-      if (!row.is_active) {
-        return c.json({ error: "link_inactive" }, 410);
-      }
-      if (row.expires_at && new Date(row.expires_at) < new Date()) {
-        return c.json({ error: "link_expired" }, 410);
-      }
-
-      redirectUrl = row.original_url;
-      isGated = row.is_gated === true;
-
-      // --- 3a. Card stock: real, active, and not yet configured ---
-      //
-      // Checked AFTER the lifecycle tests above, because an inactive or expired
-      // card must keep reporting that regardless of its destination. An
-      // unconfigured card is neither inactive nor expired — `is_active` is true
-      // from the moment the card exists, which is what makes manufacturing it
-      // before its destination possible at all.
-      //
-      // Returns BEFORE the cache write below, deliberately. Caching
-      // `original_url = null` would store an entry the cache reader cannot
-      // represent, and the card's next scan would either throw on JSON.parse or
-      // be served a stale destination if one was ever set. Leaving it uncached
-      // costs one indexed lookup per scan on a link that nobody is scanning yet
-      // — and the owner loading a destination invalidates nothing here because
-      // nothing was written.
-      if (redirectUrl === null) {
-        console.log(
-          JSON.stringify({
-            event: "redirect",
-            code,
-            tenant: slug,
-            cacheHit,
-            durationMs: Date.now() - startTime,
-            status: 200,
-            state: "card_not_configured",
-          }),
-        );
-
-        return new Response(
-          renderCardNotConfigured({
-            businessName: displayName || slug,
-            code,
-            clientRef: row.client_ref,
-            billingContact: env.BILLING_CONTACT,
-          }),
-          {
-            status: 200,
-            headers: {
-              "Content-Type": "text/html; charset=utf-8",
-              // Card stock changes the moment a destination is loaded, and this
-              // page must not outlive that change in anything in between.
-              "Cache-Control": "no-store, max-age=0",
-            },
-          },
-        );
-      }
-
-      // --- 4. Populate KV cache (fire-and-forget via waitUntil) ---
-      //
-      // `redirectUrl`, not `row.original_url`: the branch above proved it is a
-      // string, and naming it that way makes the guarantee the compiler checks
-      // rather than one a future edit can quietly break.
-      const cacheValue: CachedLink = {
-        url: redirectUrl,
-        isActive: row.is_active,
-        expiresAt: row.expires_at,
-        linkId: row.id,
-        isGated: row.is_gated === true,
-      };
-
-      c.executionCtx.waitUntil(
-        setCachedUrl(env, slug, code, JSON.stringify(cacheValue)),
-      );
-    } catch (err) {
-      console.error(
-        JSON.stringify({
-          event: "error",
-          type: "db_query_failed",
-          message: err instanceof Error ? err.message : String(err),
-          tenant: slug,
-          code,
-        }),
-      );
+  if (rows === null) {
+    // --- 3. KV fallback (database unavailable) ---
+    const cached = await getCachedUrl(env, slug, code);
+    if (cached === null) {
       return c.json({ error: "service_unavailable" }, 503);
     }
+    cacheHit = true;
+
+    // Try parsing as JSON blob (new format with metadata)
+    try {
+      const parsed: CachedLink = JSON.parse(cached);
+      if (!parsed.isActive) {
+        return c.json({ error: "link_inactive" }, 410);
+      }
+      if (parsed.expiresAt && new Date(parsed.expiresAt) < new Date()) {
+        return c.json({ error: "link_expired" }, 410);
+      }
+      redirectUrl = parsed.url;
+      linkId = parsed.linkId || linkId;
+      isGated = parsed.isGated === true;
+    } catch {
+      // Legacy plain-URL format — treat as active with no expiry
+      redirectUrl = cached;
+    }
+  } else {
+    if (rows.length === 0) {
+      return c.json({ error: "not_found" }, 404);
+    }
+
+    const row = rows[0]!;
+    linkId = row.id;
+
+    // Evaluate lifecycle
+    if (!row.is_active) {
+      return c.json({ error: "link_inactive" }, 410);
+    }
+    if (row.expires_at && new Date(row.expires_at) < new Date()) {
+      return c.json({ error: "link_expired" }, 410);
+    }
+
+    redirectUrl = row.original_url;
+    isGated = row.is_gated === true;
+
+    // --- 3a. Card stock: real, active, and not yet configured ---
+    //
+    // Checked AFTER the lifecycle tests above, because an inactive or expired
+    // card must keep reporting that regardless of its destination. An
+    // unconfigured card is neither inactive nor expired — `is_active` is true
+    // from the moment the card exists, which is what makes manufacturing it
+    // before its destination possible at all.
+    //
+    // Returns BEFORE the snapshot write below, deliberately. Caching
+    // `original_url = null` would store an entry the fallback reader cannot
+    // represent, and a scan during an outage would either throw on JSON.parse
+    // or be served a stale destination if one was ever set.
+    if (redirectUrl === null) {
+      console.log(
+        JSON.stringify({
+          event: "redirect",
+          code,
+          tenant: slug,
+          cacheHit,
+          durationMs: Date.now() - startTime,
+          status: 200,
+          state: "card_not_configured",
+        }),
+      );
+
+      return new Response(
+        renderCardNotConfigured({
+          businessName: displayName || slug,
+          code,
+          clientRef: row.client_ref,
+          billingContact: env.BILLING_CONTACT,
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "text/html; charset=utf-8",
+            // Card stock changes the moment a destination is loaded, and this
+            // page must not outlive that change in anything in between.
+            "Cache-Control": "no-store, max-age=0",
+          },
+        },
+      );
+    }
+
+    // --- 4. Refresh the fallback snapshot (fire-and-forget via waitUntil) ---
+    //
+    // `redirectUrl`, not `row.original_url`: the branch above proved it is a
+    // string, and naming it that way makes the guarantee the compiler checks
+    // rather than one a future edit can quietly break.
+    const cacheValue: CachedLink = {
+      url: redirectUrl,
+      isActive: row.is_active,
+      expiresAt: row.expires_at,
+      linkId: row.id,
+      isGated: row.is_gated === true,
+    };
+
+    c.executionCtx.waitUntil(
+      setCachedUrl(env, slug, code, JSON.stringify(cacheValue)),
+    );
   }
 
   // --- 5. Redirect ---

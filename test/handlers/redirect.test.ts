@@ -266,7 +266,8 @@ describe("redirectHandler registry resolution (T3.1)", () => {
     expect(waitUntilFn.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("serves from the registry cache without touching the database", async () => {
+  it("serves from the registry cache without querying the registry", async () => {
+    const { sql } = mockDb({ links: [linkRow({ original_url: "https://cached.example" })] });
     vi.mocked(getCachedRegistryEntry).mockResolvedValue({
       tenantId: "tenant-uuid",
       schemaName: "tenant_a7f3",
@@ -287,7 +288,7 @@ describe("redirectHandler registry resolution (T3.1)", () => {
 
     await redirectHandler(c as any);
 
-    expect(withClient).not.toHaveBeenCalled();
+    expect(sql.some((q) => q.includes("short_code_registry"))).toBe(false);
     expect(redirectFn).toHaveBeenCalledWith("https://cached.example", 302);
   });
 
@@ -334,7 +335,8 @@ describe("redirectHandler link lifecycle", () => {
     vi.mocked(trackClick).mockResolvedValue(undefined);
   });
 
-  it("returns 410 for an inactive link in the KV cache", async () => {
+  it("returns 410 for an inactive link in the KV fallback", async () => {
+    mockDb({ registry: [registryRow()], linksThrows: true });
     vi.mocked(getCachedUrl).mockResolvedValueOnce(
       JSON.stringify({ url: "https://example.com", isActive: false, expiresAt: null, linkId: "link-uuid" }),
     );
@@ -346,7 +348,8 @@ describe("redirectHandler link lifecycle", () => {
     expect(jsonFn).toHaveBeenCalledWith({ error: "link_inactive" }, 410);
   });
 
-  it("returns 410 for an expired link in the KV cache", async () => {
+  it("returns 410 for an expired link in the KV fallback", async () => {
+    mockDb({ registry: [registryRow()], linksThrows: true });
     vi.mocked(getCachedUrl).mockResolvedValueOnce(
       JSON.stringify({
         url: "https://example.com",
@@ -404,7 +407,7 @@ describe("redirectHandler link lifecycle", () => {
   });
 
   it("handles a legacy plain-URL cache entry (not JSON)", async () => {
-    mockDb({ registry: [registryRow()] });
+    mockDb({ registry: [registryRow()], linksThrows: true });
     vi.mocked(getCachedUrl).mockResolvedValueOnce("https://legacy-url.com");
 
     const { c, redirectFn } = mockContext();
@@ -485,6 +488,7 @@ describe("redirectHandler action screen (T2.4)", () => {
       linkId: "link-uuid",
     });
     mockGated({ cachedUrl: legacy });
+    mockDb({ registry: [registryRow()], linksThrows: true });
 
     const { c, redirectFn } = mockContext();
 
@@ -569,6 +573,100 @@ describe("redirectHandler action screen (T2.4)", () => {
     expect(res.headers.get("Content-Type")).toMatch(/text\/html/i);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Fresh link state
+//
+// The owner flips "Show before redirecting" in the dashboard and scans the
+// sticker to check it. The scan must reflect the saved value, not whatever the
+// short-URL KV entry held: KV is eventually consistent, so an entry deleted by
+// the PATCH can keep being served for a minute, and a scan racing the PATCH can
+// write the old value back for a whole TTL. Postgres is the source of truth;
+// KV is only the snapshot a scan falls back on when the database is down.
+// ---------------------------------------------------------------------------
+
+function cachedBlob(over: Record<string, unknown> = {}) {
+  return JSON.stringify({
+    url: "https://example.com",
+    isActive: true,
+    expiresAt: null,
+    linkId: "link-uuid",
+    ...over,
+  });
+}
+
+describe("redirectHandler reads link state fresh", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getCachedRegistryEntry).mockResolvedValue(null);
+    vi.mocked(trackClick).mockResolvedValue(undefined);
+    vi.mocked(renderActionScreen).mockReturnValue(new Response("screen"));
+  });
+
+  it("shows the screen on the next scan after it is turned on, even with a warm cache", async () => {
+    mockColdPath({ links: [linkRow({ original_url: GOOGLE_URL, is_gated: true })] });
+    vi.mocked(getCachedUrl).mockResolvedValue(cachedBlob({ url: GOOGLE_URL, isGated: false }));
+
+    const { c, redirectFn } = mockContext();
+
+    await redirectHandler(c as any, vi.fn() as any);
+
+    expect(renderActionScreen).toHaveBeenCalled();
+    expect(redirectFn).not.toHaveBeenCalled();
+  });
+
+  it("redirects on the next scan after the screen is turned off, even with a warm cache", async () => {
+    mockColdPath({ links: [linkRow({ is_gated: false })] });
+    vi.mocked(getCachedUrl).mockResolvedValue(cachedBlob({ isGated: true }));
+
+    const { c, redirectFn } = mockContext();
+
+    await redirectHandler(c as any, vi.fn() as any);
+
+    expect(renderActionScreen).not.toHaveBeenCalled();
+    expect(redirectFn).toHaveBeenCalledWith("https://example.com", 302);
+  });
+
+  it("follows a new destination on the next scan, even with a warm cache", async () => {
+    mockColdPath({ links: [linkRow({ original_url: "https://new.example" })] });
+    vi.mocked(getCachedUrl).mockResolvedValue(cachedBlob({ url: "https://old.example" }));
+
+    const { c, redirectFn } = mockContext();
+
+    await redirectHandler(c as any, vi.fn() as any);
+
+    expect(redirectFn).toHaveBeenCalledWith("https://new.example", 302);
+  });
+
+  it("refreshes the fallback snapshot with what the database returned", async () => {
+    mockColdPath({ links: [linkRow({ is_gated: true })] });
+    vi.mocked(getCachedUrl).mockResolvedValue(cachedBlob({ isGated: false }));
+
+    const { c } = mockContext();
+
+    await redirectHandler(c as any, vi.fn() as any);
+
+    expect(setCachedUrl).toHaveBeenCalledWith(
+      expect.anything(),
+      "acme",
+      "abc123",
+      expect.stringContaining('"isGated":true'),
+    );
+  });
+
+  it("falls back to the cached snapshot when the link query fails", async () => {
+    mockDb({ registry: [registryRow()], linksThrows: true });
+    vi.mocked(getCachedUrl).mockResolvedValue(cachedBlob({ url: GOOGLE_URL, isGated: true }));
+
+    const { c, jsonFn } = mockContext();
+
+    await redirectHandler(c as any, vi.fn() as any);
+
+    expect(renderActionScreen).toHaveBeenCalled();
+    expect(jsonFn).not.toHaveBeenCalledWith({ error: "service_unavailable" }, 503);
+  });
+});
+
 
 // ---------------------------------------------------------------------------
 // Subscription pause

@@ -116,10 +116,11 @@ describe("README card-manufacturing walkthrough", () => {
     expect(walkthrough).toContain("original_url");
   });
 
-  it("states that the redirect cache is invalidated, not left to chance", () => {
-    // Skipping this leaves the sticker serving the previous destination for
-    // 24h with no error anywhere, which is invisible until a customer scans.
-    expect(walkthrough).toMatch(/invalidat/i);
+  it("states that an edit shows on the next scan, not after a cache expires", () => {
+    // The owner checks an edit by scanning the sticker. A walkthrough that
+    // implies a cache delay sends them waiting on something that no longer
+    // exists, or doubting an edit that already applied.
+    expect(walkthrough).toMatch(/next scan/i);
   });
 
   it("states that short_code is immutable", () => {

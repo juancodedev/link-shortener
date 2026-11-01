@@ -648,6 +648,42 @@ describe("renderHourlyTraffic", () => {
   });
 });
 
+describe("printable report", () => {
+  async function printCss(): Promise<string> {
+    const html = await serve();
+    const start = html.indexOf("@media print {");
+    expect(start).toBeGreaterThan(-1);
+    // The block ends at the first line that closes it at the same indentation.
+    return html.slice(start, html.indexOf("\n    }\n", start));
+  }
+
+  it("hides navigation, the admin column, controls and the links table when printed", async () => {
+    const css = await printCss();
+
+    expect(css).toContain("nav,");
+    expect(css).toContain(".col-side,");
+    expect(css).toContain(".no-print,");
+    expect(css).toContain("button,");
+    expect(css).toContain("select,");
+    expect(css).toContain("display: none !important;");
+  });
+
+  it("keeps each card on one page and prints the bar colours", async () => {
+    const css = await printCss();
+
+    expect(css).toContain("break-inside: avoid;");
+    expect(css).toContain("print-color-adjust: exact;");
+  });
+
+  it("marks the links table as not part of the report and offers a print button", async () => {
+    const html = await serve();
+
+    expect(html).toContain('<div class="card no-print" id="links-card">');
+    expect(html).toContain('id="print-report"');
+    expect(codeOnly(await clientScript())).toContain("window.print()");
+  });
+});
+
 describe("hourly traffic card", () => {
   it("ships a hidden card and loads it from /api/traffic/hourly", async () => {
     const html = await serve();

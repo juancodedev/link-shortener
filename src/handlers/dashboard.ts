@@ -574,6 +574,27 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     .check-row input[type="checkbox"] { width: 1.125rem; height: 1.125rem; margin: 0; flex: none; accent-color: var(--tag); }
     .gap-top { margin-top: 1rem; }
     .gap-top-sm { margin-top: 0.5rem; }
+    .report-actions { display: flex; justify-content: flex-end; margin-bottom: 0.75rem; }
+    /* The printed report: only the metric cards, one card never split across
+       two pages, and the chart colours kept (browsers drop backgrounds by
+       default, which would print the bars as nothing). */
+    @media print {
+      nav,
+      .col-side,
+      .no-print,
+      .qr-modal,
+      button,
+      select,
+      #feedback-card label,
+      .message {
+        display: none !important;
+      }
+      * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      body, .container { background: none; max-width: none; padding: 0; }
+      .layout { display: block; }
+      .card { break-inside: avoid; box-shadow: none; }
+      .table-wrap { overflow: visible; }
+    }
   </style>
 </head>
 <body>
@@ -852,6 +873,11 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
 
     </div>
     <div class="col-main">
+    <!-- The report is what the owner forwards: the print stylesheet keeps the
+         metric cards and drops everything that is a control. -->
+    <div class="report-actions no-print">
+      <button type="button" id="print-report" class="btn-sm">Print report</button>
+    </div>
     <!-- Review gate. Presentable as a screenshot on purpose: this screen is
          what the owner forwards as their monthly report, so every figure here
          carries its own qualification in the markup rather than in a tooltip
@@ -868,7 +894,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       <div id="traffic-body"></div>
     </div>
 
-    <div class="card">
+    <div class="card no-print" id="links-card">
       <h3>Your Links (<span id="link-count">0</span>/${activeLinkLimit})</h3>
       <div id="links-loading" class="loading">Loading...</div>
       <div class="table-wrap">
@@ -1256,6 +1282,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       }
 
       document.getElementById("feedback-filter").addEventListener("change", () => loadFeedbackInbox());
+      document.getElementById("print-report").addEventListener("click", () => window.print());
 
       async function loadFeedbackInbox() {
         const body = document.getElementById("feedback-body");

@@ -1012,9 +1012,10 @@ describe("the dashboard script never triggers a load at parse time", () => {
 
     // One call per handler that changes the table: create form submit, bulk
     // create, destination save, branch save, toggle, review-screen toggle,
-    // client-ref save, delete, and refreshOwnership (a business or branch
-    // changed). A parse-time call anywhere pushes this to ten.
-    expect(statements).toHaveLength(9);
+    // client-ref save, delete, refreshOwnership (a business or branch
+    // changed), the print-queue toggle and "Mark as printed". A parse-time
+    // call anywhere pushes this to twelve.
+    expect(statements).toHaveLength(11);
     expect(statements.every((indent) => indent > TOP_LEVEL_INDENT)).toBe(true);
   });
 
@@ -1618,7 +1619,8 @@ describe("the dashboard can manufacture cards in bulk", () => {
     // load-destination became save-destination (any link's URL is editable
     // now) and save-branch joined (odd/tasks/business-branches.md, S4). edit
     // joined because the panel was only reachable through the clicks count,
-    // and the operator could not find it.
+    // and the operator could not find it. queue-print and unqueue-print joined
+    // for the print queue (odd/tasks/print-queue-cards.md, S2-S3).
     const actions = [...script.matchAll(/case "([a-z-]+)":/g)].map((m) => m[1]);
     expect(new Set(actions)).toEqual(
       new Set([
@@ -1632,6 +1634,8 @@ describe("the dashboard can manufacture cards in bulk", () => {
         "toggle",
         "toggle-gate",
         "delete",
+        "queue-print",
+        "unqueue-print",
       ]),
     );
   });
@@ -2531,5 +2535,146 @@ describe("grouped branches can move, and inactive ones leave the pickers", () =>
     expect(listener).toContain('"toggle-business"');
     expect(listener).toContain('setBusinessActive(el.dataset.businessId, el.dataset.active === "true")');
     expect(listener).toContain('setBranchActive(el.dataset.locationId, el.dataset.active === "true")');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Print queue in the links table and the Cards section
+// (odd/tasks/print-queue-cards.md S2-S6)
+// ---------------------------------------------------------------------------
+
+describe("print queue in the links table", () => {
+  it("offers Send to print on an unconfigured link, outside the two-button actions cell", async () => {
+    const row = await renderRow({ original_url: null, print_queued: false });
+    const main = row.slice(0, row.indexOf("</tr>"));
+
+    expect(main).toContain('data-action="queue-print" data-id="link-uuid"');
+    expect(main).toContain(">Send to print<");
+    const actions = main.slice(main.indexOf('<div class="row-actions">'));
+    expect([...actions.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((m) => m[1])).toEqual(["Edit", "Del"]);
+  });
+
+  it("shows a To print badge and Remove from queue on a queued link", async () => {
+    const row = await renderRow({ original_url: null, print_queued: true });
+    const main = row.slice(0, row.indexOf("</tr>"));
+
+    expect(main).toContain('<span class="badge badge-queued">To print</span>');
+    expect(main).toContain('data-action="unqueue-print" data-id="link-uuid"');
+    expect(main).not.toContain('data-action="queue-print"');
+  });
+
+  it("offers no print control on a configured link", async () => {
+    const row = await renderRow({ original_url: "https://g.page/r/x", print_queued: false });
+
+    expect(row).not.toContain("queue-print");
+    expect(row).not.toContain("To print");
+  });
+
+  it("repeats the control in the editing panel, which every screen size reaches", async () => {
+    const row = await renderRow({ original_url: null, print_queued: false });
+    const panel = row.slice(row.indexOf("</tr>"));
+
+    expect(panel).toContain('data-action="queue-print" data-id="link-uuid"');
+  });
+
+  it("routes both actions to the same PATCH helper", async () => {
+    const script = codeOnly(await clientScript());
+
+    expect(script).toContain('case "queue-print":');
+    expect(script).toContain('case "unqueue-print":');
+    expect(script).toMatch(/window\.__api\("PATCH", "\/api\/links\/" \+ id, \{ print_queued: queued \}\)/);
+  });
+});
+
+describe("cards sheet layout", () => {
+  type Layout = { cols: number; rows: number; cap: number; pages: number; fits: boolean };
+  type Compute = (w: number, h: number, margin: number, gap: number, count: number) => Layout;
+  type Size = (preset: string, w: number, h: number) => { w: number; h: number; single: boolean };
+
+  it("fits 1×2 cards on A4, 2×3 on A3 and 3×2 on landscape A3 with a 10 mm margin and a 6 mm gap", async () => {
+    const compute = await loadClientFunction<Compute>("computeSheetLayout");
+
+    expect(compute(210, 297, 10, 6, 3)).toEqual({ cols: 1, rows: 2, cap: 2, pages: 2, fits: true });
+    expect(compute(297, 420, 10, 6, 5)).toEqual({ cols: 2, rows: 3, cap: 6, pages: 1, fits: true });
+    expect(compute(420, 297, 10, 6, 7)).toEqual({ cols: 3, rows: 2, cap: 6, pages: 2, fits: true });
+  });
+
+  it("says when the sheet is too small for one card", async () => {
+    const compute = await loadClientFunction<Compute>("computeSheetLayout");
+
+    expect(compute(100, 100, 10, 6, 1).fits).toBe(false);
+    expect(compute(100, 100, 0, 0, 1)).toEqual({ cols: 1, rows: 1, cap: 1, pages: 1, fits: true });
+  });
+
+  it("knows every preset of the original generator", async () => {
+    const size = await loadClientFunction<Size>("sheetPresetSize");
+
+    expect(size("297x420", 0, 0)).toEqual({ w: 297, h: 420, single: false });
+    expect(size("420x297", 0, 0)).toEqual({ w: 420, h: 297, single: false });
+    expect(size("210x297", 0, 0)).toEqual({ w: 210, h: 297, single: false });
+    expect(size("216x279", 0, 0)).toEqual({ w: 216, h: 279, single: false });
+    expect(size("100x100", 0, 0)).toEqual({ w: 100, h: 100, single: true });
+    expect(size("custom", 600, 400)).toEqual({ w: 600, h: 400, single: false });
+  });
+});
+
+describe("cards section", () => {
+  function cardsSection(html: string): string {
+    const start = html.indexOf('<section class="dash-section" data-section="cards"');
+    return html.slice(start, html.indexOf("</section>", start));
+  }
+
+  it("offers every option of the original generator", async () => {
+    const section = cardsSection(await serve());
+
+    for (const v of ["hybrid", "qr", "nfc"]) expect(section).toContain(`name="card-variant" value="${v}"`);
+    expect(section).toContain(">Híbrido: QR + NFC<");
+    expect(section).toContain(">Solo QR Centrado<");
+    expect(section).toContain(">Solo NFC Centrado<");
+    expect(section).toContain('<option value="official">Estándar Oficial Google</option>');
+    expect(section).toContain('<option value="minimal">Clean Minimalist Glass</option>');
+    for (const p of ["297x420", "420x297", "210x297", "216x279", "100x100", "custom"]) {
+      expect(section).toContain(`<option value="${p}"`);
+    }
+    for (const id of ["card-mirror", "card-crop", "card-margin", "card-gap", "card-sheet-w", "card-sheet-h", "card-zoom"]) {
+      expect(section).toContain(`id="${id}"`);
+    }
+    expect(section).toContain('id="cards-export"');
+    expect(section).toContain('id="cards-mark-printed"');
+    expect(section).toContain('id="card-sheets"');
+  });
+
+  it("starts the grid at the top-left margin instead of centring it", async () => {
+    const html = await serve();
+
+    expect(html).toMatch(/\.card-sheet\s*\{[^}]*justify-content:\s*start;[^}]*align-content:\s*start;/);
+    expect(html).not.toMatch(/\.card-sheet\s*\{[^}]*justify-content:\s*center/);
+  });
+
+  it("prints only the sheets, at the sheet size, without the preview zoom", async () => {
+    const html = await serve();
+    const script = codeOnly(await clientScript());
+
+    expect(html).toContain("body.printing-cards");
+    expect(html).toMatch(/body\.printing-cards #card-sheets\s*\{[^}]*zoom:\s*1 !important;/);
+    expect(html).toMatch(/\.card-sheet \+ \.card-sheet\s*\{[^}]*break-before:\s*page;/);
+    expect(script).toContain('document.body.classList.add("printing-cards")');
+    expect(script).toMatch(/@page \{ size: " \+ size\.w \+ "mm " \+ size\.h \+ "mm; margin: 0; \}/);
+    expect(script).toContain('addEventListener("afterprint"');
+  });
+
+  it("loads the queue and each card from the API, and clears a printed batch", async () => {
+    const script = codeOnly(await clientScript());
+
+    expect(script).toContain('window.__api("GET", "/api/links/print-queue")');
+    expect(script).toMatch(/"\/api\/links\/" \+ encodeURIComponent\(item\.id\) \+ "\/card\.svg\?design="/);
+    expect(script).toContain('window.__api("POST", "/api/links/printed", { ids:');
+    expect(script).toContain("loadCards()");
+  });
+
+  it("loads the fonts the cards are drawn with, so the PDF embeds what the preview shows", async () => {
+    const html = await serve();
+
+    expect(html).toContain('href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Outfit:wght@400;500;600;700&amp;display=swap"');
   });
 });

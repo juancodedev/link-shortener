@@ -16,11 +16,11 @@ Branch: `feat/print-queue` (stacked on `feat/hourly-traffic`, PR #87) · Deliver
 
 | ID | Specs | Route | Status | Commit |
 |----|-------|-------|--------|--------|
-| T1 | S2, S3 | inline | pending — migration `print_queued_at` on every tenant `links` table (Risk item 1, own commit) | |
-| T2 | S2, S3 | inline | pending — API: list flag, PATCH `print_queued`, auto-clear on configure, `GET /api/links/print-queue`, `POST /api/links/printed` | |
-| T3 | S4 | inline | pending — card SVG renderer + `GET /api/links/:id/card.svg` | |
-| T4 | S1 | inline | pending — dashboard sidebar and sections | |
-| T5 | S2, S3, S4, S5, S6 | inline | pending — Cards section, queue buttons in the links table, sheet layout, print | |
+| T1 | S2, S3 | inline | done — migration `print_queued_at` on every tenant `links` table (Risk item 1, own commit) || 4cd287b |
+| T2 | S2, S3 | inline | done — API: list flag, PATCH `print_queued`, auto-clear on configure, `GET /api/links/print-queue`, `POST /api/links/printed` || 61e60e1 |
+| T3 | S4 | inline | done — card SVG renderer + `GET /api/links/:id/card.svg` || e7653ed |
+| T4 | S1 | inline | done — dashboard sidebar and sections || ad9d80a |
+| T5 | S2, S3, S4, S5, S6 | inline | done — Cards section, queue buttons in the links table, sheet layout, print || this commit |
 
 Route evidence: every unit touches `src/handlers/dashboard.ts` or depends on T1/T2, so no parallel writers. Risk: T1 is item 1 (schema change on every tenant `links` table).
 
@@ -31,3 +31,5 @@ Route evidence: every unit touches `src/handlers/dashboard.ts` or depends on T1/
 - **L3 (2026-11-01, user, verbatim):** "Sale de la cola cuando yo le cambie el estado, manualmente o cuando se configure"
 - **L4 (2026-11-01, user, verbatim):** "Si, cumple, es la misma idea, pero yo lo pensé de pocas, no por lotes, pero tu idea es mejor / Implementarlo" — approved the mockup (sidebar sections, "To print" badge, Cards screen with controls and a top-left sheet).
 - **L5 (decisions, mine):** queue state is a nullable `print_queued_at TIMESTAMPTZ` on the tenant `links` table (dies with the row, cleared in the same UPDATE that saves a destination) rather than a separate table. Tenant migration version 5 (versions 2–4 are taken; 00015 reused 3). Dashboard copy stays English like the rest of the dashboard; the printed card text stays Spanish as in the pasted design. Card text uses `<text>` with web fonts loaded by the page and the SVG is inlined, so the browser embeds the same fonts in the PDF that the preview shows.
+- **L6 (evidence):** T1 reviewed by RDD (risk + reliability), APPROVED and acknowledged. T2/T3 assessed medium, under budget. T4 and T5 test-first: RED observed (7 and 12 failing dashboard tests), then GREEN. Full suite 1215/1215, `tsc --noEmit` clean. Not yet checked in a real browser: the PDF output of each sheet preset. Deploy note: migration 00019 must run in production before this merges, or `GET /api/links` selects a missing column.
+

@@ -239,3 +239,63 @@ export function toClientRefMetrics(row: ClientRefMetricsRow): ClientRefMetrics {
     sessions: toCount(row.sessions),
   };
 }
+// ---------------------------------------------------------------------------
+// Hourly traffic — "when are my busy hours"
+// ---------------------------------------------------------------------------
+
+/**
+ * The time zone scans are bucketed in. Every customer today is a Chilean
+ * business, so the hour the owner reads must be Santiago's wall-clock hour: a
+ * UTC bucket would move a 13:00 lunch rush to 16:00 or 17:00 depending on DST.
+ * Passed to Postgres as an IANA name so daylight saving is handled there.
+ */
+export const BUSINESS_TIME_ZONE = "America/Santiago";
+
+/**
+ * How far back the histogram looks. A month smooths out one unusual day while
+ * still reflecting the current schedule of the store.
+ */
+export const HOURLY_WINDOW = "30 days";
+
+/** One histogram row as Postgres returns it. */
+export interface HourlyTrafficRow {
+  hour: number | string;
+  scans: number | string;
+}
+
+/** One hour of the day after coercion, as the API returns it. */
+export interface HourlyTraffic {
+  hour: number;
+  scans: number;
+}
+
+/**
+ * Scans per local hour of the day for ONE tenant.
+ *
+ * Every scan counts, not every person: the question is how busy the tag is at
+ * each hour, and a table that hands its phone around is still traffic at that
+ * table. Scoped by `tenant_id` rather than a join against the tenant's links
+ * table, so scans of a link deleted later still show up in the hours they
+ * happened.
+ */
+export function buildHourlyTrafficQuery(tenantId: string): BoundQuery {
+  return {
+    text: `SELECT extract(hour FROM c.created_at AT TIME ZONE $2)::int AS hour,
+            COUNT(*)::int AS scans
+       FROM analytics.link_clicks c
+      WHERE c.tenant_id = $1
+        AND c.created_at >= NOW() - CAST($3 AS interval)
+      GROUP BY 1
+      ORDER BY 1`,
+    params: [tenantId, BUSINESS_TIME_ZONE, HOURLY_WINDOW],
+  };
+}
+
+/**
+ * Expands the grouped rows into all 24 hours. Postgres only returns hours that
+ * had scans, and a missing bar would read as "no data" instead of "zero".
+ */
+export function toHourlyHistogram(rows: HourlyTrafficRow[]): HourlyTraffic[] {
+  const byHour = new Map(rows.map((r) => [Number(r.hour), toCount(r.scans)]));
+  return Array.from({ length: 24 }, (_, hour) => ({ hour, scans: byHour.get(hour) ?? 0 }));
+}

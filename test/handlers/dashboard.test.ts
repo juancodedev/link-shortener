@@ -601,6 +601,64 @@ describe("renderClients", () => {
   });
 });
 
+describe("renderHourlyTraffic", () => {
+  type Render = (payload: unknown) => string;
+
+  const payload = (scansByHour: Record<number, number>) => ({
+    time_zone: "America/Santiago",
+    window: "30 days",
+    hours: Array.from({ length: 24 }, (_, hour) => ({ hour, scans: scansByHour[hour] ?? 0 })),
+  });
+
+  it("draws one bar per hour, sized against the busiest hour", async () => {
+    const render = await loadClientFunction<Render>("renderHourlyTraffic");
+
+    const html = render(payload({ 13: 40, 20: 10 }));
+
+    expect([...html.matchAll(/class="hour-bar"/g)]).toHaveLength(24);
+    expect(html).toContain('style="height:100%;"');
+    expect(html).toContain('style="height:25%;"');
+    expect(html).toContain('title="13:00 · 40 scans"');
+  });
+
+  it("names the busiest hour and says whose clock and which period", async () => {
+    const render = await loadClientFunction<Render>("renderHourlyTraffic");
+
+    const html = render(payload({ 13: 40, 20: 10 }));
+
+    expect(html).toContain("Busiest hour: 13:00–14:00 (40 scans)");
+    expect(html).toContain("Last 30 days · America/Santiago time");
+  });
+
+  it("explains the empty state instead of drawing 24 flat bars", async () => {
+    const render = await loadClientFunction<Render>("renderHourlyTraffic");
+
+    const html = render(payload({}));
+
+    expect(html).toContain("No scans in the last 30 days yet.");
+    expect(html).not.toContain("hour-bar");
+  });
+
+  it("escapes the time zone and window it prints", async () => {
+    const render = await loadClientFunction<Render>("renderHourlyTraffic");
+
+    const html = render({ ...payload({ 1: 1 }), time_zone: XSS_ATTR });
+
+    expect(html).not.toContain('"><img');
+  });
+});
+
+describe("hourly traffic card", () => {
+  it("ships a hidden card and loads it from /api/traffic/hourly", async () => {
+    const html = await serve();
+    const script = codeOnly(await clientScript());
+
+    expect(html).toContain('id="traffic-card"');
+    expect(script).toContain('"/api/traffic/hourly"');
+    expect(script).toContain("loadHourlyTraffic()");
+  });
+});
+
 describe("Phase 2 markup did not regress the escaping and delegation guards", () => {
   it("keeps the metrics row free of inline event handlers", async () => {
     // The visitors box was added inside the row template — the exact place

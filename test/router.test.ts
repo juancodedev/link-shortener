@@ -432,6 +432,8 @@ describe("router client metrics route", () => {
       app.routes.filter((r) => r.method === method && r.path === path);
 
     expect(chainFor("GET", "/api/clients/metrics")).toHaveLength(3);
+    // The hourly histogram reads the tenant id from the same context.
+    expect(chainFor("GET", "/api/traffic/hourly")).toHaveLength(3);
 
     // Same chain length as the routes it must match.
     expect(chainFor("GET", "/api/links")).toHaveLength(3);
@@ -671,6 +673,7 @@ describe("authenticated responses declare they are not cacheable", () => {
     ["/api/locations", "GET"],
     ["/api/businesses", "GET"],
     ["/api/clients/metrics", "GET"],
+    ["/api/traffic/hourly", "GET"],
     ["/api/review-gate/metrics", "GET"],
   ])("%s answers no-store, so a mutation cannot be replayed from cache", async (path, method) => {
     const app = createApp(testEnv());

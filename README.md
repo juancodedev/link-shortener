@@ -207,6 +207,7 @@ Every mutation flushes the tenant's `reg:{code}` KV entries so the change takes 
 | `POST` | `/api/businesses` | Create one business |
 | `PATCH` | `/api/businesses/:id` | Rename a business or switch it off |
 | `GET` | `/api/clients/metrics` | Per-`client_ref` visitor rollup |
+| `GET` | `/api/traffic/hourly` | Scans per local hour of the day (last 30 days, `America/Santiago`), always 24 buckets |
 | `GET` | `/api/review-gate/feedback` | What customers wrote, newest first. Filters: `business_id`, `location_id`, `since` |
 | `GET` | `/api/review-gate/feedback.csv` | The same, as a download (same filters) |
 | `GET` | `/api/review-gate/metrics` | Action-screen views, sentiment, derivation rate |

@@ -24,6 +24,7 @@ import {
 import { createLinksBatch } from "./api/batch";
 import { listClientRefMetrics } from "./api/clients";
 import { hourlyTraffic } from "./api/traffic";
+import { listPrintQueue, markPrinted } from "./api/print-queue";
 import { listLocations, createLocation, updateLocation } from "./api/locations";
 import { listBusinesses, createBusiness, updateBusiness } from "./api/businesses";
 import { linkQrSvg, batchQrSheet } from "./api/qr";
@@ -151,6 +152,12 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
   // read across tenants. It is identical to the routes above for exactly that
   // reason, not for tidiness.
   app.post("/api/links/batch", auth, tenantMembershipMiddleware, createLinksBatch);
+
+  // The print queue (src/api/print-queue.ts). Static paths, registered like the
+  // batch route: neither collides with the parameterised /api/links/:id routes,
+  // which only answer PATCH and DELETE.
+  app.get("/api/links/print-queue", auth, tenantMembershipMiddleware, listPrintQueue);
+  app.post("/api/links/printed", auth, tenantMembershipMiddleware, markPrinted);
 
   // Per-client_ref visitor rollup: auth → resolve tenant from user profile →
   // handler. The same chain as every other tenant-scoped route above, and for

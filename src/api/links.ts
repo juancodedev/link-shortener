@@ -854,10 +854,11 @@ export const listLinks: Handler<{
   const table = qualifyTable(tenant.schemaName, "links");
 
   const rows = await withClient(c.env, async (client) => {
-    const res = await client.query<LinkRow & { clicks_count: number; is_active: boolean; expires_at: string | null; updated_at: string; location_id: string | null; location_name: string | null; business_name: string | null; is_gated: boolean | null }>(
+    const res = await client.query<LinkRow & { clicks_count: number; is_active: boolean; expires_at: string | null; updated_at: string; location_id: string | null; location_name: string | null; business_name: string | null; is_gated: boolean | null; print_queued_at?: string | null }>(
       `SELECT l.id, l.short_code, l.original_url, l.title, l.client_ref, l.clicks_count,
               l.is_active, l.is_gated, l.expires_at, l.created_at, l.updated_at,
-              l.location_id, loc.name AS location_name, b.name AS business_name
+              l.location_id, loc.name AS location_name, b.name AS business_name,
+              l.print_queued_at
        FROM ${table} l
        LEFT JOIN public.locations loc ON loc.id = l.location_id
        LEFT JOIN public.businesses b ON b.id = loc.business_id
@@ -889,6 +890,8 @@ export const listLinks: Handler<{
       // driver hands back without the column still renders as "straight to
       // destination" — the same thing the redirect does with it.
       is_gated: r.is_gated === true,
+      // Waiting in the print queue (the Cards section of the dashboard).
+      print_queued: r.print_queued_at != null,
       expires_at: r.expires_at,
       created_at: r.created_at,
       updated_at: r.updated_at,
@@ -925,6 +928,7 @@ export const updateLink: Handler<{
     original_url?: string | null;
     is_gated?: boolean;
     location_id?: string | null;
+    print_queued?: boolean;
     slug?: unknown;
   };
   try {
@@ -1036,8 +1040,37 @@ export const updateLink: Handler<{
     );
   }
 
+  // --- print_queued: the print queue (odd/tasks/print-queue-cards.md S2-S3) ---
+  //
+  // Only an unconfigured link can be queued: the queue is for card stock that
+  // still has to reach a printer. Saving a destination takes the link out of
+  // the queue (below), so queuing and configuring in one request would ask for
+  // two opposite things at once and is refused.
+  if (body.print_queued !== undefined && typeof body.print_queued !== "boolean") {
+    throw new ValidationError("print_queued must be a boolean", "invalid_request");
+  }
+  if (body.print_queued === true && typeof body.original_url === "string") {
+    throw new ValidationError(
+      "a link cannot be queued for printing while a destination is saved on it",
+      "invalid_request",
+    );
+  }
+
   const rows = await withClient(c.env, async (client) => {
     const table = qualifyTable(tenant.schemaName, "links");
+    if (body.print_queued === true) {
+      const current = await client.query<{ original_url: string | null }>(
+        `SELECT original_url FROM ${table} WHERE id = $1`,
+        [linkId],
+      );
+      if (current.rows.length === 0) throw new NotFoundError("Link not found", "not_found");
+      if (current.rows[0]!.original_url !== null) {
+        throw new ConflictError(
+          "only a link without a destination can be sent to print",
+          "link_configured",
+        );
+      }
+    }
     const sets: string[] = [];
     const vals: (string | boolean)[] = [];
 
@@ -1065,6 +1098,14 @@ export const updateLink: Handler<{
     } else if (typeof body.original_url === "string") {
       sets.push(`original_url = $${vals.length + 1}`);
       vals.push(body.original_url);
+      // A configured card has left the print queue: the owner printed it, or
+      // no longer needs it printed. Clearing it here keeps the two in one write.
+      sets.push(`print_queued_at = NULL`);
+    }
+    if (body.print_queued === true) {
+      sets.push(`print_queued_at = NOW()`);
+    } else if (body.print_queued === false) {
+      sets.push(`print_queued_at = NULL`);
     }
     // is_gated is NOT NULL, so a "clear" would be a constraint violation. Only
     // a boolean is written, and only when one was actually sent — omitting the

@@ -193,7 +193,7 @@ Every mutation flushes the tenant's `reg:{code}` KV entries so the change takes 
 | `GET` | `/api/tenants` | List tenants this user belongs to (the switcher's data source) |
 | `POST` | `/api/links` | Create one link |
 | `GET` | `/api/links` | List the tenant's links |
-| `PATCH` | `/api/links/:id` | Update a link |
+| `PATCH` | `/api/links/:id` | Update a link. `print_queued: true` sends an unconfigured link to the print queue (`409 link_configured` if it has a destination); `false` removes it; saving a destination also removes it |
 | `DELETE` | `/api/links/:id` | Delete a link |
 | `GET` | `/api/links/:id/clicks` | Per-link analytics: country, device, source |
 | `GET` | `/api/links/by-code/:code` | Look a link up by the code on its card (card quick setup). `auth` only: the tenant is the one that owns the code, and membership in it is checked in the handler; unknown and not-a-member are the same 404 |
@@ -208,6 +208,8 @@ Every mutation flushes the tenant's `reg:{code}` KV entries so the change takes 
 | `PATCH` | `/api/businesses/:id` | Rename a business or switch it off |
 | `GET` | `/api/clients/metrics` | Per-`client_ref` visitor rollup |
 | `GET` | `/api/traffic/hourly` | Scans per local hour of the day (last 30 days, `America/Santiago`), always 24 buckets |
+| `GET` | `/api/links/print-queue` | Links waiting to be printed (oldest first), with the short URL each QR encodes |
+| `POST` | `/api/links/printed` | Take printed links out of the queue: `{ ids }` (max 200) → `{ cleared }` |
 | `GET` | `/api/review-gate/feedback` | What customers wrote, newest first. Filters: `business_id`, `location_id`, `since` |
 | `GET` | `/api/review-gate/feedback.csv` | The same, as a download (same filters) |
 | `GET` | `/api/review-gate/metrics` | Action-screen views, sentiment, derivation rate |

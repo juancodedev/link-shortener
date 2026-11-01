@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS {schema}.links (
     client_ref   TEXT,                              -- User-defined CRM identifier; NULL = no client
     location_id  UUID,                              -- public.locations(id), NULL = unassigned
     is_gated     BOOLEAN DEFAULT false NOT NULL,    -- false = plain 302, true = action screen
+    print_queued_at TIMESTAMPTZ,                    -- NULL = not in the print queue
     clicks_count INTEGER DEFAULT 0 NOT NULL,
     is_active    BOOLEAN DEFAULT true NOT NULL,
     expires_at   TIMESTAMPTZ,                       -- NULL = never expires
@@ -53,6 +54,11 @@ CREATE INDEX IF NOT EXISTS idx_links_client_ref
 -- Sparse: most links have no location until the owner assigns one
 CREATE INDEX IF NOT EXISTS idx_links_location
     ON {schema}.links(location_id);
+
+-- Index for the print queue (00019)
+-- Partial: only the handful of cards waiting to be printed
+CREATE INDEX IF NOT EXISTS idx_links_print_queue
+    ON {schema}.links(print_queued_at) WHERE print_queued_at IS NOT NULL;
 
 -- Migration tracking table (one per tenant schema)
 CREATE TABLE IF NOT EXISTS {schema}._migrations (

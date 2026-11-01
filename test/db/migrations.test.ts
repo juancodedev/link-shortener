@@ -49,6 +49,7 @@ import m00015 from "../../supabase/migrations/00015_original_url_nullable.sql?ra
 import m00016 from "../../supabase/migrations/00016_business_feedback_email.sql?raw";
 import m00017 from "../../supabase/migrations/00017_feedback_customer_phone.sql?raw";
 import m00018 from "../../supabase/migrations/00018_businesses.sql?raw";
+import m00019 from "../../supabase/migrations/00019_print_queue.sql?raw";
 
 interface Migration {
   version: number;
@@ -76,6 +77,7 @@ const MIGRATIONS: Migration[] = [
   { version: 16, name: "00016_business_feedback_email", sql: m00016 },
   { version: 17, name: "00017_feedback_customer_phone", sql: m00017 },
   { version: 18, name: "00018_businesses", sql: m00018 },
+  { version: 19, name: "00019_print_queue", sql: m00019 },
 ];
 
 /** Strips `--` comments so a prose version number is never read as a claim. */
@@ -253,7 +255,7 @@ describe("migration safety", () => {
   it("the tenant-ALTER migrations skip tenants with no links table", () => {
     // One half-provisioned registry row must not abort the loop for everyone
     // else's ALTER.
-    for (const m of [m00004, m00007, m00008]) {
+    for (const m of [m00004, m00007, m00008, m00019]) {
       expect(m).toMatch(/CONTINUE\s+WHEN/i);
       expect(m).toMatch(/to_regclass/i);
     }
@@ -399,5 +401,26 @@ describe("00018_businesses", () => {
 
   it("records itself in public._migrations", () => {
     expect(m00018).toMatch(/INSERT INTO public\._migrations[\s\S]*\(18, '00018_businesses'\)/);
+  });
+});
+
+describe("00019_print_queue", () => {
+  it("adds a nullable print_queued_at to every tenant links table, idempotently", () => {
+    expect(m00019).toMatch(
+      /ALTER TABLE %I\.links ADD COLUMN IF NOT EXISTS print_queued_at TIMESTAMPTZ'/,
+    );
+    expect(m00019).not.toMatch(/print_queued_at TIMESTAMPTZ NOT NULL/);
+    expect(code(m00019)).not.toMatch(/DEFAULT/i);
+  });
+
+  it("indexes only the queued rows", () => {
+    expect(m00019).toMatch(
+      /CREATE INDEX IF NOT EXISTS idx_links_print_queue ON %I\.links\(print_queued_at\) WHERE print_queued_at IS NOT NULL/,
+    );
+  });
+
+  it("records tenant version 5 and public version 19", () => {
+    expect(m00019).toMatch(/VALUES \(5, ''00019_print_queue''\)/);
+    expect(m00019).toMatch(/INSERT INTO public\._migrations[\s\S]*\(19, '00019_print_queue'\)/);
   });
 });

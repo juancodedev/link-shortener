@@ -16,6 +16,12 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${title} — Link Shortener</title>
+  <!-- The review cards (Cards section) are drawn with these faces. Loaded by
+       the page so the inline card SVGs use them on screen AND the browser
+       embeds the same fonts in the PDF it prints. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Outfit:wght@400;500;600;700&amp;display=swap">
   <style>
     /* ------------------------------------------------------------------
        TOKENS — the single place a literal colour is allowed.
@@ -41,6 +47,8 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       /* Edges — where one surface meets another */
       --edge: #ddd6c8;         /* a cut edge of board, not a cold grey rule */
       --edge-strong: #c4bba9;  /* form fields, outlined buttons */
+      --paper: #ffffff;        /* a printing sheet: the cards are drawn on white */
+      --card-zoom: 0.45;       /* Cards preview scale; the print is always 1 */
 
       /* Ink — five steps, from a heading down to a placeholder */
       --ink: #2b2622;          /* espresso */
@@ -99,20 +107,51 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     @media (min-width: 768px) {
       .container { padding: 1.5rem 2rem; }
     }
-    .layout { display: grid; grid-template-columns: minmax(0, 1fr); column-gap: 1.5rem; }
+    /* Sidebar + one visible section. On a phone the sidebar is a horizontal
+       bar of section links above the content; from 1024px it is a column. */
+    .app { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+    .sidebar { min-width: 0; }
+    .side-nav {
+      display: flex;
+      gap: 0.25rem;
+      overflow-x: auto;
+      background: var(--sticker);
+      border: 1px solid var(--edge);
+      border-radius: 0.75rem;
+      padding: 0.375rem;
+    }
+    .side-nav a {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      white-space: nowrap;
+      padding: 0.5rem 0.75rem;
+      border-radius: 0.5rem;
+      color: var(--ink);
+      text-decoration: none;
+      font-size: 0.875rem;
+      font-weight: 500;
+    }
+    .side-nav a:hover { background: var(--kraft-deep); }
+    .side-nav a.is-active { background: var(--tag); color: var(--sticker); }
+    .side-count {
+      background: var(--stale-wash);
+      color: var(--stale);
+      border-radius: 999px;
+      padding: 0 0.5rem;
+      font-size: 0.75rem;
+      font-weight: 700;
+    }
+    .dash-section[hidden] { display: none; }
     @media (min-width: 1024px) {
-      .layout {
-        grid-template-columns: minmax(0, 1fr) 22rem;
-        grid-template-areas: "main side";
+      .app {
+        grid-template-columns: 14rem minmax(0, 1fr);
         align-items: start;
+        gap: 1.5rem;
       }
-      .col-main { grid-area: main; }
-      /* Not sticky: the side column can be taller than a laptop screen, and a
-         sticky column that tall hides its own bottom until the page ends. */
-      .col-side { grid-area: side; }
-      /* Scoped to .layout so it outranks the base .url-trunc rule, which
-         comes later in this sheet. */
-      .layout .url-trunc { max-width: 20rem; }
+      .side-nav { flex-direction: column; overflow-x: visible; }
+      .sections .url-trunc { max-width: 20rem; }
     }
     nav {
       background: var(--sticker);
@@ -575,12 +614,39 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     .gap-top { margin-top: 1rem; }
     .gap-top-sm { margin-top: 0.5rem; }
     .report-actions { display: flex; justify-content: flex-end; margin-bottom: 0.75rem; }
+    .badge-queued { background: var(--stale-wash); color: var(--stale); }
+    /* Cards section (odd/tasks/print-queue-cards.md S4-S6). Sheets and cards
+       are sized in millimetres, so the preview is the print at a zoom. */
+    .cards-controls { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.75rem; }
+    @media (min-width: 768px) { .cards-controls { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+    .cards-controls fieldset { border: 1px solid var(--edge); border-radius: 0.5rem; padding: 0.5rem 0.75rem; margin: 0; }
+    .cards-controls legend { font-size: 0.75rem; font-weight: 600; color: var(--ink-label); padding: 0 0.25rem; }
+    .cards-controls .check-row { margin-top: 0.375rem; font-weight: 400; }
+    .cards-mm { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-top: 0.5rem; font-size: 0.75rem; }
+    .cards-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.75rem 0; }
+    .cards-info { font-size: 0.75rem; color: var(--ink-soft); }
+    .cards-queue { list-style: none; padding: 0; margin: 0 0 0.75rem; display: flex; flex-wrap: wrap; gap: 0.375rem; }
+    .cards-queue li { display: flex; align-items: center; gap: 0.375rem; background: var(--kraft-deep); border-radius: 999px; padding: 0.125rem 0.25rem 0.125rem 0.625rem; font-size: 0.75rem; }
+    #card-sheets { zoom: var(--card-zoom); overflow-x: auto; padding: 0.5rem 0; }
+    .card-sheet {
+      display: grid;
+      justify-content: start;
+      align-content: start;
+      box-sizing: border-box;
+      background: var(--paper);
+      outline: 1px solid var(--edge);
+      margin: 0 0 1rem;
+    }
+    .print-card { width: 100mm; height: 100mm; overflow: hidden; border-radius: 5mm; background: var(--paper); }
+    .print-card.is-crop { outline: 0.25mm dashed var(--edge-strong); outline-offset: -0.25mm; }
+    .print-card.is-mirror svg { transform: scaleX(-1); }
     /* The printed report: only the metric cards, one card never split across
        two pages, and the chart colours kept (browsers drop backgrounds by
        default, which would print the bars as nothing). */
     @media print {
       nav,
-      .col-side,
+      .sidebar,
+      .dash-section:not([data-section="overview"]),
       .no-print,
       .qr-modal,
       button,
@@ -591,9 +657,19 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       }
       * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
       body, .container { background: none; max-width: none; padding: 0; }
-      .layout { display: block; }
+      .app { display: block; }
+      .dash-section[data-section="overview"] { display: block !important; }
       .card { break-inside: avoid; box-shadow: none; }
       .table-wrap { overflow: visible; }
+      /* Printing from Cards: only the sheets, at full size (S5). The class is
+         set just for that print, so the report print above is unchanged. */
+      body.printing-cards .dash-section[data-section="cards"] { display: block !important; }
+      body.printing-cards .dash-section[data-section="overview"] { display: none !important; }
+      body.printing-cards #cards-root > :not(#card-sheets) { display: none !important; }
+      body.printing-cards #cards-root { border: 0; padding: 0; margin: 0; background: none; }
+      body.printing-cards #card-sheets { zoom: 1 !important; overflow: visible; padding: 0; }
+      body.printing-cards .card-sheet { margin: 0; outline: none; break-inside: avoid; overflow: hidden; }
+      .card-sheet + .card-sheet { break-before: page; page-break-before: always; }
     }
   </style>
 </head>
@@ -744,15 +820,67 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
 
   const body = `
     <!--
-      TWO COLUMNS ON A WIDE SCREEN, ONE ON A PHONE.
+      SECTIONS BEHIND A SIDEBAR (odd/tasks/print-queue-cards.md S1).
 
-      The side column holds what the owner CONFIGURES (create a link, make
-      cards, set the feedback address); the main column holds what they READ
-      (satisfaction, links, comments). The side column comes first in the
-      markup so a phone still opens on "Create Short Link", as it always has.
+      One section is visible at a time; the sidebar link and the URL hash pick
+      it, so a reload stays where the owner was. Links is the default: it is
+      where cards are created, and a phone has always opened there. Every
+      section's data still loads at boot, so switching is instant.
     -->
-    <div class="layout">
-    <div class="col-side">
+    <div class="app">
+    <aside class="sidebar no-print">
+      <nav class="side-nav" aria-label="Dashboard sections">
+        <a href="#overview" data-section-link="overview">Overview</a>
+        <a href="#links" data-section-link="links">Links</a>
+        <a href="#cards" data-section-link="cards">Cards <span id="cards-count" class="side-count" hidden></span></a>
+        <a href="#businesses" data-section-link="businesses">Businesses and branches</a>
+        <a href="#comments" data-section-link="comments">Comments</a>
+        <a href="#settings" data-section-link="settings">Settings</a>
+      </nav>
+    </aside>
+    <main class="sections">
+    <section class="dash-section" data-section="overview" hidden>
+    <!-- The report is what the owner forwards: the print stylesheet keeps the
+         metric cards and drops everything that is a control. -->
+    <div class="report-actions no-print">
+      <button type="button" id="print-report" class="btn-sm">Print report</button>
+    </div>
+    <!-- Review gate. Presentable as a screenshot on purpose: this screen is
+         what the owner forwards as their monthly report, so every figure here
+         carries its own qualification in the markup rather than in a tooltip
+         that a screenshot would not capture. -->
+    <div class="card" id="gate-card" style="display:none;">
+      <h3>Customer satisfaction</h3>
+      <div id="gate-body"><div class="loading">Loading...</div></div>
+    </div>
+
+    <!-- Busy hours. Same screenshot discipline as the panel above: the window
+         and the time zone are printed under the chart, not in a tooltip. -->
+    <div class="card" id="traffic-card" style="display:none;">
+      <h3>Busy hours</h3>
+      <div id="traffic-body"></div>
+    </div>
+
+    <div class="card" id="clients-card" style="display:none;">
+      <h3>Stores by Client Ref</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Client Ref</th>
+              <th>Unique Visitors</th>
+              <th>Sessions</th>
+            </tr>
+          </thead>
+          <tbody id="clients-body"></tbody>
+        </table>
+      </div>
+      <!-- Same caveat, next to the store-level rollup. -->
+      <p class="estimate-note">${VISITOR_ESTIMATE_CAVEAT}</p>
+    </div>
+    </section>
+
+    <section class="dash-section" data-section="links">
     <div class="card">
       <h3>Create Short Link</h3>
       <form id="create-form">
@@ -819,80 +947,6 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       </button>
     </div>
 
-    <!--
-      BUSINESSES AND BRANCHES.
-
-      A business ("local") groups one or more branches ("sucursales"), and each
-      link belongs to a branch. Operator-only: the businesses never see this.
-      Every comment and rating is then traceable to business, branch and link
-      (odd/tasks/business-branches.md).
-    -->
-    <div class="card" id="businesses-card">
-      <h3>Businesses and branches</h3>
-      <label for="new-business-name">New business</label>
-      <div class="field-row">
-        <input type="text" id="new-business-name" maxlength="120" placeholder="e.g. Café Central">
-        <button type="button" id="add-business" class="btn-sm btn-primary">Add</button>
-      </div>
-      <div id="businesses-msg" class="message"></div>
-      <div id="businesses-body" class="gap-top"><div class="loading">Loading...</div></div>
-    </div>
-
-    <!--
-      WHERE FEEDBACK SHOULD GO.
-
-      A card's QR leads to the review gate. A customer can leave a private
-      comment there, and it lands in analytics.tag_feedback and shows up in the
-      satisfaction panel below.
-
-      They can also record here where that should be delivered.
-
-      IT DOES NOT SEND ANYTHING YET. The address is stored, shown and exported
-      into the print sheet's CSV, and nothing is emailed from it. That is the
-      honest state of this field, and the label says so, because a green
-      dashboard implying "reviews are being emailed" is worse than no field at
-      all: an owner would stop checking the panel.
-
-      Wired as static listeners with the other form controls, not through the
-      delegated switch — that switch is for record actions, and this acts on no
-      record.
-    -->
-    <div class="card" id="feedback-email-card">
-      <h3>Feedback email</h3>
-      <p class="field-help">
-        Where you would like private customer comments delivered. Stored now;
-        nothing is emailed yet — comments still arrive in the satisfaction panel
-        below.
-      </p>
-      <label for="feedback-email">Email address</label>
-      <input type="email" id="feedback-email" placeholder="you@yourbusiness.com"
-             autocomplete="email" maxlength="254">
-      <div id="feedback-email-msg" class="message"></div>
-      <button type="button" id="feedback-email-save" class="btn-sm btn-primary gap-top-sm">Save</button>
-    </div>
-
-    </div>
-    <div class="col-main">
-    <!-- The report is what the owner forwards: the print stylesheet keeps the
-         metric cards and drops everything that is a control. -->
-    <div class="report-actions no-print">
-      <button type="button" id="print-report" class="btn-sm">Print report</button>
-    </div>
-    <!-- Review gate. Presentable as a screenshot on purpose: this screen is
-         what the owner forwards as their monthly report, so every figure here
-         carries its own qualification in the markup rather than in a tooltip
-         that a screenshot would not capture. -->
-    <div class="card" id="gate-card" style="display:none;">
-      <h3>Customer satisfaction</h3>
-      <div id="gate-body"><div class="loading">Loading...</div></div>
-    </div>
-
-    <!-- Busy hours. Same screenshot discipline as the panel above: the window
-         and the time zone are printed under the chart, not in a tooltip. -->
-    <div class="card" id="traffic-card" style="display:none;">
-      <h3>Busy hours</h3>
-      <div id="traffic-body"></div>
-    </div>
 
     <div class="card no-print" id="links-card">
       <h3>Your Links (<span id="link-count">0</span>/${activeLinkLimit})</h3>
@@ -929,7 +983,87 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       -->
       <p class="estimate-note"><strong>About visitor figures:</strong> ${VISITOR_ESTIMATE_CAVEAT}</p>
     </div>
+    </section>
 
+    <section class="dash-section" data-section="cards" hidden>
+    <!--
+      THE PRINT QUEUE (odd/tasks/print-queue-cards.md S4-S6).
+
+      Every link sent to print from the Links section, laid out as 10×10 cm
+      review cards on the chosen sheet. The sheet below IS the print: same SVG,
+      same millimetres; only the screen preview is zoomed. Cards start at the
+      top-left margin so a part-used sheet can go through the printer again.
+    -->
+    <div class="card" id="cards-root">
+      <h3>Cards to print</h3>
+      <p class="field-help">Links you send to print from the Links section wait here. A card leaves the queue when you mark it printed, remove it, or save its destination.</p>
+      <ul id="cards-queue" class="cards-queue"></ul>
+      <div id="cards-controls" class="cards-controls">
+        <fieldset>
+          <legend>Variante</legend>
+          <label class="check-row"><input type="radio" name="card-variant" value="hybrid" checked>Híbrido: QR + NFC</label>
+          <label class="check-row"><input type="radio" name="card-variant" value="qr">Solo QR Centrado</label>
+          <label class="check-row"><input type="radio" name="card-variant" value="nfc">Solo NFC Centrado</label>
+        </fieldset>
+        <fieldset>
+          <legend>Diseño</legend>
+          <select id="card-design" aria-label="Diseño">
+            <option value="official">Estándar Oficial Google</option>
+            <option value="minimal">Clean Minimalist Glass</option>
+          </select>
+          <label class="check-row"><input type="checkbox" id="card-mirror">Modo Espejo (impresión posterior transparente)</label>
+          <label class="check-row"><input type="checkbox" id="card-crop" checked>Líneas / Guías de Corte (Radio R5)</label>
+        </fieldset>
+        <fieldset>
+          <legend>Hoja</legend>
+          <select id="card-sheet" aria-label="Hoja">
+            <option value="297x420">A3 vertical (297×420 mm)</option>
+            <option value="420x297">A3 horizontal (420×297 mm)</option>
+            <option value="210x297">A4 vertical (210×297 mm)</option>
+            <option value="216x279">Carta (216×279 mm)</option>
+            <option value="100x100">1 tarjeta por hoja (100×100 mm)</option>
+            <option value="custom">Medida personalizada (rollo / pliego)</option>
+          </select>
+          <div class="cards-mm">
+            <label>Margen hoja (mm)<input id="card-margin" type="number" min="0" value="10"></label>
+            <label>Separación (mm)<input id="card-gap" type="number" min="0" value="6"></label>
+            <label>Ancho hoja (mm)<input id="card-sheet-w" type="number" min="100" value="600" disabled></label>
+            <label>Alto hoja (mm)<input id="card-sheet-h" type="number" min="100" value="400" disabled></label>
+          </div>
+          <label class="gap-top-sm">Zoom vista previa<input id="card-zoom" type="range" min="25" max="100" value="45"></label>
+        </fieldset>
+      </div>
+      <div class="cards-actions">
+        <button type="button" id="cards-export" class="btn-sm btn-primary">Export PDF / Print</button>
+        <button type="button" id="cards-mark-printed" class="btn-sm btn-outline">Mark as printed</button>
+        <span id="cards-info" class="cards-info"></span>
+      </div>
+      <div id="card-sheets"></div>
+    </div>
+    </section>
+
+    <section class="dash-section" data-section="businesses" hidden>
+    <!--
+      BUSINESSES AND BRANCHES.
+
+      A business ("local") groups one or more branches ("sucursales"), and each
+      link belongs to a branch. Operator-only: the businesses never see this.
+      Every comment and rating is then traceable to business, branch and link
+      (odd/tasks/business-branches.md).
+    -->
+    <div class="card" id="businesses-card">
+      <h3>Businesses and branches</h3>
+      <label for="new-business-name">New business</label>
+      <div class="field-row">
+        <input type="text" id="new-business-name" maxlength="120" placeholder="e.g. Café Central">
+        <button type="button" id="add-business" class="btn-sm btn-primary">Add</button>
+      </div>
+      <div id="businesses-msg" class="message"></div>
+      <div id="businesses-body" class="gap-top"><div class="loading">Loading...</div></div>
+    </div>
+    </section>
+
+    <section class="dash-section" data-section="comments" hidden>
     <div class="card" id="feedback-card">
       <div class="feedback-head">
         <h3>What customers wrote</h3>
@@ -942,26 +1076,43 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       <div id="feedback-export-msg" class="message"></div>
       <div id="feedback-body"><div class="loading">Loading...</div></div>
     </div>
+    </section>
 
-    <div class="card" id="clients-card" style="display:none;">
-      <h3>Stores by Client Ref</h3>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Client Ref</th>
-              <th>Unique Visitors</th>
-              <th>Sessions</th>
-            </tr>
-          </thead>
-          <tbody id="clients-body"></tbody>
-        </table>
-      </div>
-      <!-- Same caveat, next to the store-level rollup. -->
-      <p class="estimate-note">${VISITOR_ESTIMATE_CAVEAT}</p>
-    </div>
+    <section class="dash-section" data-section="settings" hidden>
+    <!--
+      WHERE FEEDBACK SHOULD GO.
 
+      A card's QR leads to the review gate. A customer can leave a private
+      comment there, and it lands in analytics.tag_feedback and shows up in the
+      satisfaction panel below.
+
+      They can also record here where that should be delivered.
+
+      IT DOES NOT SEND ANYTHING YET. The address is stored, shown and exported
+      into the print sheet's CSV, and nothing is emailed from it. That is the
+      honest state of this field, and the label says so, because a green
+      dashboard implying "reviews are being emailed" is worse than no field at
+      all: an owner would stop checking the panel.
+
+      Wired as static listeners with the other form controls, not through the
+      delegated switch — that switch is for record actions, and this acts on no
+      record.
+    -->
+    <div class="card" id="feedback-email-card">
+      <h3>Feedback email</h3>
+      <p class="field-help">
+        Where you would like private customer comments delivered. Stored now;
+        nothing is emailed yet — comments still arrive in the Comments section.
+      </p>
+      <label for="feedback-email">Email address</label>
+      <input type="email" id="feedback-email" placeholder="you@yourbusiness.com"
+             autocomplete="email" maxlength="254">
+      <div id="feedback-email-msg" class="message"></div>
+      <button type="button" id="feedback-email-save" class="btn-sm btn-primary gap-top-sm">Save</button>
     </div>
+    </section>
+
+    </main>
     </div>
 
     <!-- QR code modal -->
@@ -1283,6 +1434,233 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
 
       document.getElementById("feedback-filter").addEventListener("change", () => loadFeedbackInbox());
       document.getElementById("print-report").addEventListener("click", () => window.print());
+
+      // ---------------------------------------------------------------------
+      // Sidebar sections (odd/tasks/print-queue-cards.md S1). The hash names
+      // the visible section, so a reload or a shared link opens the same one.
+      // ---------------------------------------------------------------------
+      /** The section a URL hash names, or Links for anything else. */
+      function sectionFromHash(hash) {
+        const sections = ["overview", "links", "cards", "businesses", "comments", "settings"];
+        const name = String(hash || "").replace(/^#/, "");
+        return sections.indexOf(name) > -1 ? name : "links";
+      }
+
+      function showSection(name) {
+        document.querySelectorAll(".dash-section").forEach((el) => {
+          el.hidden = el.getAttribute("data-section") !== name;
+        });
+        document.querySelectorAll("[data-section-link]").forEach((a) => {
+          const on = a.getAttribute("data-section-link") === name;
+          a.classList.toggle("is-active", on);
+          if (on) a.setAttribute("aria-current", "page");
+          else a.removeAttribute("aria-current");
+        });
+      }
+
+      window.addEventListener("hashchange", () => showSection(sectionFromHash(location.hash)));
+      showSection(sectionFromHash(location.hash));
+
+      // ---------------------------------------------------------------------
+      // Cards: the print queue as printable sheets
+      // (odd/tasks/print-queue-cards.md S4-S6)
+      // ---------------------------------------------------------------------
+
+      /** Sheet size in mm for a preset of the original generator. */
+      function sheetPresetSize(preset, customW, customH) {
+        if (preset === "custom") return { w: customW, h: customH, single: false };
+        const parts = String(preset).split("x").map(Number);
+        return { w: parts[0], h: parts[1], single: preset === "100x100" };
+      }
+
+      /**
+       * How many 100 mm cards fit, as columns and rows from the top-left
+       * margin. Never centred: the unused part of a sheet stays in one piece.
+       */
+      function computeSheetLayout(w, h, margin, gap, count) {
+        const card = 100;
+        const fits = w - 2 * margin + gap >= card + gap && h - 2 * margin + gap >= card + gap;
+        const cols = Math.max(1, Math.floor((w - 2 * margin + gap) / (card + gap)));
+        const rows = Math.max(1, Math.floor((h - 2 * margin + gap) / (card + gap)));
+        const cap = cols * rows;
+        return { cols: cols, rows: rows, cap: cap, pages: Math.max(1, Math.ceil(count / cap)), fits: fits };
+      }
+
+      window.__printQueue = [];
+      const cardSvgCache = new Map();
+      let cardRenderToken = 0;
+
+      function cardOptions() {
+        const num = (id, d) => {
+          const v = parseFloat(document.getElementById(id).value);
+          return isNaN(v) || v < 0 ? d : v;
+        };
+        const checked = document.querySelector('input[name="card-variant"]:checked');
+        return {
+          variant: checked ? checked.value : "hybrid",
+          design: document.getElementById("card-design").value,
+          mirror: document.getElementById("card-mirror").checked,
+          crop: document.getElementById("card-crop").checked,
+          preset: document.getElementById("card-sheet").value,
+          margin: num("card-margin", 10),
+          gap: num("card-gap", 6),
+          w: num("card-sheet-w", 600),
+          h: num("card-sheet-h", 400),
+        };
+      }
+
+      function renderQueueList(queue) {
+        return queue.map((item) =>
+          '<li><span class="code">' + esc(item.short_code) + '</span>' +
+          '<button type="button" class="btn-sm btn-outline" data-action="unqueue-print" data-id="' + esc(item.id) + '">Remove</button></li>'
+        ).join("");
+      }
+
+      async function cardSvg(item, design, variant) {
+        const key = item.id + "|" + design + "|" + variant;
+        if (cardSvgCache.has(key)) return cardSvgCache.get(key);
+        const res = await window.__api("GET", "/api/links/" + encodeURIComponent(item.id) + "/card.svg?design=" + design + "&variant=" + variant);
+        if (!res.ok) throw new Error("card " + item.short_code + ": HTTP " + res.status);
+        const svg = await res.text();
+        cardSvgCache.set(key, svg);
+        return svg;
+      }
+
+      async function renderCardSheets() {
+        const token = ++cardRenderToken;
+        const queue = window.__printQueue;
+        const o = cardOptions();
+        const size = sheetPresetSize(o.preset, o.w, o.h);
+        const margin = size.single ? 0 : o.margin;
+        const gap = size.single ? 0 : o.gap;
+        document.getElementById("card-sheet-w").disabled = o.preset !== "custom";
+        document.getElementById("card-sheet-h").disabled = o.preset !== "custom";
+        const sheets = document.getElementById("card-sheets");
+        const info = document.getElementById("cards-info");
+        document.getElementById("cards-export").disabled = queue.length === 0;
+        document.getElementById("cards-mark-printed").disabled = queue.length === 0;
+        if (queue.length === 0) {
+          sheets.innerHTML = '<p class="gate-empty">No cards waiting to be printed. Send unconfigured links to print from the Links section.</p>';
+          info.textContent = "";
+          return;
+        }
+        const layout = computeSheetLayout(size.w, size.h, margin, gap, queue.length);
+        if (!layout.fits) {
+          sheets.innerHTML = "";
+          info.textContent = "The sheet is too small for a 100×100 mm card with that margin.";
+          return;
+        }
+        info.textContent = layout.cols + "×" + layout.rows + " = " + layout.cap + " cards per sheet · " +
+          queue.length + " card(s) · " + layout.pages + " sheet(s)";
+        let svgs;
+        try {
+          svgs = await Promise.all(queue.map((item) => cardSvg(item, o.design, o.variant)));
+        } catch (err) {
+          if (token !== cardRenderToken) return;
+          sheets.innerHTML = '<p class="gate-empty">Could not load the cards.</p>';
+          console.error("cards failed to load", err);
+          return;
+        }
+        if (token !== cardRenderToken) return;
+        sheets.textContent = "";
+        let sheet = null;
+        svgs.forEach((svg, i) => {
+          if (i % layout.cap === 0) {
+            sheet = document.createElement("div");
+            sheet.className = "card-sheet";
+            sheet.style.width = size.w + "mm";
+            sheet.style.height = size.h + "mm";
+            sheet.style.padding = margin + "mm";
+            sheet.style.gap = gap + "mm";
+            sheet.style.gridTemplateColumns = "repeat(" + layout.cols + ", 100mm)";
+            sheet.style.gridAutoRows = "100mm";
+            sheets.appendChild(sheet);
+          }
+          const card = document.createElement("div");
+          card.className = "print-card" + (o.mirror ? " is-mirror" : "") + (o.crop ? " is-crop" : "");
+          card.innerHTML = svg;
+          sheet.appendChild(card);
+        });
+      }
+
+      async function loadCards() {
+        try {
+          const res = await window.__api("GET", "/api/links/print-queue");
+          if (!res.ok) throw new Error("print queue: HTTP " + res.status);
+          const queue = await res.json();
+          window.__printQueue = Array.isArray(queue) ? queue : [];
+        } catch (err) {
+          console.error("print queue failed to load", err);
+          return;
+        }
+        const n = window.__printQueue.length;
+        const badge = document.getElementById("cards-count");
+        badge.textContent = String(n);
+        badge.hidden = n === 0;
+        document.getElementById("cards-queue").innerHTML = renderQueueList(window.__printQueue);
+        renderCardSheets();
+      }
+
+      window.__loadCards = loadCards;
+
+      /**
+       * Prints only the sheets, at the sheet size with no page margin (S5).
+       * The @page rule and the body class exist just for this print and are
+       * removed afterwards, so "Print report" keeps the browser's page.
+       */
+      function exportCards() {
+        if (window.__printQueue.length === 0) return;
+        const o = cardOptions();
+        const size = sheetPresetSize(o.preset, o.w, o.h);
+        let style = document.getElementById("card-page-style");
+        if (!style) {
+          style = document.createElement("style");
+          style.id = "card-page-style";
+          document.head.appendChild(style);
+        }
+        // One millimetre shorter on paper: a sheet exactly the page height can
+        // spill a blank page in some print engines.
+        style.textContent = "@page { size: " + size.w + "mm " + size.h + "mm; margin: 0; }" +
+          " @media print { .card-sheet { height: " + (size.single ? size.h : size.h - 1) + "mm !important; } }";
+        document.body.classList.add("printing-cards");
+        window.print();
+      }
+
+      window.addEventListener("afterprint", () => {
+        document.body.classList.remove("printing-cards");
+        const style = document.getElementById("card-page-style");
+        if (style) style.textContent = "";
+      });
+
+      async function markCardsPrinted() {
+        const ids = window.__printQueue.map((item) => item.id);
+        if (ids.length === 0) return;
+        if (!confirm("Mark " + ids.length + " card(s) as printed? They leave the print queue.")) return;
+        try {
+          const res = await window.__api("POST", "/api/links/printed", { ids: ids });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          loadLinks();
+        } catch (err) {
+          alert("Error: " + (err instanceof Error ? err.message : ""));
+        }
+      }
+
+      document.getElementById("cards-controls").addEventListener("input", (e) => {
+        if (e.target.id === "card-zoom") {
+          document.getElementById("card-sheets").style.setProperty("--card-zoom", String(e.target.value / 100));
+          return;
+        }
+        renderCardSheets();
+      });
+      document.getElementById("cards-controls").addEventListener("change", (e) => {
+        if (e.target.id !== "card-zoom") renderCardSheets();
+      });
+      document.getElementById("cards-export").addEventListener("click", exportCards);
+      document.getElementById("cards-mark-printed").addEventListener("click", markCardsPrinted);
+      document.getElementById("cards-queue").addEventListener("click", (e) => {
+        const el = e.target.closest('[data-action="unqueue-print"]');
+        if (el) setPrintQueued(el.dataset.id, false);
+      });
 
       async function loadFeedbackInbox() {
         const body = document.getElementById("feedback-body");
@@ -1685,6 +2063,12 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           case "delete":
             deleteLink(el.dataset.id);
             break;
+          case "queue-print":
+            setPrintQueued(el.dataset.id, true);
+            break;
+          case "unqueue-print":
+            setPrintQueued(el.dataset.id, false);
+            break;
         }
       }
 
@@ -1707,6 +2091,10 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         // script's gate was never created; there is nothing to wait for, so the
         // load proceeds and fails (or succeeds) on its own merits.
         if (window.__apiReady) await window.__apiReady;
+        // The print queue follows every links refresh: queuing, removing and
+        // saving a destination all end in loadLinks(). Reached through window
+        // so this function stays callable on its own.
+        if (window.__loadCards) window.__loadCards();
 
         const loading = document.getElementById("links-loading");
         const table = document.getElementById("links-table");
@@ -1794,12 +2182,16 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
               <td class="hide-sm">\${l.location_name
                 ? \`<span class="owner-business">\${esc(l.business_name || "No business")}</span><span class="owner-branch">\${esc(l.location_name)}</span>\`
                 : '<span class="owner-none">Unassigned</span>'}</td>
-              <td class="hide-sm"><span class="url-trunc" title="\${esc(l.original_url)}">\${esc(l.original_url)}</span></td>
+              <td class="hide-sm">\${l.original_url
+                ? \`<span class="url-trunc" title="\${esc(l.original_url)}">\${esc(l.original_url)}</span>\`
+                : l.print_queued
+                  ? \`<button class="btn-sm btn-outline" data-action="unqueue-print" data-id="\${esc(l.id)}">Remove from queue</button>\`
+                  : \`<button class="btn-sm btn-outline" data-action="queue-print" data-id="\${esc(l.id)}">Send to print</button>\`}</td>
               <td class="hide-sm">\${l.is_gated
                 ? '<span class="badge badge-gated">Review screen</span>'
                 : '<span class="badge badge-direct">Direct</span>'}</td>
               <td><a href="#" data-action="metrics" data-id="\${esc(l.id)}" data-code="\${esc(l.short_code)}" class="clicks-link">\${esc(l.clicks_count)}</a></td>
-              <td><span class="badge badge-\${status}">\${status}</span></td>
+              <td><span class="badge badge-\${status}">\${status}</span>\${l.print_queued ? ' <span class="badge badge-queued">To print</span>' : ""}</td>
               <td><div class="row-actions"><button class="btn-sm btn-outline" data-action="edit" data-id="\${esc(l.id)}" data-code="\${esc(l.short_code)}">Edit</button><button class="btn-sm btn-danger" data-action="delete" data-id="\${esc(l.id)}">Del</button></div></td>
             </tr>
             <tr id="metrics-\${esc(l.id)}" style="display:none;">
@@ -1830,7 +2222,9 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
                     <div class="field">
                       <label>Print sheet</label>
                       <div class="field-row">
-                        <button class="btn-sm" data-action="qr" data-url="\${esc(shortUrl)}">QR code</button>
+                        <button class="btn-sm" data-action="qr" data-url="\${esc(shortUrl)}">QR code</button>\${l.original_url ? "" : l.print_queued
+                          ? \`<button class="btn-sm btn-outline" data-action="unqueue-print" data-id="\${esc(l.id)}">Remove from queue</button>\`
+                          : \`<button class="btn-sm btn-outline" data-action="queue-print" data-id="\${esc(l.id)}">Send to print</button>\`}
                       </div>
                       <p class="field-note">The code that goes on the sticker. This is the destination the printed tag resolves to.</p>
                     </div>
@@ -1917,6 +2311,24 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           empty.style.display = "";
         } finally {
           loading.style.display = "none";
+        }
+      }
+
+      /**
+       * Sends an unconfigured link to the print queue, or takes it out
+       * (odd/tasks/print-queue-cards.md S2-S3). loadLinks() refreshes the
+       * table and, through it, the Cards section.
+       */
+      async function setPrintQueued(id, queued) {
+        try {
+          const res = await window.__api("PATCH", "/api/links/" + id, { print_queued: queued });
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.message || body.error || "HTTP " + res.status);
+          }
+          loadLinks();
+        } catch (err) {
+          alert("Error: " + (err instanceof Error ? err.message : ""));
         }
       }
 

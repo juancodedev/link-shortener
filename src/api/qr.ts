@@ -78,9 +78,13 @@ export const QUIET_MODULES = 4;
  * to learn anything. Reading `isDark` is the API the generator actually offers,
  * and it means the geometry below is derived from the matrix instead of from a
  * rendering of the matrix.
+ *
+ * `ecc` defaults to Q (see above). The review card's dotted design asks for H:
+ * round dots cover less of each module than squares, so it buys the extra
+ * redundancy back.
  */
-export function qrMatrix(data: string): boolean[][] {
-  const qr = qrcode(0, ECC);
+export function qrMatrix(data: string, ecc: "M" | "Q" | "H" = ECC): boolean[][] {
+  const qr = qrcode(0, ecc);
   qr.addData(data);
   qr.make();
 

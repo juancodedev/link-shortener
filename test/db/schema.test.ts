@@ -344,6 +344,11 @@ describe("provision.ts template / tenant 001_create_links parity", () => {
     expect(indexNames(TENANT_DDL).sort()).toEqual(indexNames(tenantLinksMigration).sort());
   });
 
+  it("carries print_queued_at and its partial index through both copies", () => {
+    expect(TENANT_DDL).toMatch(/print_queued_at\s+TIMESTAMPTZ,/i);
+    expect(TENANT_DDL).toMatch(/idx_links_print_queue[\s\S]*WHERE print_queued_at IS NOT NULL/i);
+  });
+
   it("carries client_ref through both copies", () => {
     expect(TENANT_DDL).toMatch(/client_ref\s+TEXT/i);
     expect(TENANT_DDL).toMatch(/idx_links_client_ref/i);

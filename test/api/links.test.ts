@@ -62,7 +62,7 @@ import {
 import { generateShortCode } from "../../src/utils/short-code";
 import { createLink, deleteLink, getLinkByCode, linkClicks, listLinks, updateLink, DEFAULT_MAX_ACTIVE_LINKS, DEFAULT_MAX_CARD_STOCK } from "../../src/api/links";
 import { UNIQUE_WINDOW, SESSION_WINDOW } from "../../src/analytics/metrics";
-import { ValidationError } from "../../src/middleware/error";
+import { NotFoundError, ValidationError } from "../../src/middleware/error";
 
 // ---------------------------------------------------------------------------
 // Helper: mock Hono context
@@ -2684,5 +2684,142 @@ describe("updateLink returns the saved destination", () => {
     await updateLink(c as any);
 
     expect(jsonFn).toHaveBeenCalledWith({ ok: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Print queue on updateLink and listLinks (odd/tasks/print-queue-cards.md S2-S3)
+// ---------------------------------------------------------------------------
+
+describe("print queue on updateLink", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockCacheDefaults();
+  });
+
+  it("queues an unconfigured link", async () => {
+    const calls = mockRecordingDb([
+      [{ original_url: null }],
+      [{ short_code: "abc1234", is_active: true, original_url: null }],
+    ]);
+    const { c, jsonFn } = mockContext({ params: { id: "link-uuid" }, body: { print_queued: true } });
+
+    await updateLink(c as any);
+
+    const update = calls.find((q) => /^UPDATE/i.test(q.sql.trim()))!;
+    expect(update.sql).toMatch(/print_queued_at = NOW\(\)/);
+    expect(update.sql).toMatch(/WHERE id = \$1\b/);
+    expect(update.params).toEqual(["link-uuid"]);
+    expect(jsonFn).toHaveBeenCalledWith({ ok: true });
+  });
+
+  it("refuses to queue a link that already has a destination", async () => {
+    const calls = mockRecordingDb([[{ original_url: "https://g.page/r/x" }]]);
+    const { c } = mockContext({ params: { id: "link-uuid" }, body: { print_queued: true } });
+
+    await expect(updateLink(c as any)).rejects.toMatchObject({ code: "link_configured", status: 409 });
+    expect(calls.some((q) => /^UPDATE/i.test(q.sql.trim()))).toBe(false);
+  });
+
+  it("answers 404 when queuing a link that does not exist", async () => {
+    mockRecordingDb([[]]);
+    const { c } = mockContext({ params: { id: "link-uuid" }, body: { print_queued: true } });
+
+    await expect(updateLink(c as any)).rejects.toThrow(NotFoundError);
+  });
+
+  it("removes a link from the queue", async () => {
+    const calls = mockRecordingDb([[{ short_code: "abc1234", is_active: true, original_url: null }]]);
+    const { c } = mockContext({ params: { id: "link-uuid" }, body: { print_queued: false } });
+
+    await updateLink(c as any);
+
+    const update = calls.find((q) => /^UPDATE/i.test(q.sql.trim()))!;
+    expect(update.sql).toMatch(/print_queued_at = NULL/);
+    expect(update.params).toEqual(["link-uuid"]);
+  });
+
+  it("takes a link out of the queue when a destination is saved on it", async () => {
+    const calls = mockRecordingDb([
+      [{ short_code: "abc1234", is_active: true, original_url: "https://g.page/r/x" }],
+    ]);
+    const { c } = mockContext({
+      params: { id: "link-uuid" },
+      body: { original_url: "https://g.page/r/x" },
+    });
+
+    await updateLink(c as any);
+
+    const update = calls.find((q) => /^UPDATE/i.test(q.sql.trim()))!;
+    expect(update.sql).toMatch(/original_url = \$1/);
+    expect(update.sql).toMatch(/print_queued_at = NULL/);
+  });
+
+  it("leaves the queue alone when a destination is cleared or another field changes", async () => {
+    const calls = mockRecordingDb([
+      [{ short_code: "abc1234", is_active: true, original_url: null }],
+      [{ short_code: "abc1234", is_active: true, original_url: null }],
+    ]);
+    const first = mockContext({ params: { id: "link-uuid" }, body: { original_url: null } });
+    await updateLink(first.c as any);
+    const second = mockContext({ params: { id: "link-uuid" }, body: { is_gated: true } });
+    await updateLink(second.c as any);
+
+    const updates = calls.filter((q) => /^UPDATE/i.test(q.sql.trim()));
+    expect(updates).toHaveLength(2);
+    for (const u of updates) expect(u.sql).not.toMatch(/print_queued_at/);
+  });
+
+  it("rejects a print_queued that is not a boolean", async () => {
+    const { c } = mockContext({ params: { id: "link-uuid" }, body: { print_queued: "yes" } });
+
+    await expect(updateLink(c as any)).rejects.toThrow(ValidationError);
+    expect(withClient).not.toHaveBeenCalled();
+  });
+
+  it("rejects queuing and configuring a link in the same request", async () => {
+    const { c } = mockContext({
+      params: { id: "link-uuid" },
+      body: { print_queued: true, original_url: "https://g.page/r/x" },
+    });
+
+    await expect(updateLink(c as any)).rejects.toThrow(ValidationError);
+    expect(withClient).not.toHaveBeenCalled();
+  });
+});
+
+describe("print queue in listLinks", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it("reports whether each link is waiting to be printed", async () => {
+    const base = {
+      short_code: "aaa1111",
+      original_url: null,
+      title: null,
+      client_ref: null,
+      clicks_count: 0,
+      is_active: true,
+      expires_at: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    };
+    const calls = mockRecordingDb([
+      [
+        { ...base, id: "a", print_queued_at: "2026-11-01T10:00:00Z" },
+        { ...base, id: "b", print_queued_at: null },
+      ],
+    ]);
+    const { c, jsonFn } = mockContext();
+
+    await listLinks(c as any);
+
+    expect(calls[0]!.sql).toContain("l.print_queued_at");
+    const body = jsonFn.mock.calls[0]![0] as Array<{ id: string; print_queued: boolean }>;
+    expect(body.map((l) => [l.id, l.print_queued])).toEqual([
+      ["a", true],
+      ["b", false],
+    ]);
   });
 });

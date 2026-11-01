@@ -318,7 +318,8 @@ describe("narrow screens hide informational columns, never the actions", () => {
 
   it("hides the same three header cells", async () => {
     const html = await serve();
-    const head = html.slice(html.indexOf('<table id="links-table"'), html.indexOf("</thead>"));
+    const start = html.indexOf('<table id="links-table"');
+    const head = html.slice(start, html.indexOf("</thead>", start));
     expect([...head.matchAll(/<th class="hide-sm">/g)]).toHaveLength(3);
   });
 

@@ -24,6 +24,8 @@ import {
 import { createLinksBatch } from "./api/batch";
 import { listClientRefMetrics } from "./api/clients";
 import { hourlyTraffic } from "./api/traffic";
+import { listPrintQueue, markPrinted } from "./api/print-queue";
+import { linkCardSvg } from "./api/cards";
 import { listLocations, createLocation, updateLocation } from "./api/locations";
 import { listBusinesses, createBusiness, updateBusiness } from "./api/businesses";
 import { linkQrSvg, batchQrSheet } from "./api/qr";
@@ -152,6 +154,12 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
   // reason, not for tidiness.
   app.post("/api/links/batch", auth, tenantMembershipMiddleware, createLinksBatch);
 
+  // The print queue (src/api/print-queue.ts). Static paths, registered like the
+  // batch route: neither collides with the parameterised /api/links/:id routes,
+  // which only answer PATCH and DELETE.
+  app.get("/api/links/print-queue", auth, tenantMembershipMiddleware, listPrintQueue);
+  app.post("/api/links/printed", auth, tenantMembershipMiddleware, markPrinted);
+
   // Per-client_ref visitor rollup: auth → resolve tenant from user profile →
   // handler. The same chain as every other tenant-scoped route above, and for
   // the same reason: the tenant in context is what qualifies the links table the
@@ -174,6 +182,8 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
   // third-party image service for the one artefact that leaves this system and
   // comes back as ink on paper.
   app.get("/api/links/:id/qr.svg", auth, tenantMembershipMiddleware, linkQrSvg);
+  // One 10×10 cm review card for the Cards section (src/api/cards.ts).
+  app.get("/api/links/:id/card.svg", auth, tenantMembershipMiddleware, linkCardSvg);
   app.post("/api/links/qr-sheet.zip", auth, tenantMembershipMiddleware, batchQrSheet);
 
   app.get("/api/locations", auth, tenantMembershipMiddleware, listLocations);

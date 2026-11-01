@@ -661,7 +661,8 @@ describe("printable report", () => {
     const css = await printCss();
 
     expect(css).toContain("nav,");
-    expect(css).toContain(".col-side,");
+    expect(css).toContain(".sidebar,");
+    expect(css).toContain('.dash-section:not([data-section="overview"]),');
     expect(css).toContain(".no-print,");
     expect(css).toContain("button,");
     expect(css).toContain("select,");
@@ -1011,9 +1012,10 @@ describe("the dashboard script never triggers a load at parse time", () => {
 
     // One call per handler that changes the table: create form submit, bulk
     // create, destination save, branch save, toggle, review-screen toggle,
-    // client-ref save, delete, and refreshOwnership (a business or branch
-    // changed). A parse-time call anywhere pushes this to ten.
-    expect(statements).toHaveLength(9);
+    // client-ref save, delete, refreshOwnership (a business or branch
+    // changed), the print-queue toggle and "Mark as printed". A parse-time
+    // call anywhere pushes this to twelve.
+    expect(statements).toHaveLength(11);
     expect(statements.every((indent) => indent > TOP_LEVEL_INDENT)).toBe(true);
   });
 
@@ -1617,7 +1619,8 @@ describe("the dashboard can manufacture cards in bulk", () => {
     // load-destination became save-destination (any link's URL is editable
     // now) and save-branch joined (odd/tasks/business-branches.md, S4). edit
     // joined because the panel was only reachable through the clicks count,
-    // and the operator could not find it.
+    // and the operator could not find it. queue-print and unqueue-print joined
+    // for the print queue (odd/tasks/print-queue-cards.md, S2-S3).
     const actions = [...script.matchAll(/case "([a-z-]+)":/g)].map((m) => m[1]);
     expect(new Set(actions)).toEqual(
       new Set([
@@ -1631,6 +1634,8 @@ describe("the dashboard can manufacture cards in bulk", () => {
         "toggle",
         "toggle-gate",
         "delete",
+        "queue-print",
+        "unqueue-print",
       ]),
     );
   });
@@ -1881,19 +1886,16 @@ describe("the feedback email section", () => {
 
     // Says so where the owner will actually read it.
     expect(html).toMatch(/nothing is emailed/i);
-    expect(html).toMatch(/satisfaction panel/i);
+    expect(html).toMatch(/comments still arrive in the Comments section/i);
   });
 
-  it("puts the panel before the satisfaction panel it refers to", async () => {
+  it("names a section that exists in the sidebar", async () => {
     const html = await serve();
 
     // The text tells the owner where their comments still arrive. That sentence
-    // only makes sense if the panel it names is on the same page.
-    const card = html.indexOf('id="feedback-email-card"');
-    const gate = html.indexOf('id="gate-card"');
-    expect(card).toBeGreaterThan(-1);
-    expect(gate).toBeGreaterThan(-1);
-    expect(card).toBeLessThan(gate);
+    // only makes sense if the section it names is one click away.
+    expect(html).toContain('data-section-link="comments">Comments<');
+    expect(html).toContain('<section class="dash-section" data-section="comments"');
   });
 
   it("PUTs to the tenant-scoped endpoint", async () => {
@@ -2157,13 +2159,12 @@ describe("review screen checkbox", () => {
 // they configure, stacked on a phone.
 // ---------------------------------------------------------------------------
 
-describe("full-width layout", () => {
-  /** The markup between an element's opening tag and the next column marker. */
-  function column(html: string, cls: string): string {
-    const start = html.indexOf(`<div class="${cls}">`);
-    expect(start, `${cls} is missing`).toBeGreaterThan(-1);
-    const next = html.indexOf('<div class="col-', start + 1);
-    return html.slice(start, next > -1 ? next : html.indexOf("</main>", start));
+describe("sidebar sections (odd/tasks/print-queue-cards.md S1)", () => {
+  /** The markup of one <section data-section="..."> block. */
+  function section(html: string, name: string): string {
+    const start = html.indexOf(`<section class="dash-section" data-section="${name}"`);
+    expect(start, `${name} section is missing`).toBeGreaterThan(-1);
+    return html.slice(start, html.indexOf("</section>", start));
   }
 
   it("no longer caps the page at a 720px column", async () => {
@@ -2172,23 +2173,64 @@ describe("full-width layout", () => {
     expect(html).toMatch(/\.container\s*\{[^}]*max-width:\s*1440px/);
   });
 
-  it("splits into two columns on a wide screen", async () => {
+  it("lists the six sections in the sidebar, in order", async () => {
     const html = await serve();
-    expect(html).toMatch(/@media \(min-width: 1024px\)\s*\{\s*\.layout\s*\{[^}]*grid-template-columns/);
+    const nav = html.slice(html.indexOf('<aside class="sidebar'), html.indexOf("</aside>"));
+    const links = [...nav.matchAll(/<a href="#([a-z]+)" data-section-link="\1"[^>]*>([^<]+)</g)].map((m) => [m[1], m[2]!.trim()]);
+    expect(links).toEqual([
+      ["overview", "Overview"],
+      ["links", "Links"],
+      ["cards", "Cards"],
+      ["businesses", "Businesses and branches"],
+      ["comments", "Comments"],
+      ["settings", "Settings"],
+    ]);
   });
 
-  it("puts what the owner configures in the side column", async () => {
-    const side = column(await serve(), "col-side");
-    expect(side).toContain('id="create-form"');
-    expect(side).toContain('id="feedback-email-card"');
+  it("puts the sidebar beside the sections on a wide screen", async () => {
+    const html = await serve();
+    expect(html).toMatch(/@media \(min-width: 1024px\)\s*\{\s*\.app\s*\{[^}]*grid-template-columns/);
   });
 
-  it("puts what the owner reads in the main column, satisfaction first", async () => {
-    const main = column(await serve(), "col-main");
-    const at = (needle: string) => main.indexOf(needle);
-    expect(at('id="gate-card"')).toBeGreaterThan(-1);
-    expect(at('id="links-table"')).toBeGreaterThan(at('id="gate-card"'));
-    expect(at('id="feedback-card"')).toBeGreaterThan(at('id="links-table"'));
+  it("groups the existing cards into their sections", async () => {
+    const html = await serve();
+    const overview = section(html, "overview");
+    expect(overview).toContain('id="print-report"');
+    expect(overview).toContain('id="gate-card"');
+    expect(overview).toContain('id="traffic-card"');
+    expect(overview).toContain('id="clients-card"');
+    const links = section(html, "links");
+    expect(links).toContain('id="create-form"');
+    expect(links).toContain('id="links-table"');
+    expect(section(html, "cards")).toContain('id="cards-root"');
+    expect(section(html, "businesses")).toContain('id="businesses-card"');
+    expect(section(html, "comments")).toContain('id="feedback-card"');
+    expect(section(html, "settings")).toContain('id="feedback-email-card"');
+  });
+
+  it("shows only one section at a time, starting hidden except Links", async () => {
+    const html = await serve();
+    const tags = [...html.matchAll(/<section class="dash-section" data-section="([a-z]+)"( hidden)?>/g)].map(
+      (m) => [m[1], Boolean(m[2])],
+    );
+    expect(tags).toEqual([
+      ["overview", true],
+      ["links", false],
+      ["cards", true],
+      ["businesses", true],
+      ["comments", true],
+      ["settings", true],
+    ]);
+  });
+
+  it("reads the section from the URL hash and falls back to Links", async () => {
+    const fromHash = await loadClientFunction<(h: string) => string>("sectionFromHash");
+
+    expect(fromHash("#cards")).toBe("cards");
+    expect(fromHash("#overview")).toBe("overview");
+    expect(fromHash("")).toBe("links");
+    expect(fromHash("#nope")).toBe("links");
+    expect(codeOnly(await clientScript())).toContain('addEventListener("hashchange"');
   });
 });
 
@@ -2204,9 +2246,10 @@ describe("businesses and branches card", () => {
     return new Function("esc", `${src}\nreturn renderBusinesses;`)(esc);
   }
 
-  it("lives in the side column, with a field to add a business", async () => {
+  it("lives in the businesses section, with a field to add a business", async () => {
     const html = await serve();
-    const side = html.slice(html.indexOf('<div class="col-side">'), html.indexOf('<div class="col-main">'));
+    const start = html.indexOf('data-section="businesses"');
+    const side = html.slice(start, html.indexOf("</section>", start));
     expect(side).toContain('id="businesses-card"');
     expect(side).toMatch(/<input[^>]*id="new-business-name"/);
     expect(side).toContain('id="add-business"');
@@ -2492,5 +2535,146 @@ describe("grouped branches can move, and inactive ones leave the pickers", () =>
     expect(listener).toContain('"toggle-business"');
     expect(listener).toContain('setBusinessActive(el.dataset.businessId, el.dataset.active === "true")');
     expect(listener).toContain('setBranchActive(el.dataset.locationId, el.dataset.active === "true")');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Print queue in the links table and the Cards section
+// (odd/tasks/print-queue-cards.md S2-S6)
+// ---------------------------------------------------------------------------
+
+describe("print queue in the links table", () => {
+  it("offers Send to print on an unconfigured link, outside the two-button actions cell", async () => {
+    const row = await renderRow({ original_url: null, print_queued: false });
+    const main = row.slice(0, row.indexOf("</tr>"));
+
+    expect(main).toContain('data-action="queue-print" data-id="link-uuid"');
+    expect(main).toContain(">Send to print<");
+    const actions = main.slice(main.indexOf('<div class="row-actions">'));
+    expect([...actions.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((m) => m[1])).toEqual(["Edit", "Del"]);
+  });
+
+  it("shows a To print badge and Remove from queue on a queued link", async () => {
+    const row = await renderRow({ original_url: null, print_queued: true });
+    const main = row.slice(0, row.indexOf("</tr>"));
+
+    expect(main).toContain('<span class="badge badge-queued">To print</span>');
+    expect(main).toContain('data-action="unqueue-print" data-id="link-uuid"');
+    expect(main).not.toContain('data-action="queue-print"');
+  });
+
+  it("offers no print control on a configured link", async () => {
+    const row = await renderRow({ original_url: "https://g.page/r/x", print_queued: false });
+
+    expect(row).not.toContain("queue-print");
+    expect(row).not.toContain("To print");
+  });
+
+  it("repeats the control in the editing panel, which every screen size reaches", async () => {
+    const row = await renderRow({ original_url: null, print_queued: false });
+    const panel = row.slice(row.indexOf("</tr>"));
+
+    expect(panel).toContain('data-action="queue-print" data-id="link-uuid"');
+  });
+
+  it("routes both actions to the same PATCH helper", async () => {
+    const script = codeOnly(await clientScript());
+
+    expect(script).toContain('case "queue-print":');
+    expect(script).toContain('case "unqueue-print":');
+    expect(script).toMatch(/window\.__api\("PATCH", "\/api\/links\/" \+ id, \{ print_queued: queued \}\)/);
+  });
+});
+
+describe("cards sheet layout", () => {
+  type Layout = { cols: number; rows: number; cap: number; pages: number; fits: boolean };
+  type Compute = (w: number, h: number, margin: number, gap: number, count: number) => Layout;
+  type Size = (preset: string, w: number, h: number) => { w: number; h: number; single: boolean };
+
+  it("fits 1×2 cards on A4, 2×3 on A3 and 3×2 on landscape A3 with a 10 mm margin and a 6 mm gap", async () => {
+    const compute = await loadClientFunction<Compute>("computeSheetLayout");
+
+    expect(compute(210, 297, 10, 6, 3)).toEqual({ cols: 1, rows: 2, cap: 2, pages: 2, fits: true });
+    expect(compute(297, 420, 10, 6, 5)).toEqual({ cols: 2, rows: 3, cap: 6, pages: 1, fits: true });
+    expect(compute(420, 297, 10, 6, 7)).toEqual({ cols: 3, rows: 2, cap: 6, pages: 2, fits: true });
+  });
+
+  it("says when the sheet is too small for one card", async () => {
+    const compute = await loadClientFunction<Compute>("computeSheetLayout");
+
+    expect(compute(100, 100, 10, 6, 1).fits).toBe(false);
+    expect(compute(100, 100, 0, 0, 1)).toEqual({ cols: 1, rows: 1, cap: 1, pages: 1, fits: true });
+  });
+
+  it("knows every preset of the original generator", async () => {
+    const size = await loadClientFunction<Size>("sheetPresetSize");
+
+    expect(size("297x420", 0, 0)).toEqual({ w: 297, h: 420, single: false });
+    expect(size("420x297", 0, 0)).toEqual({ w: 420, h: 297, single: false });
+    expect(size("210x297", 0, 0)).toEqual({ w: 210, h: 297, single: false });
+    expect(size("216x279", 0, 0)).toEqual({ w: 216, h: 279, single: false });
+    expect(size("100x100", 0, 0)).toEqual({ w: 100, h: 100, single: true });
+    expect(size("custom", 600, 400)).toEqual({ w: 600, h: 400, single: false });
+  });
+});
+
+describe("cards section", () => {
+  function cardsSection(html: string): string {
+    const start = html.indexOf('<section class="dash-section" data-section="cards"');
+    return html.slice(start, html.indexOf("</section>", start));
+  }
+
+  it("offers every option of the original generator", async () => {
+    const section = cardsSection(await serve());
+
+    for (const v of ["hybrid", "qr", "nfc"]) expect(section).toContain(`name="card-variant" value="${v}"`);
+    expect(section).toContain(">Híbrido: QR + NFC<");
+    expect(section).toContain(">Solo QR Centrado<");
+    expect(section).toContain(">Solo NFC Centrado<");
+    expect(section).toContain('<option value="official">Estándar Oficial Google</option>');
+    expect(section).toContain('<option value="minimal">Clean Minimalist Glass</option>');
+    for (const p of ["297x420", "420x297", "210x297", "216x279", "100x100", "custom"]) {
+      expect(section).toContain(`<option value="${p}"`);
+    }
+    for (const id of ["card-mirror", "card-crop", "card-margin", "card-gap", "card-sheet-w", "card-sheet-h", "card-zoom"]) {
+      expect(section).toContain(`id="${id}"`);
+    }
+    expect(section).toContain('id="cards-export"');
+    expect(section).toContain('id="cards-mark-printed"');
+    expect(section).toContain('id="card-sheets"');
+  });
+
+  it("starts the grid at the top-left margin instead of centring it", async () => {
+    const html = await serve();
+
+    expect(html).toMatch(/\.card-sheet\s*\{[^}]*justify-content:\s*start;[^}]*align-content:\s*start;/);
+    expect(html).not.toMatch(/\.card-sheet\s*\{[^}]*justify-content:\s*center/);
+  });
+
+  it("prints only the sheets, at the sheet size, without the preview zoom", async () => {
+    const html = await serve();
+    const script = codeOnly(await clientScript());
+
+    expect(html).toContain("body.printing-cards");
+    expect(html).toMatch(/body\.printing-cards #card-sheets\s*\{[^}]*zoom:\s*1 !important;/);
+    expect(html).toMatch(/\.card-sheet \+ \.card-sheet\s*\{[^}]*break-before:\s*page;/);
+    expect(script).toContain('document.body.classList.add("printing-cards")');
+    expect(script).toMatch(/@page \{ size: " \+ size\.w \+ "mm " \+ size\.h \+ "mm; margin: 0; \}/);
+    expect(script).toContain('addEventListener("afterprint"');
+  });
+
+  it("loads the queue and each card from the API, and clears a printed batch", async () => {
+    const script = codeOnly(await clientScript());
+
+    expect(script).toContain('window.__api("GET", "/api/links/print-queue")');
+    expect(script).toMatch(/"\/api\/links\/" \+ encodeURIComponent\(item\.id\) \+ "\/card\.svg\?design="/);
+    expect(script).toContain('window.__api("POST", "/api/links/printed", { ids:');
+    expect(script).toContain("loadCards()");
+  });
+
+  it("loads the fonts the cards are drawn with, so the PDF embeds what the preview shows", async () => {
+    const html = await serve();
+
+    expect(html).toContain('href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Outfit:wght@400;500;600;700&amp;display=swap"');
   });
 });

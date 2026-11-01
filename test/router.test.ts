@@ -437,6 +437,7 @@ describe("router client metrics route", () => {
     // The print queue reads and writes the tenant's own links table.
     expect(chainFor("GET", "/api/links/print-queue")).toHaveLength(3);
     expect(chainFor("POST", "/api/links/printed")).toHaveLength(3);
+    expect(chainFor("GET", "/api/links/:id/card.svg")).toHaveLength(3);
 
     // Same chain length as the routes it must match.
     expect(chainFor("GET", "/api/links")).toHaveLength(3);

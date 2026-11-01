@@ -16,6 +16,17 @@
     }
   },
 
+  // Both hostnames serve this Worker: masresenas.cl is the primary domain for
+  // new short links, shorter.juancode.dev stays so already-printed QR codes keep
+  // resolving.
+  "routes": [
+    { "pattern": "masresenas.cl", "custom_domain": true },
+    { "pattern": "shorter.juancode.dev", "custom_domain": true }
+  ],
+  // Nothing in the project uses the *.workers.dev URL; keep it off so the
+  // Worker is only reachable through the custom domains above.
+  "workers_dev": false,
+
   "ratelimits": [
     {
       "name": "GATE_LIMITER",
@@ -47,7 +58,7 @@
   ],
 
   "vars": {
-    "SHORT_URL_DOMAIN": "shorter.juancode.dev",
+    "SHORT_URL_DOMAIN": "masresenas.cl",
     "ENVIRONMENT": "development",
     "MAX_ACTIVE_LINKS": "500",
     "BILLING_CONTACT": "mailto:jmunoz@juancode.dev"

@@ -9,7 +9,7 @@ declare namespace Cloudflare {
 		SHORT_URL_CACHE: KVNamespace;
 		TENANT_CACHE: KVNamespace;
 		HYPERDRIVE: Hyperdrive;
-		SHORT_URL_DOMAIN: "acortador.juancode.dev";
+		SHORT_URL_DOMAIN: "masresenas.cl";
 		ENVIRONMENT: "development";
 	}
 }

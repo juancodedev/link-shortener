@@ -99,20 +99,51 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     @media (min-width: 768px) {
       .container { padding: 1.5rem 2rem; }
     }
-    .layout { display: grid; grid-template-columns: minmax(0, 1fr); column-gap: 1.5rem; }
+    /* Sidebar + one visible section. On a phone the sidebar is a horizontal
+       bar of section links above the content; from 1024px it is a column. */
+    .app { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+    .sidebar { min-width: 0; }
+    .side-nav {
+      display: flex;
+      gap: 0.25rem;
+      overflow-x: auto;
+      background: var(--sticker);
+      border: 1px solid var(--edge);
+      border-radius: 0.75rem;
+      padding: 0.375rem;
+    }
+    .side-nav a {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      white-space: nowrap;
+      padding: 0.5rem 0.75rem;
+      border-radius: 0.5rem;
+      color: var(--ink);
+      text-decoration: none;
+      font-size: 0.875rem;
+      font-weight: 500;
+    }
+    .side-nav a:hover { background: var(--kraft-deep); }
+    .side-nav a.is-active { background: var(--tag); color: var(--sticker); }
+    .side-count {
+      background: var(--stale-wash);
+      color: var(--stale);
+      border-radius: 999px;
+      padding: 0 0.5rem;
+      font-size: 0.75rem;
+      font-weight: 700;
+    }
+    .dash-section[hidden] { display: none; }
     @media (min-width: 1024px) {
-      .layout {
-        grid-template-columns: minmax(0, 1fr) 22rem;
-        grid-template-areas: "main side";
+      .app {
+        grid-template-columns: 14rem minmax(0, 1fr);
         align-items: start;
+        gap: 1.5rem;
       }
-      .col-main { grid-area: main; }
-      /* Not sticky: the side column can be taller than a laptop screen, and a
-         sticky column that tall hides its own bottom until the page ends. */
-      .col-side { grid-area: side; }
-      /* Scoped to .layout so it outranks the base .url-trunc rule, which
-         comes later in this sheet. */
-      .layout .url-trunc { max-width: 20rem; }
+      .side-nav { flex-direction: column; overflow-x: visible; }
+      .sections .url-trunc { max-width: 20rem; }
     }
     nav {
       background: var(--sticker);
@@ -580,7 +611,8 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
        default, which would print the bars as nothing). */
     @media print {
       nav,
-      .col-side,
+      .sidebar,
+      .dash-section:not([data-section="overview"]),
       .no-print,
       .qr-modal,
       button,
@@ -591,7 +623,8 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       }
       * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
       body, .container { background: none; max-width: none; padding: 0; }
-      .layout { display: block; }
+      .app { display: block; }
+      .dash-section[data-section="overview"] { display: block !important; }
       .card { break-inside: avoid; box-shadow: none; }
       .table-wrap { overflow: visible; }
     }
@@ -744,15 +777,67 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
 
   const body = `
     <!--
-      TWO COLUMNS ON A WIDE SCREEN, ONE ON A PHONE.
+      SECTIONS BEHIND A SIDEBAR (odd/tasks/print-queue-cards.md S1).
 
-      The side column holds what the owner CONFIGURES (create a link, make
-      cards, set the feedback address); the main column holds what they READ
-      (satisfaction, links, comments). The side column comes first in the
-      markup so a phone still opens on "Create Short Link", as it always has.
+      One section is visible at a time; the sidebar link and the URL hash pick
+      it, so a reload stays where the owner was. Links is the default: it is
+      where cards are created, and a phone has always opened there. Every
+      section's data still loads at boot, so switching is instant.
     -->
-    <div class="layout">
-    <div class="col-side">
+    <div class="app">
+    <aside class="sidebar no-print">
+      <nav class="side-nav" aria-label="Dashboard sections">
+        <a href="#overview" data-section-link="overview">Overview</a>
+        <a href="#links" data-section-link="links">Links</a>
+        <a href="#cards" data-section-link="cards">Cards <span id="cards-count" class="side-count" hidden></span></a>
+        <a href="#businesses" data-section-link="businesses">Businesses and branches</a>
+        <a href="#comments" data-section-link="comments">Comments</a>
+        <a href="#settings" data-section-link="settings">Settings</a>
+      </nav>
+    </aside>
+    <main class="sections">
+    <section class="dash-section" data-section="overview" hidden>
+    <!-- The report is what the owner forwards: the print stylesheet keeps the
+         metric cards and drops everything that is a control. -->
+    <div class="report-actions no-print">
+      <button type="button" id="print-report" class="btn-sm">Print report</button>
+    </div>
+    <!-- Review gate. Presentable as a screenshot on purpose: this screen is
+         what the owner forwards as their monthly report, so every figure here
+         carries its own qualification in the markup rather than in a tooltip
+         that a screenshot would not capture. -->
+    <div class="card" id="gate-card" style="display:none;">
+      <h3>Customer satisfaction</h3>
+      <div id="gate-body"><div class="loading">Loading...</div></div>
+    </div>
+
+    <!-- Busy hours. Same screenshot discipline as the panel above: the window
+         and the time zone are printed under the chart, not in a tooltip. -->
+    <div class="card" id="traffic-card" style="display:none;">
+      <h3>Busy hours</h3>
+      <div id="traffic-body"></div>
+    </div>
+
+    <div class="card" id="clients-card" style="display:none;">
+      <h3>Stores by Client Ref</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Client Ref</th>
+              <th>Unique Visitors</th>
+              <th>Sessions</th>
+            </tr>
+          </thead>
+          <tbody id="clients-body"></tbody>
+        </table>
+      </div>
+      <!-- Same caveat, next to the store-level rollup. -->
+      <p class="estimate-note">${VISITOR_ESTIMATE_CAVEAT}</p>
+    </div>
+    </section>
+
+    <section class="dash-section" data-section="links">
     <div class="card">
       <h3>Create Short Link</h3>
       <form id="create-form">
@@ -819,80 +904,6 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       </button>
     </div>
 
-    <!--
-      BUSINESSES AND BRANCHES.
-
-      A business ("local") groups one or more branches ("sucursales"), and each
-      link belongs to a branch. Operator-only: the businesses never see this.
-      Every comment and rating is then traceable to business, branch and link
-      (odd/tasks/business-branches.md).
-    -->
-    <div class="card" id="businesses-card">
-      <h3>Businesses and branches</h3>
-      <label for="new-business-name">New business</label>
-      <div class="field-row">
-        <input type="text" id="new-business-name" maxlength="120" placeholder="e.g. Café Central">
-        <button type="button" id="add-business" class="btn-sm btn-primary">Add</button>
-      </div>
-      <div id="businesses-msg" class="message"></div>
-      <div id="businesses-body" class="gap-top"><div class="loading">Loading...</div></div>
-    </div>
-
-    <!--
-      WHERE FEEDBACK SHOULD GO.
-
-      A card's QR leads to the review gate. A customer can leave a private
-      comment there, and it lands in analytics.tag_feedback and shows up in the
-      satisfaction panel below.
-
-      They can also record here where that should be delivered.
-
-      IT DOES NOT SEND ANYTHING YET. The address is stored, shown and exported
-      into the print sheet's CSV, and nothing is emailed from it. That is the
-      honest state of this field, and the label says so, because a green
-      dashboard implying "reviews are being emailed" is worse than no field at
-      all: an owner would stop checking the panel.
-
-      Wired as static listeners with the other form controls, not through the
-      delegated switch — that switch is for record actions, and this acts on no
-      record.
-    -->
-    <div class="card" id="feedback-email-card">
-      <h3>Feedback email</h3>
-      <p class="field-help">
-        Where you would like private customer comments delivered. Stored now;
-        nothing is emailed yet — comments still arrive in the satisfaction panel
-        below.
-      </p>
-      <label for="feedback-email">Email address</label>
-      <input type="email" id="feedback-email" placeholder="you@yourbusiness.com"
-             autocomplete="email" maxlength="254">
-      <div id="feedback-email-msg" class="message"></div>
-      <button type="button" id="feedback-email-save" class="btn-sm btn-primary gap-top-sm">Save</button>
-    </div>
-
-    </div>
-    <div class="col-main">
-    <!-- The report is what the owner forwards: the print stylesheet keeps the
-         metric cards and drops everything that is a control. -->
-    <div class="report-actions no-print">
-      <button type="button" id="print-report" class="btn-sm">Print report</button>
-    </div>
-    <!-- Review gate. Presentable as a screenshot on purpose: this screen is
-         what the owner forwards as their monthly report, so every figure here
-         carries its own qualification in the markup rather than in a tooltip
-         that a screenshot would not capture. -->
-    <div class="card" id="gate-card" style="display:none;">
-      <h3>Customer satisfaction</h3>
-      <div id="gate-body"><div class="loading">Loading...</div></div>
-    </div>
-
-    <!-- Busy hours. Same screenshot discipline as the panel above: the window
-         and the time zone are printed under the chart, not in a tooltip. -->
-    <div class="card" id="traffic-card" style="display:none;">
-      <h3>Busy hours</h3>
-      <div id="traffic-body"></div>
-    </div>
 
     <div class="card no-print" id="links-card">
       <h3>Your Links (<span id="link-count">0</span>/${activeLinkLimit})</h3>
@@ -929,7 +940,37 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       -->
       <p class="estimate-note"><strong>About visitor figures:</strong> ${VISITOR_ESTIMATE_CAVEAT}</p>
     </div>
+    </section>
 
+    <section class="dash-section" data-section="cards" hidden>
+    <div class="card" id="cards-root">
+      <h3>Cards</h3>
+      <div id="cards-body"><div class="loading">Loading...</div></div>
+    </div>
+    </section>
+
+    <section class="dash-section" data-section="businesses" hidden>
+    <!--
+      BUSINESSES AND BRANCHES.
+
+      A business ("local") groups one or more branches ("sucursales"), and each
+      link belongs to a branch. Operator-only: the businesses never see this.
+      Every comment and rating is then traceable to business, branch and link
+      (odd/tasks/business-branches.md).
+    -->
+    <div class="card" id="businesses-card">
+      <h3>Businesses and branches</h3>
+      <label for="new-business-name">New business</label>
+      <div class="field-row">
+        <input type="text" id="new-business-name" maxlength="120" placeholder="e.g. Café Central">
+        <button type="button" id="add-business" class="btn-sm btn-primary">Add</button>
+      </div>
+      <div id="businesses-msg" class="message"></div>
+      <div id="businesses-body" class="gap-top"><div class="loading">Loading...</div></div>
+    </div>
+    </section>
+
+    <section class="dash-section" data-section="comments" hidden>
     <div class="card" id="feedback-card">
       <div class="feedback-head">
         <h3>What customers wrote</h3>
@@ -942,26 +983,43 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       <div id="feedback-export-msg" class="message"></div>
       <div id="feedback-body"><div class="loading">Loading...</div></div>
     </div>
+    </section>
 
-    <div class="card" id="clients-card" style="display:none;">
-      <h3>Stores by Client Ref</h3>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Client Ref</th>
-              <th>Unique Visitors</th>
-              <th>Sessions</th>
-            </tr>
-          </thead>
-          <tbody id="clients-body"></tbody>
-        </table>
-      </div>
-      <!-- Same caveat, next to the store-level rollup. -->
-      <p class="estimate-note">${VISITOR_ESTIMATE_CAVEAT}</p>
-    </div>
+    <section class="dash-section" data-section="settings" hidden>
+    <!--
+      WHERE FEEDBACK SHOULD GO.
 
+      A card's QR leads to the review gate. A customer can leave a private
+      comment there, and it lands in analytics.tag_feedback and shows up in the
+      satisfaction panel below.
+
+      They can also record here where that should be delivered.
+
+      IT DOES NOT SEND ANYTHING YET. The address is stored, shown and exported
+      into the print sheet's CSV, and nothing is emailed from it. That is the
+      honest state of this field, and the label says so, because a green
+      dashboard implying "reviews are being emailed" is worse than no field at
+      all: an owner would stop checking the panel.
+
+      Wired as static listeners with the other form controls, not through the
+      delegated switch — that switch is for record actions, and this acts on no
+      record.
+    -->
+    <div class="card" id="feedback-email-card">
+      <h3>Feedback email</h3>
+      <p class="field-help">
+        Where you would like private customer comments delivered. Stored now;
+        nothing is emailed yet — comments still arrive in the Comments section.
+      </p>
+      <label for="feedback-email">Email address</label>
+      <input type="email" id="feedback-email" placeholder="you@yourbusiness.com"
+             autocomplete="email" maxlength="254">
+      <div id="feedback-email-msg" class="message"></div>
+      <button type="button" id="feedback-email-save" class="btn-sm btn-primary gap-top-sm">Save</button>
     </div>
+    </section>
+
+    </main>
     </div>
 
     <!-- QR code modal -->
@@ -1283,6 +1341,32 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
 
       document.getElementById("feedback-filter").addEventListener("change", () => loadFeedbackInbox());
       document.getElementById("print-report").addEventListener("click", () => window.print());
+
+      // ---------------------------------------------------------------------
+      // Sidebar sections (odd/tasks/print-queue-cards.md S1). The hash names
+      // the visible section, so a reload or a shared link opens the same one.
+      // ---------------------------------------------------------------------
+      /** The section a URL hash names, or Links for anything else. */
+      function sectionFromHash(hash) {
+        const sections = ["overview", "links", "cards", "businesses", "comments", "settings"];
+        const name = String(hash || "").replace(/^#/, "");
+        return sections.indexOf(name) > -1 ? name : "links";
+      }
+
+      function showSection(name) {
+        document.querySelectorAll(".dash-section").forEach((el) => {
+          el.hidden = el.getAttribute("data-section") !== name;
+        });
+        document.querySelectorAll("[data-section-link]").forEach((a) => {
+          const on = a.getAttribute("data-section-link") === name;
+          a.classList.toggle("is-active", on);
+          if (on) a.setAttribute("aria-current", "page");
+          else a.removeAttribute("aria-current");
+        });
+      }
+
+      window.addEventListener("hashchange", () => showSection(sectionFromHash(location.hash)));
+      showSection(sectionFromHash(location.hash));
 
       async function loadFeedbackInbox() {
         const body = document.getElementById("feedback-body");

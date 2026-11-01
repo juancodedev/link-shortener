@@ -661,7 +661,8 @@ describe("printable report", () => {
     const css = await printCss();
 
     expect(css).toContain("nav,");
-    expect(css).toContain(".col-side,");
+    expect(css).toContain(".sidebar,");
+    expect(css).toContain('.dash-section:not([data-section="overview"]),');
     expect(css).toContain(".no-print,");
     expect(css).toContain("button,");
     expect(css).toContain("select,");
@@ -1881,19 +1882,16 @@ describe("the feedback email section", () => {
 
     // Says so where the owner will actually read it.
     expect(html).toMatch(/nothing is emailed/i);
-    expect(html).toMatch(/satisfaction panel/i);
+    expect(html).toMatch(/comments still arrive in the Comments section/i);
   });
 
-  it("puts the panel before the satisfaction panel it refers to", async () => {
+  it("names a section that exists in the sidebar", async () => {
     const html = await serve();
 
     // The text tells the owner where their comments still arrive. That sentence
-    // only makes sense if the panel it names is on the same page.
-    const card = html.indexOf('id="feedback-email-card"');
-    const gate = html.indexOf('id="gate-card"');
-    expect(card).toBeGreaterThan(-1);
-    expect(gate).toBeGreaterThan(-1);
-    expect(card).toBeLessThan(gate);
+    // only makes sense if the section it names is one click away.
+    expect(html).toContain('data-section-link="comments">Comments<');
+    expect(html).toContain('<section class="dash-section" data-section="comments"');
   });
 
   it("PUTs to the tenant-scoped endpoint", async () => {
@@ -2157,13 +2155,12 @@ describe("review screen checkbox", () => {
 // they configure, stacked on a phone.
 // ---------------------------------------------------------------------------
 
-describe("full-width layout", () => {
-  /** The markup between an element's opening tag and the next column marker. */
-  function column(html: string, cls: string): string {
-    const start = html.indexOf(`<div class="${cls}">`);
-    expect(start, `${cls} is missing`).toBeGreaterThan(-1);
-    const next = html.indexOf('<div class="col-', start + 1);
-    return html.slice(start, next > -1 ? next : html.indexOf("</main>", start));
+describe("sidebar sections (odd/tasks/print-queue-cards.md S1)", () => {
+  /** The markup of one <section data-section="..."> block. */
+  function section(html: string, name: string): string {
+    const start = html.indexOf(`<section class="dash-section" data-section="${name}"`);
+    expect(start, `${name} section is missing`).toBeGreaterThan(-1);
+    return html.slice(start, html.indexOf("</section>", start));
   }
 
   it("no longer caps the page at a 720px column", async () => {
@@ -2172,23 +2169,64 @@ describe("full-width layout", () => {
     expect(html).toMatch(/\.container\s*\{[^}]*max-width:\s*1440px/);
   });
 
-  it("splits into two columns on a wide screen", async () => {
+  it("lists the six sections in the sidebar, in order", async () => {
     const html = await serve();
-    expect(html).toMatch(/@media \(min-width: 1024px\)\s*\{\s*\.layout\s*\{[^}]*grid-template-columns/);
+    const nav = html.slice(html.indexOf('<aside class="sidebar'), html.indexOf("</aside>"));
+    const links = [...nav.matchAll(/<a href="#([a-z]+)" data-section-link="\1"[^>]*>([^<]+)</g)].map((m) => [m[1], m[2]!.trim()]);
+    expect(links).toEqual([
+      ["overview", "Overview"],
+      ["links", "Links"],
+      ["cards", "Cards"],
+      ["businesses", "Businesses and branches"],
+      ["comments", "Comments"],
+      ["settings", "Settings"],
+    ]);
   });
 
-  it("puts what the owner configures in the side column", async () => {
-    const side = column(await serve(), "col-side");
-    expect(side).toContain('id="create-form"');
-    expect(side).toContain('id="feedback-email-card"');
+  it("puts the sidebar beside the sections on a wide screen", async () => {
+    const html = await serve();
+    expect(html).toMatch(/@media \(min-width: 1024px\)\s*\{\s*\.app\s*\{[^}]*grid-template-columns/);
   });
 
-  it("puts what the owner reads in the main column, satisfaction first", async () => {
-    const main = column(await serve(), "col-main");
-    const at = (needle: string) => main.indexOf(needle);
-    expect(at('id="gate-card"')).toBeGreaterThan(-1);
-    expect(at('id="links-table"')).toBeGreaterThan(at('id="gate-card"'));
-    expect(at('id="feedback-card"')).toBeGreaterThan(at('id="links-table"'));
+  it("groups the existing cards into their sections", async () => {
+    const html = await serve();
+    const overview = section(html, "overview");
+    expect(overview).toContain('id="print-report"');
+    expect(overview).toContain('id="gate-card"');
+    expect(overview).toContain('id="traffic-card"');
+    expect(overview).toContain('id="clients-card"');
+    const links = section(html, "links");
+    expect(links).toContain('id="create-form"');
+    expect(links).toContain('id="links-table"');
+    expect(section(html, "cards")).toContain('id="cards-root"');
+    expect(section(html, "businesses")).toContain('id="businesses-card"');
+    expect(section(html, "comments")).toContain('id="feedback-card"');
+    expect(section(html, "settings")).toContain('id="feedback-email-card"');
+  });
+
+  it("shows only one section at a time, starting hidden except Links", async () => {
+    const html = await serve();
+    const tags = [...html.matchAll(/<section class="dash-section" data-section="([a-z]+)"( hidden)?>/g)].map(
+      (m) => [m[1], Boolean(m[2])],
+    );
+    expect(tags).toEqual([
+      ["overview", true],
+      ["links", false],
+      ["cards", true],
+      ["businesses", true],
+      ["comments", true],
+      ["settings", true],
+    ]);
+  });
+
+  it("reads the section from the URL hash and falls back to Links", async () => {
+    const fromHash = await loadClientFunction<(h: string) => string>("sectionFromHash");
+
+    expect(fromHash("#cards")).toBe("cards");
+    expect(fromHash("#overview")).toBe("overview");
+    expect(fromHash("")).toBe("links");
+    expect(fromHash("#nope")).toBe("links");
+    expect(codeOnly(await clientScript())).toContain('addEventListener("hashchange"');
   });
 });
 
@@ -2204,9 +2242,10 @@ describe("businesses and branches card", () => {
     return new Function("esc", `${src}\nreturn renderBusinesses;`)(esc);
   }
 
-  it("lives in the side column, with a field to add a business", async () => {
+  it("lives in the businesses section, with a field to add a business", async () => {
     const html = await serve();
-    const side = html.slice(html.indexOf('<div class="col-side">'), html.indexOf('<div class="col-main">'));
+    const start = html.indexOf('data-section="businesses"');
+    const side = html.slice(start, html.indexOf("</section>", start));
     expect(side).toContain('id="businesses-card"');
     expect(side).toMatch(/<input[^>]*id="new-business-name"/);
     expect(side).toContain('id="add-business"');

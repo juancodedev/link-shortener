@@ -23,6 +23,7 @@ import {
 } from "./api/links";
 import { createLinksBatch } from "./api/batch";
 import { listClientRefMetrics } from "./api/clients";
+import { hourlyTraffic } from "./api/traffic";
 import { listLocations, createLocation, updateLocation } from "./api/locations";
 import { listBusinesses, createBusiness, updateBusiness } from "./api/businesses";
 import { linkQrSvg, batchQrSheet } from "./api/qr";
@@ -160,6 +161,10 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
   // there changed that response from a bare array into an envelope. See
   // src/api/clients.ts for the full reasoning.
   app.get("/api/clients/metrics", auth, tenantMembershipMiddleware, listClientRefMetrics);
+
+  // Scans per local hour of the day. Same chain as the rollup above: the
+  // tenant in context is the only thing scoping the query. See src/api/traffic.ts.
+  app.get("/api/traffic/hourly", auth, tenantMembershipMiddleware, hourlyTraffic);
 
   // Locations — one table, one zone, one wall. The same chain as every other
   // tenant-scoped route above, for the same reason: the links COUNT is a

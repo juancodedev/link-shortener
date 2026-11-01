@@ -400,6 +400,13 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     }
     .peak-seg-rest { background: var(--peak-private); }
     .peak-seg-public { background: var(--peak-public); }
+    .hour-bar {
+      flex: 1 1 0;
+      min-width: 2px;
+      background: var(--tag);
+      border-radius: 1px 1px 0 0;
+    }
+    .hour-summary { font-size: 0.875rem; margin-top: 0.25rem; }
     .peak-axis {
       display: flex;
       justify-content: space-between;
@@ -567,6 +574,27 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     .check-row input[type="checkbox"] { width: 1.125rem; height: 1.125rem; margin: 0; flex: none; accent-color: var(--tag); }
     .gap-top { margin-top: 1rem; }
     .gap-top-sm { margin-top: 0.5rem; }
+    .report-actions { display: flex; justify-content: flex-end; margin-bottom: 0.75rem; }
+    /* The printed report: only the metric cards, one card never split across
+       two pages, and the chart colours kept (browsers drop backgrounds by
+       default, which would print the bars as nothing). */
+    @media print {
+      nav,
+      .col-side,
+      .no-print,
+      .qr-modal,
+      button,
+      select,
+      #feedback-card label,
+      .message {
+        display: none !important;
+      }
+      * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      body, .container { background: none; max-width: none; padding: 0; }
+      .layout { display: block; }
+      .card { break-inside: avoid; box-shadow: none; }
+      .table-wrap { overflow: visible; }
+    }
   </style>
 </head>
 <body>
@@ -695,6 +723,7 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       if (typeof loadFeedbackEmail === "function") loadFeedbackEmail();
       if (typeof loadFeedbackInbox === "function") loadFeedbackInbox();
       if (typeof loadBranches === "function") loadBranches();
+      if (typeof loadHourlyTraffic === "function") loadHourlyTraffic();
       if (typeof loadLinks === "function") loadLinks();
     })();
   </script>
@@ -844,6 +873,11 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
 
     </div>
     <div class="col-main">
+    <!-- The report is what the owner forwards: the print stylesheet keeps the
+         metric cards and drops everything that is a control. -->
+    <div class="report-actions no-print">
+      <button type="button" id="print-report" class="btn-sm">Print report</button>
+    </div>
     <!-- Review gate. Presentable as a screenshot on purpose: this screen is
          what the owner forwards as their monthly report, so every figure here
          carries its own qualification in the markup rather than in a tooltip
@@ -853,7 +887,14 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       <div id="gate-body"><div class="loading">Loading...</div></div>
     </div>
 
-    <div class="card">
+    <!-- Busy hours. Same screenshot discipline as the panel above: the window
+         and the time zone are printed under the chart, not in a tooltip. -->
+    <div class="card" id="traffic-card" style="display:none;">
+      <h3>Busy hours</h3>
+      <div id="traffic-body"></div>
+    </div>
+
+    <div class="card no-print" id="links-card">
       <h3>Your Links (<span id="link-count">0</span>/${activeLinkLimit})</h3>
       <div id="links-loading" class="loading">Loading...</div>
       <div class="table-wrap">
@@ -1241,6 +1282,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       }
 
       document.getElementById("feedback-filter").addEventListener("change", () => loadFeedbackInbox());
+      document.getElementById("print-report").addEventListener("click", () => window.print());
 
       async function loadFeedbackInbox() {
         const body = document.getElementById("feedback-body");
@@ -1519,6 +1561,53 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           <td>\${esc(c.unique_visitors)}</td>
           <td>\${esc(c.sessions)}</td>
         </tr>\`).join("");
+      }
+
+      /**
+       * The busy-hours chart: 24 CSS bars, one per local hour of the day.
+       *
+       * Bar height is the hour against the busiest one, like the peak chart in
+       * the satisfaction panel. The busiest hour is also written out as text,
+       * because a screenshot of bars alone does not say which bar is 13:00.
+       */
+      function renderHourlyTraffic(payload) {
+        const hours = (payload && Array.isArray(payload.hours)) ? payload.hours : [];
+        const label = (h) => String(h).padStart(2, "0") + ":00";
+        const footnote = '<p class="estimate-note">Last ' + esc(payload && payload.window) +
+          " · " + esc(payload && payload.time_zone) + " time. Every scan counts, including repeat scans.</p>";
+        const busiest = hours.reduce((top, h) => (h.scans > top.scans ? h : top), { hour: 0, scans: 0 });
+        if (busiest.scans === 0) {
+          return '<p class="gate-empty">No scans in the last ' + esc(payload && payload.window) + " yet.</p>";
+        }
+        const bars = hours.map((h) => {
+          const height = Math.round((h.scans / busiest.scans) * 100);
+          return '<div class="hour-bar" style="height:' + height + '%;" title="' +
+            esc(label(h.hour)) + " · " + esc(h.scans) + ' scans"></div>';
+        }).join("");
+        return '<p class="hour-summary">Busiest hour: ' + label(busiest.hour) + "–" +
+            label((busiest.hour + 1) % 24) + " (" + esc(busiest.scans) + " scans)</p>" +
+          '<div class="peak-chart">' + bars + "</div>" +
+          '<div class="peak-axis"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>23:00</span></div>' +
+          footnote;
+      }
+
+      /**
+       * Loads the busy-hours card on its own. It degrades to hidden on failure
+       * instead of failing the links table: it is a report, not the workflow.
+       */
+      async function loadHourlyTraffic() {
+        const card = document.getElementById("traffic-card");
+        const body = document.getElementById("traffic-body");
+        if (!card || !body) return;
+        try {
+          const res = await window.__api("GET", "/api/traffic/hourly");
+          if (!res.ok) throw new Error("hourly traffic: HTTP " + res.status);
+          body.innerHTML = renderHourlyTraffic(await res.json());
+          card.style.display = "";
+        } catch (err) {
+          card.style.display = "none";
+          console.error("hourly traffic failed to load", err);
+        }
       }
 
       /**

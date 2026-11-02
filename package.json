@@ -17,7 +17,7 @@
   "dependencies": {
     "fflate": "^0.8.3",
     "hono": "^4.13.13",
-    "jose": "^6.2.12",
+    "jose": "^6.2.14",
     "nanoid": "^6.0.2",
     "pg": "^8.23.1",
     "qrcode-generator": "^2.0.4"

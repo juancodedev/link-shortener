@@ -15,8 +15,8 @@ importers:
         specifier: ^4.13.13
         version: 4.13.13
       jose:
-        specifier: ^6.2.12
-        version: 6.2.12
+        specifier: ^6.2.14
+        version: 6.2.14
       nanoid:
         specifier: ^6.0.2
         version: 6.0.2
@@ -873,8 +873,8 @@ packages:
     resolution: {integrity: sha512-CQ46U0ZkAGmbT/4UxdzzGJpacP2IeKgY4a5/tOI9AABbpOMfK739wfDXmv1usCk+3RkKj1hQy4/fjhiwa2xlrA==}
     engines: {node: '>=16.9.0'}
 
-  jose@6.2.12:
-    resolution: {integrity: sha512-9NiFmJEex0sy2Dk58j2UGBSHgUs2ypF9eZSu4L6vjOX3Dp96Sw1F3uL+H+D1sx02jZZdzUT0HgvCy59CuvXcWw==}
+  jose@6.2.14:
+    resolution: {integrity: sha512-3JasLuki1NRLQvY4wCoC37KZk4qxoBx2k2aFqLxT84IezqW0bkJKnNtxnZj/Fu1xsQivoc/lytxaRHJoGLjJ1A==}
 
   kleur@4.1.5:
     resolution: {integrity: sha512-o+NO+8WrRiQEE4/7nwRJhN1HWpVmJm511pBHUxPLtp0BUISzlBplORYSmTclCnJvQq2tKu/sgl3xVpkc7ZWuQQ==}
@@ -1850,7 +1850,7 @@ snapshots:
 
   hono@4.13.13: {}
 
-  jose@6.2.12: {}
+  jose@6.2.14: {}
 
   kleur@4.1.5: {}
 

@@ -125,24 +125,27 @@ function detectDeviceType(request: Request): string {
 function getReferrerSource(referrer: string | null): string {
   if (!referrer) return "Direct";
 
+  const matchesHost = (host: string, domain: string): boolean =>
+    host === domain || host.endsWith(`.${domain}`);
+
   try {
     const host = new URL(referrer).hostname.toLowerCase();
 
-    if (host.includes("instagram.com") || host === "l.instagram.com") return "Instagram";
-    if (host.includes("facebook.com") || host === "l.facebook.com" || host === "lm.facebook.com") return "Facebook";
-    if (host.includes("whatsapp.com") || host === "wa.me") return "WhatsApp";
-    if (host.includes("t.co") || host.includes("twitter.com") || host.includes("x.com")) return "Twitter/X";
-    if (host.includes("linkedin.com")) return "LinkedIn";
-    if (host.includes("t.me") || host.includes("telegram.org")) return "Telegram";
-    if (host.includes("youtube.com") || host.includes("youtu.be")) return "YouTube";
-    if (host.includes("reddit.com")) return "Reddit";
-    if (host.includes("tiktok.com")) return "TikTok";
-    if (host.includes("tumblr.com")) return "Tumblr";
-    if (host.includes("pinterest.com")) return "Pinterest";
-    if (host.includes("discord.com")) return "Discord";
-    if (host.includes("slack.com")) return "Slack";
-    if (host.includes("github.com")) return "GitHub";
-    if (host.includes("google.com")) return "Google";
+    if (matchesHost(host, "instagram.com") || host === "l.instagram.com") return "Instagram";
+    if (matchesHost(host, "facebook.com") || host === "l.facebook.com" || host === "lm.facebook.com") return "Facebook";
+    if (matchesHost(host, "whatsapp.com") || host === "wa.me") return "WhatsApp";
+    if (host === "t.co" || matchesHost(host, "twitter.com") || matchesHost(host, "x.com")) return "Twitter/X";
+    if (matchesHost(host, "linkedin.com")) return "LinkedIn";
+    if (host === "t.me" || matchesHost(host, "telegram.org")) return "Telegram";
+    if (matchesHost(host, "youtube.com") || host === "youtu.be") return "YouTube";
+    if (matchesHost(host, "reddit.com")) return "Reddit";
+    if (matchesHost(host, "tiktok.com")) return "TikTok";
+    if (matchesHost(host, "tumblr.com")) return "Tumblr";
+    if (matchesHost(host, "pinterest.com")) return "Pinterest";
+    if (matchesHost(host, "discord.com")) return "Discord";
+    if (matchesHost(host, "slack.com")) return "Slack";
+    if (matchesHost(host, "github.com")) return "GitHub";
+    if (matchesHost(host, "google.com")) return "Google";
 
     // Return the site name (strip www and TLD)
     return host.replace(/^www\./, "").split(".")[0]!;

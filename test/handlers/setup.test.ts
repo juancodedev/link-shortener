@@ -180,7 +180,8 @@ async function settle() {
 
 async function runSetupPage(code: string, opts: BrowserOpts) {
   const html = renderSetupPage({ code, supabaseUrl: "https://x.supabase.co", supabaseAnonKey: "anon" });
-  const inline = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!);
+  const parsed = new DOMParser().parseFromString(html, "text/html");
+  const inline = Array.from(parsed.querySelectorAll("script")).map((s) => s.textContent ?? "");
 
   const els: Record<string, FakeEl> = {};
   let onSubmit: ((e: unknown) => Promise<void>) | undefined;

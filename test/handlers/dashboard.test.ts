@@ -49,7 +49,7 @@ async function serve(): Promise<string> {
  */
 async function clientScript(): Promise<string> {
   const html = await serve();
-  const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  const script = html.match(/<script>([\s\S]*?)<\/script>/i)?.[1];
   if (!script || !script.includes("links-body")) {
     throw new Error("dashboard client script not found in served HTML");
   }

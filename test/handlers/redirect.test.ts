@@ -1142,7 +1142,7 @@ describe("scanning a card that has no destination yet", () => {
 
 describe("unconfigured card hands a logged-in owner to setup", () => {
   function inlineScripts(html: string): string[] {
-    return [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!);
+    return [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi)].map((m) => m[1]!);
   }
 
   /** Runs the page's inline scripts against a fake storage and location. */

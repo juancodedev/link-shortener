@@ -676,6 +676,7 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     .gap-top-sm { margin-top: 0.5rem; }
     .report-actions { display: flex; justify-content: flex-end; margin-bottom: 0.75rem; }
     .badge-queued { background: var(--stale-wash); color: var(--stale); }
+    .badge[hidden] { display: none; }
     /* Cards section (odd/tasks/print-queue-cards.md S4-S6). Sheets and cards
        are sized in millimetres, so the preview is the print at a zoom. */
     .cards-controls { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.75rem; }
@@ -1057,7 +1058,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
     -->
     <div class="card" id="cards-root">
       <h3>Cards to print</h3>
-      <p class="field-help">Links you send to print from the Links section wait here. A card leaves the queue when you mark it printed, remove it, or save its destination.</p>
+      <p class="field-help">Links you send to print from the Links section wait here. A card leaves the queue when you mark it printed, remove it, or save its destination. The queue lives in this page only: reloading it starts empty.</p>
       <ul id="cards-queue" class="cards-queue"></ul>
       <div id="cards-controls" class="cards-controls">
         <fieldset>
@@ -1644,16 +1645,13 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         });
       }
 
-      async function loadCards() {
-        try {
-          const res = await window.__api("GET", "/api/links/print-queue");
-          if (!res.ok) throw new Error("print queue: HTTP " + res.status);
-          const queue = await res.json();
-          window.__printQueue = Array.isArray(queue) ? queue : [];
-        } catch (err) {
-          console.error("print queue failed to load", err);
-          return;
-        }
+      /**
+       * Draws the Cards section from the in-browser queue. Nothing is fetched:
+       * the queue only carries cards from the Links table to this sheet for
+       * the print at hand, so it lives in this page and is gone on reload
+       * (odd/tasks/print-queue-cards.md S2-S3, L3).
+       */
+      function renderPrintQueue() {
         const n = window.__printQueue.length;
         const badge = document.getElementById("cards-count");
         badge.textContent = String(n);
@@ -1662,7 +1660,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         renderCardSheets();
       }
 
-      window.__loadCards = loadCards;
+      window.__syncPrintQueue = syncPrintQueue;
 
       /**
        * Prints only the sheets, at the sheet size with no page margin (S5).
@@ -1693,17 +1691,13 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         if (style) style.textContent = "";
       });
 
-      async function markCardsPrinted() {
+      function markCardsPrinted() {
         const ids = window.__printQueue.map((item) => item.id);
         if (ids.length === 0) return;
         if (!confirm("Mark " + ids.length + " card(s) as printed? They leave the print queue.")) return;
-        try {
-          const res = await window.__api("POST", "/api/links/printed", { ids: ids });
-          if (!res.ok) throw new Error("HTTP " + res.status);
-          loadLinks();
-        } catch (err) {
-          alert("Error: " + (err instanceof Error ? err.message : ""));
-        }
+        window.__printQueue = [];
+        ids.forEach((id) => showQueuedState(id, false));
+        renderPrintQueue();
       }
 
       document.getElementById("cards-controls").addEventListener("input", (e) => {
@@ -2125,7 +2119,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
             deleteLink(el.dataset.id);
             break;
           case "queue-print":
-            setPrintQueued(el.dataset.id, true);
+            setPrintQueued(el.dataset.id, true, el.dataset.code);
             break;
           case "unqueue-print":
             setPrintQueued(el.dataset.id, false);
@@ -2152,10 +2146,6 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         // script's gate was never created; there is nothing to wait for, so the
         // load proceeds and fails (or succeeds) on its own merits.
         if (window.__apiReady) await window.__apiReady;
-        // The print queue follows every links refresh: queuing, removing and
-        // saving a destination all end in loadLinks(). Reached through window
-        // so this function stays callable on its own.
-        if (window.__loadCards) window.__loadCards();
 
         const loading = document.getElementById("links-loading");
         const table = document.getElementById("links-table");
@@ -2222,6 +2212,9 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           const clients = Array.isArray(clientsPayload) ? clientsPayload : [];
 
           count.textContent = links.length;
+          // The print queue lives in this page; a refresh only prunes it.
+          // Reached through window so loadLinks stays callable on its own.
+          if (window.__syncPrintQueue) window.__syncPrintQueue(links);
 
           if (links.length === 0) {
             empty.style.display = "";
@@ -2246,13 +2239,13 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
               <td class="hide-sm">\${l.original_url
                 ? \`<span class="url-trunc" title="\${esc(l.original_url)}">\${esc(l.original_url)}</span>\`
                 : l.print_queued
-                  ? \`<button class="btn-sm btn-outline" data-action="unqueue-print" data-id="\${esc(l.id)}">Remove from queue</button>\`
-                  : \`<button class="btn-sm btn-outline" data-action="queue-print" data-id="\${esc(l.id)}">Send to print</button>\`}</td>
+                  ? \`<button class="btn-sm btn-outline" data-action="unqueue-print" data-id="\${esc(l.id)}" data-code="\${esc(l.short_code)}">Remove from queue</button>\`
+                  : \`<button class="btn-sm btn-outline" data-action="queue-print" data-id="\${esc(l.id)}" data-code="\${esc(l.short_code)}">Send to print</button>\`}</td>
               <td class="hide-sm">\${l.is_gated
                 ? '<span class="badge badge-gated">Review screen</span>'
                 : '<span class="badge badge-direct">Direct</span>'}</td>
               <td><a href="#" data-action="metrics" data-id="\${esc(l.id)}" data-code="\${esc(l.short_code)}" class="clicks-link">\${esc(l.clicks_count)}</a></td>
-              <td><span class="badge badge-\${status}">\${status}</span>\${l.print_queued ? ' <span class="badge badge-queued">To print</span>' : ""}</td>
+              <td><span class="badge badge-\${status}">\${status}</span>\${l.original_url ? "" : \` <span class="badge badge-queued" data-print-badge="\${esc(l.id)}"\${l.print_queued ? "" : " hidden"}>To print</span>\`}</td>
               <td><div class="row-actions"><button class="btn-sm btn-outline" data-action="edit" data-id="\${esc(l.id)}" data-code="\${esc(l.short_code)}">Edit</button><button class="btn-sm btn-danger" data-action="delete" data-id="\${esc(l.id)}">Del</button></div></td>
             </tr>
             <tr id="metrics-\${esc(l.id)}" style="display:none;">
@@ -2284,8 +2277,8 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
                       <label>Print sheet</label>
                       <div class="field-row">
                         <button class="btn-sm" data-action="qr" data-url="\${esc(shortUrl)}">QR code</button>\${l.original_url ? "" : l.print_queued
-                          ? \`<button class="btn-sm btn-outline" data-action="unqueue-print" data-id="\${esc(l.id)}">Remove from queue</button>\`
-                          : \`<button class="btn-sm btn-outline" data-action="queue-print" data-id="\${esc(l.id)}">Send to print</button>\`}
+                          ? \`<button class="btn-sm btn-outline" data-action="unqueue-print" data-id="\${esc(l.id)}" data-code="\${esc(l.short_code)}">Remove from queue</button>\`
+                          : \`<button class="btn-sm btn-outline" data-action="queue-print" data-id="\${esc(l.id)}" data-code="\${esc(l.short_code)}">Send to print</button>\`}
                       </div>
                       <p class="field-note">The code that goes on the sticker. This is the destination the printed tag resolves to.</p>
                     </div>
@@ -2377,20 +2370,49 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
 
       /**
        * Sends an unconfigured link to the print queue, or takes it out
-       * (odd/tasks/print-queue-cards.md S2-S3). loadLinks() refreshes the
-       * table and, through it, the Cards section.
+       * (odd/tasks/print-queue-cards.md S2-S3). Synchronous and local: the
+       * queue is page state, so the row and the Cards section change on the
+       * click itself, with no request and no table reload.
        */
-      async function setPrintQueued(id, queued) {
-        try {
-          const res = await window.__api("PATCH", "/api/links/" + id, { print_queued: queued });
-          if (!res.ok) {
-            const body = await res.json().catch(() => ({}));
-            throw new Error(body.message || body.error || "HTTP " + res.status);
-          }
-          loadLinks();
-        } catch (err) {
-          alert("Error: " + (err instanceof Error ? err.message : ""));
-        }
+      function setPrintQueued(id, queued, code) {
+        const queue = window.__printQueue;
+        const at = queue.findIndex((item) => item.id === id);
+        if (queued && at < 0) queue.push({ id: id, short_code: code || "" });
+        if (!queued && at >= 0) queue.splice(at, 1);
+        showQueuedState(id, queued);
+        renderPrintQueue();
+      }
+
+      /**
+       * Flips one link's print controls in place. The table is not
+       * re-rendered, so an open editing panel stays open. Both copies of the
+       * button (row and panel) and the "To print" badge follow.
+       */
+      function showQueuedState(id, queued) {
+        const body = document.getElementById("links-body");
+        body.querySelectorAll('[data-id="' + CSS.escape(id) + '"]').forEach((btn) => {
+          if (btn.dataset.action !== "queue-print" && btn.dataset.action !== "unqueue-print") return;
+          btn.dataset.action = queued ? "unqueue-print" : "queue-print";
+          btn.textContent = queued ? "Remove from queue" : "Send to print";
+        });
+        const badge = body.querySelector('[data-print-badge="' + CSS.escape(id) + '"]');
+        if (badge) badge.hidden = !queued;
+      }
+
+      /**
+       * Reconciles the queue with a fresh links list: a link that was deleted
+       * or got a destination leaves the queue (S3b), and each remaining row is
+       * marked so the table renders its queued state.
+       */
+      function syncPrintQueue(links) {
+        const byId = new Map(links.map((l) => [l.id, l]));
+        window.__printQueue = window.__printQueue.filter((item) => {
+          const l = byId.get(item.id);
+          return Boolean(l) && !l.original_url;
+        });
+        const queued = new Set(window.__printQueue.map((item) => item.id));
+        links.forEach((l) => { l.print_queued = queued.has(l.id); });
+        renderPrintQueue();
       }
 
       async function toggleLink(id, active) {

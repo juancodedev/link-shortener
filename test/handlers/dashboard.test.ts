@@ -1012,10 +1012,10 @@ describe("the dashboard script never triggers a load at parse time", () => {
 
     // One call per handler that changes the table: create form submit, bulk
     // create, destination save, branch save, toggle, review-screen toggle,
-    // client-ref save, delete, refreshOwnership (a business or branch
-    // changed), the print-queue toggle and "Mark as printed". A parse-time
-    // call anywhere pushes this to twelve.
-    expect(statements).toHaveLength(11);
+    // client-ref save, delete and refreshOwnership (a business or branch
+    // changed). The print queue is page state and reloads nothing. A
+    // parse-time call anywhere pushes this to ten.
+    expect(statements).toHaveLength(9);
     expect(statements.every((indent) => indent > TOP_LEVEL_INDENT)).toBe(true);
   });
 
@@ -2559,7 +2559,7 @@ describe("print queue in the links table", () => {
     const row = await renderRow({ original_url: null, print_queued: true });
     const main = row.slice(0, row.indexOf("</tr>"));
 
-    expect(main).toContain('<span class="badge badge-queued">To print</span>');
+    expect(main).toContain('<span class="badge badge-queued" data-print-badge="link-uuid">To print</span>');
     expect(main).toContain('data-action="unqueue-print" data-id="link-uuid"');
     expect(main).not.toContain('data-action="queue-print"');
   });
@@ -2578,12 +2578,96 @@ describe("print queue in the links table", () => {
     expect(panel).toContain('data-action="queue-print" data-id="link-uuid"');
   });
 
-  it("routes both actions to the same PATCH helper", async () => {
+  it("keeps the To print badge in the row, hidden, so a click can reveal it in place", async () => {
+    const row = await renderRow({ original_url: null, print_queued: false });
+    const main = row.slice(0, row.indexOf("</tr>"));
+
+    expect(main).toContain('<span class="badge badge-queued" data-print-badge="link-uuid" hidden>To print</span>');
+  });
+
+  it("routes both actions to one local helper that sends no request and reloads nothing", async () => {
     const script = codeOnly(await clientScript());
+    const helper = extractFunction(script, "setPrintQueued");
 
     expect(script).toContain('case "queue-print":');
     expect(script).toContain('case "unqueue-print":');
-    expect(script).toMatch(/window\.__api\("PATCH", "\/api\/links\/" \+ id, \{ print_queued: queued \}\)/);
+    expect(helper).not.toContain("__api");
+    expect(helper).not.toContain("loadLinks");
+    expect(helper).not.toMatch(/\bawait\b|\basync\b/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The print queue is page state (odd/tasks/print-queue-cards.md S2-S3, L3)
+// ---------------------------------------------------------------------------
+
+describe("print queue as page state", () => {
+  type Item = { id: string; short_code: string };
+  type Win = { __printQueue: Item[] };
+
+  async function harness(names: string[]) {
+    const script = codeOnly(await clientScript());
+    const shown: Array<[string, boolean]> = [];
+    let renders = 0;
+    const win: Win = { __printQueue: [] };
+    const src = names.map((n) => extractFunction(script, n)).join("\n");
+    const fns = new Function(
+      "window",
+      "showQueuedState",
+      "renderPrintQueue",
+      `${src}\nreturn { ${names.join(", ")} };`,
+    )(win, (id: string, q: boolean) => shown.push([id, q]), () => renders++);
+    return { fns, win, shown, renders: () => renders };
+  }
+
+  it("queues a link on the click itself, keeping its code and the click order", async () => {
+    const { fns, win, shown, renders } = await harness(["setPrintQueued"]);
+
+    fns.setPrintQueued("a", true, "AAA");
+    fns.setPrintQueued("b", true, "BBB");
+    fns.setPrintQueued("a", true, "AAA");
+
+    expect(win.__printQueue).toEqual([{ id: "a", short_code: "AAA" }, { id: "b", short_code: "BBB" }]);
+    expect(shown).toEqual([["a", true], ["b", true], ["a", true]]);
+    expect(renders()).toBe(3);
+  });
+
+  it("takes a link out of the queue", async () => {
+    const { fns, win, shown } = await harness(["setPrintQueued"]);
+    win.__printQueue = [{ id: "a", short_code: "AAA" }, { id: "b", short_code: "BBB" }];
+
+    fns.setPrintQueued("a", false);
+
+    expect(win.__printQueue).toEqual([{ id: "b", short_code: "BBB" }]);
+    expect(shown).toEqual([["a", false]]);
+  });
+
+  it("drops links that got a destination or were deleted when the table reloads, and marks the rest", async () => {
+    const { fns, win, renders } = await harness(["syncPrintQueue"]);
+    win.__printQueue = [
+      { id: "kept", short_code: "K" },
+      { id: "configured", short_code: "C" },
+      { id: "deleted", short_code: "D" },
+    ];
+    const links: Array<Record<string, unknown>> = [
+      { id: "kept", original_url: null },
+      { id: "configured", original_url: "https://g.page/r/x" },
+      { id: "other", original_url: null },
+    ];
+
+    fns.syncPrintQueue(links);
+
+    expect(win.__printQueue).toEqual([{ id: "kept", short_code: "K" }]);
+    expect(links.map((l) => l.print_queued)).toEqual([true, false, false]);
+    expect(renders()).toBe(1);
+  });
+
+  it("clears the batch on Mark as printed without a request", async () => {
+    const script = codeOnly(await clientScript());
+    const fn = extractFunction(script, "markCardsPrinted");
+
+    expect(fn).not.toContain("__api");
+    expect(fn).toContain("window.__printQueue = []");
   });
 });
 
@@ -2664,13 +2748,13 @@ describe("cards section", () => {
     expect(script).toContain('addEventListener("afterprint"');
   });
 
-  it("loads the queue and each card from the API, and clears a printed batch", async () => {
+  it("draws each card from the API, but keeps the queue itself in the page", async () => {
     const script = codeOnly(await clientScript());
 
-    expect(script).toContain('window.__api("GET", "/api/links/print-queue")');
     expect(script).toMatch(/"\/api\/links\/" \+ encodeURIComponent\(item\.id\) \+ "\/card\.svg\?design="/);
-    expect(script).toContain('window.__api("POST", "/api/links/printed", { ids:');
-    expect(script).toContain("loadCards()");
+    expect(script).not.toContain("/api/links/print-queue");
+    expect(script).not.toContain("/api/links/printed");
+    expect(script).not.toContain("print_queued: queued");
   });
 
   it("loads the fonts the cards are drawn with, so the PDF embeds what the preview shows", async () => {

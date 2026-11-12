@@ -4,6 +4,7 @@ import { VISITOR_ESTIMATE_CAVEAT } from "../analytics/metrics";
 import { renderGatePanel } from "./gate-panel";
 import { renderFeedbackInbox } from "./feedback-inbox";
 import { resolveMaxActiveLinks } from "../api/links";
+import { icon } from "./icons";
 
 // ---------------------------------------------------------------------------
 // Shared shell
@@ -87,6 +88,11 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       /* Peak chart — the two segments of each scan bucket */
       --peak-public: #9c8d74;  /* brass */
       --peak-private: var(--ink);
+
+      /* Control heights — an input, a select and the button beside it share
+         one height, so a row of them lines up without per-row fixes. */
+      --control-h: 2.25rem;
+      --control-h-sm: 1.75rem;
     }
 
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -123,19 +129,22 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     .side-nav a {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 0.5rem;
+      gap: 0.625rem;
       white-space: nowrap;
       padding: 0.5rem 0.75rem;
       border-radius: 0.5rem;
-      color: var(--ink);
+      color: var(--ink-soft);
       text-decoration: none;
       font-size: 0.875rem;
       font-weight: 500;
     }
-    .side-nav a:hover { background: var(--kraft-deep); }
-    .side-nav a.is-active { background: var(--tag); color: var(--sticker); }
+    .side-nav a:hover { background: var(--kraft-deep); color: var(--ink-strong); }
+    /* Active is a wash, not a solid fill: it marks where you are without
+       competing with the one filled button that means "do this". */
+    .side-nav a.is-active { background: var(--tag-wash); color: var(--tag-deep); font-weight: 600; }
+    .side-nav a .icon { width: 1.125rem; height: 1.125rem; }
     .side-count {
+      margin-left: auto;
       background: var(--stale-wash);
       color: var(--stale);
       border-radius: 999px;
@@ -146,14 +155,25 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     .dash-section[hidden] { display: none; }
     @media (min-width: 1024px) {
       .app {
-        grid-template-columns: 14rem minmax(0, 1fr);
+        grid-template-columns: 15.5rem minmax(0, 1fr);
         align-items: start;
         gap: 1.5rem;
       }
       .side-nav { flex-direction: column; overflow-x: visible; }
       .sections .url-trunc { max-width: 20rem; }
     }
-    nav {
+    /* Every icon shares one size and sits on the text's centre line; a
+       context only changes the size, never the stroke or the colour source. */
+    .icon {
+      width: 1rem;
+      height: 1rem;
+      flex: none;
+      display: inline-block;
+      vertical-align: middle;
+    }
+    /* Scoped to .topbar: a bare "nav" selector also styled the sidebar's
+       <nav>, which is what centred its links. */
+    .topbar {
       background: var(--sticker);
       border-bottom: 1px solid var(--edge);
       padding: 0.5rem 1rem;
@@ -164,20 +184,33 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       gap: 0.25rem;
     }
     @media (min-width: 768px) {
-      nav { padding: 0.75rem 1.5rem; }
+      .topbar { padding: 0.75rem 1.5rem; }
     }
-    nav h2 { font-size: 1.125rem; color: var(--ink-strong); }
-    nav a, nav button {
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 1.125rem;
+      color: var(--ink-strong);
+    }
+    .brand .icon { width: 1.25rem; height: 1.25rem; color: var(--tag); }
+    .topbar-actions { display: flex; align-items: center; gap: 0.25rem; }
+    .topbar-actions a, .topbar-actions button {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.375rem;
+      height: auto;
       font-size: 0.813rem;
+      font-weight: 500;
       color: var(--ink-soft);
       text-decoration: none;
       background: none;
       border: none;
       cursor: pointer;
       padding: 0.25rem 0.5rem;
-      border-radius: 0.25rem;
+      border-radius: 0.375rem;
     }
-    nav a:hover, nav button:hover { color: var(--tag); background: var(--kraft-deep); }
+    .topbar-actions a:hover, .topbar-actions button:hover { color: var(--tag); background: var(--kraft-deep); }
     .card {
       background: var(--sticker);
       border: 1px solid var(--edge);
@@ -208,9 +241,14 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       line-height: 1.5;
       color: var(--ink-faint);
     }
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select {
+      height: var(--control-h);
+      padding: 0 0.75rem;
+      background: var(--paper);
+      color: var(--ink);
+    }
     input, select {
       width: 100%;
-      padding: 0.5rem 0.75rem;
       border: 1.5px solid var(--edge-strong);
       border-radius: 0.5rem;
       font-size: 0.875rem;
@@ -221,29 +259,46 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       border-color: var(--tag);
       box-shadow: 0 0 0 3px var(--tag-wash);
     }
+    /* Three weights, one height scale. Filled = the primary action of a
+       form; outline = secondary; danger = outline in oxblood that only fills
+       on hover, so a destructive button never outshouts the primary one. */
     button {
-      padding: 0.625rem 1.25rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.375rem;
+      height: var(--control-h);
+      padding: 0 1.25rem;
       background: var(--tag);
       color: var(--sticker);
-      border: none;
+      border: 1px solid transparent;
       border-radius: 0.5rem;
       font-size: 0.875rem;
       font-weight: 600;
+      line-height: 1;
+      white-space: nowrap;
       cursor: pointer;
     }
     button:hover { background: var(--tag-deep); }
     button:disabled { background: var(--ink-faint); cursor: not-allowed; }
+    button:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--tag-wash); }
     .btn-sm {
-      padding: 0.25rem 0.75rem;
+      height: var(--control-h-sm);
+      padding: 0 0.75rem;
       font-size: 0.75rem;
       border-radius: 0.375rem;
     }
-    .btn-danger { background: var(--retired); }
-    .btn-danger:hover { background: var(--retired-deep); }
+    .btn-sm .icon { width: 0.875rem; height: 0.875rem; }
+    .btn-danger {
+      background: transparent;
+      color: var(--retired-ink);
+      border-color: var(--retired-edge);
+    }
+    .btn-danger:hover { background: var(--retired); border-color: var(--retired); color: var(--sticker); }
     .btn-outline {
       background: transparent;
       color: var(--tag);
-      border: 1px solid var(--edge-strong);
+      border-color: var(--edge-strong);
     }
     .btn-outline:hover { background: var(--kraft-deep); }
     table {
@@ -574,6 +629,12 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     }
     .panel-controls label { margin-bottom: 0.25rem; }
     .field-row { display: flex; gap: 0.375rem; align-items: center; }
+    /* In a row the field and its button are one control: drop the stacked-form
+       bottom margin (it pushed the button off centre) and match heights. */
+    .field-row input, .field-row select { margin-bottom: 0; }
+    .field-row .btn-sm { height: var(--control-h); }
+    .biz-branch .field-row select { width: auto; min-width: 9rem; }
+    .biz-name { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem; }
     .panel-controls .client-ref-input {
       width: auto;
       flex: 1 1 auto;
@@ -644,7 +705,7 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
        two pages, and the chart colours kept (browsers drop backgrounds by
        default, which would print the bars as nothing). */
     @media print {
-      nav,
+      .topbar,
       .sidebar,
       .dash-section:not([data-section="overview"]),
       .no-print,
@@ -674,12 +735,12 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
   </style>
 </head>
 <body>
-  <nav>
-    <h2>⚡ Link Shortener</h2>
-    <div>
+  <nav class="topbar">
+    <h2 class="brand">${icon("logo")}<span>Link Shortener</span></h2>
+    <div class="topbar-actions">
       <span id="nav-email" class="nav-email"></span>
       <a href="/">Home</a>
-      <button id="logout-nav">Log Out</button>
+      <button id="logout-nav">${icon("logout")}<span>Log Out</span></button>
     </div>
   </nav>
   <div class="container">
@@ -830,12 +891,12 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
     <div class="app">
     <aside class="sidebar no-print">
       <nav class="side-nav" aria-label="Dashboard sections">
-        <a href="#overview" data-section-link="overview">Overview</a>
-        <a href="#links" data-section-link="links">Links</a>
-        <a href="#cards" data-section-link="cards">Cards <span id="cards-count" class="side-count" hidden></span></a>
-        <a href="#businesses" data-section-link="businesses">Businesses and branches</a>
-        <a href="#comments" data-section-link="comments">Comments</a>
-        <a href="#settings" data-section-link="settings">Settings</a>
+        <a href="#overview" data-section-link="overview">${icon("overview")}<span>Overview</span></a>
+        <a href="#links" data-section-link="links">${icon("links")}<span>Links</span></a>
+        <a href="#cards" data-section-link="cards">${icon("cards")}<span>Cards</span> <span id="cards-count" class="side-count" hidden></span></a>
+        <a href="#businesses" data-section-link="businesses">${icon("businesses")}<span>Businesses and branches</span></a>
+        <a href="#comments" data-section-link="comments">${icon("comments")}<span>Comments</span></a>
+        <a href="#settings" data-section-link="settings">${icon("settings")}<span>Settings</span></a>
       </nav>
     </aside>
     <main class="sections">
@@ -843,7 +904,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
     <!-- The report is what the owner forwards: the print stylesheet keeps the
          metric cards and drops everything that is a control. -->
     <div class="report-actions no-print">
-      <button type="button" id="print-report" class="btn-sm">Print report</button>
+      <button type="button" id="print-report" class="btn-sm btn-outline">${icon("print")}<span>Print report</span></button>
     </div>
     <!-- Review gate. Presentable as a screenshot on purpose: this screen is
          what the owner forwards as their monthly report, so every figure here

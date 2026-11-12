@@ -660,7 +660,7 @@ describe("printable report", () => {
   it("hides navigation, the admin column, controls and the links table when printed", async () => {
     const css = await printCss();
 
-    expect(css).toContain("nav,");
+    expect(css).toContain(".topbar,");
     expect(css).toContain(".sidebar,");
     expect(css).toContain('.dash-section:not([data-section="overview"]),');
     expect(css).toContain(".no-print,");
@@ -1894,7 +1894,7 @@ describe("the feedback email section", () => {
 
     // The text tells the owner where their comments still arrive. That sentence
     // only makes sense if the section it names is one click away.
-    expect(html).toContain('data-section-link="comments">Comments<');
+    expect(html).toMatch(/data-section-link="comments">(?:<svg[^]*?<\/svg>)?<span>Comments</);
     expect(html).toContain('<section class="dash-section" data-section="comments"');
   });
 
@@ -2176,7 +2176,8 @@ describe("sidebar sections (odd/tasks/print-queue-cards.md S1)", () => {
   it("lists the six sections in the sidebar, in order", async () => {
     const html = await serve();
     const nav = html.slice(html.indexOf('<aside class="sidebar'), html.indexOf("</aside>"));
-    const links = [...nav.matchAll(/<a href="#([a-z]+)" data-section-link="\1"[^>]*>([^<]+)</g)].map((m) => [m[1], m[2]!.trim()]);
+    // Each link is an icon followed by its label in a <span>.
+    const links = [...nav.matchAll(/<a href="#([a-z]+)" data-section-link="\1"[^>]*>[^]*?<span>([^<]+)<\/span>/g)].map((m) => [m[1], m[2]!.trim()]);
     expect(links).toEqual([
       ["overview", "Overview"],
       ["links", "Links"],

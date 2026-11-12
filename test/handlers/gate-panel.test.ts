@@ -193,7 +193,13 @@ describe("per-location table", () => {
 });
 
 describe("peak chart", () => {
-  it("draws one bar per bucket", () => {
+  const HOUR = 3600;
+  const bars = (html: string) => [...html.matchAll(/class="peak-bar" style="height:(\d+)%;"/g)].map((m) => Number(m[1]));
+  const axis = (html: string) => [...html.matchAll(/<div class="peak-axis">\s*<span>([^<]*)<\/span>\s*<span>([^<]*)<\/span>/g)][0]!.slice(1);
+
+  it("draws one slot per hour of the 7-day window, empty hours included", () => {
+    // The query only returns hours that had scans. Stretching those across the
+    // full width turned one busy hour into a single bar filling the chart.
     const html = renderGatePanel(
       payload({
         peaks: [
@@ -202,7 +208,41 @@ describe("peak chart", () => {
         ],
       }),
     );
-    expect((html.match(/class="peak-bar"/g) ?? []).length).toBe(2);
+    const heights = bars(html);
+    expect(heights).toHaveLength(168);
+    expect(heights.filter((h) => h > 0)).toEqual([100, 100]);
+    expect(heights.slice(-2)).toEqual([100, 100]);
+  });
+
+  it("does not collapse a single busy hour into a full-width bar with one date on both ends", () => {
+    const html = renderGatePanel(
+      payload({
+        peaks: [{ bucketStart: 1767225600, google: 9, private: 9, total: 18, derivationRate: 0.5 }],
+      }),
+    );
+    const heights = bars(html);
+    expect(heights).toHaveLength(168);
+    expect(heights.filter((h) => h > 0)).toEqual([100]);
+    const [start, end] = axis(html);
+    expect(start).not.toBe(end);
+    expect(start).toBe(new Date((1767225600 - 167 * HOUR) * 1000).toLocaleString());
+  });
+
+  it("keeps every bucket when the data spans more than 168 hours", () => {
+    const first = 1767225600;
+    const last = first + 200 * HOUR;
+    const html = renderGatePanel(
+      payload({
+        peaks: [
+          { bucketStart: first, google: 1, private: 0, total: 1, derivationRate: 1 },
+          { bucketStart: last, google: 1, private: 0, total: 1, derivationRate: 1 },
+        ],
+      }),
+    );
+    const heights = bars(html);
+    expect(heights).toHaveLength(201);
+    expect(heights[0]).toBe(100);
+    expect(heights[200]).toBe(100);
   });
 
   it("says so when there is no traffic, instead of drawing an empty chart", () => {
@@ -216,8 +256,8 @@ describe("peak chart", () => {
     const html = renderGatePanel(
       payload({
         peaks: [
-          { bucketStart: 1, google: 1, private: 0, total: 1, derivationRate: 1 },
-          { bucketStart: 2, google: 4, private: 0, total: 4, derivationRate: 1 },
+          { bucketStart: 3600, google: 1, private: 0, total: 1, derivationRate: 1 },
+          { bucketStart: 7200, google: 4, private: 0, total: 4, derivationRate: 1 },
         ],
       }),
     );

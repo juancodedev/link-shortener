@@ -122,8 +122,23 @@ export function renderGatePanel(payload: GatePanelPayload): string {
 
     const max = peaks.reduce((m, p) => Math.max(m, p.total), 0) || 1;
 
-    const bars = peaks
+    // The query only returns hours that HAD scans. Drawn as-is, a single busy
+    // hour became one bar filling the whole chart, with the same timestamp on
+    // both ends of the axis. Lay the buckets on a continuous hourly track
+    // instead: the 7-day window (168 h) ending at the latest bucket, widened
+    // only if the data spans longer. Literals, not imports — see the nesting
+    // note at the top of this file.
+    const hour = 3600;
+    const byStart = new Map(peaks.map((p) => [p.bucketStart, p]));
+    const last = peaks[peaks.length - 1]!.bucketStart;
+    const span = Math.max(168, Math.round((last - peaks[0]!.bucketStart) / hour) + 1);
+    const first = last - (span - 1) * hour;
+    const slots: Array<PeakBucket | undefined> = [];
+    for (let i = 0; i < span; i++) slots.push(byStart.get(first + i * hour));
+
+    const bars = slots
       .map((p) => {
+        if (!p) return `<div class="peak-bar" style="height:0%;"></div>`;
         const height = Math.round((p.total / max) * 100);
         const googleShare =
           p.total > 0 ? Math.round((p.google / p.total) * 100) : 0;
@@ -142,8 +157,8 @@ export function renderGatePanel(payload: GatePanelPayload): string {
 
     return `<div class="peak-chart">${bars}</div>
       <div class="peak-axis">
-        <span>${new Date(peaks[0]!.bucketStart * 1000).toLocaleString()}</span>
-        <span>${new Date(peaks[peaks.length - 1]!.bucketStart * 1000).toLocaleString()}</span>
+        <span>${new Date(first * 1000).toLocaleString()}</span>
+        <span>${new Date(last * 1000).toLocaleString()}</span>
       </div>`;
   }
 

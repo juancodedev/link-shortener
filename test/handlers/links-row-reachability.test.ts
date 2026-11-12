@@ -40,7 +40,7 @@ function mockContext() {
 
 async function clientScript(): Promise<string> {
   const html = await (await dashboardHandler(mockContext())).text();
-  const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  const script = html.match(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/i)?.[1];
   if (!script || !script.includes("links-body")) {
     throw new Error("dashboard client script not found in served HTML");
   }

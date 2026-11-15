@@ -95,22 +95,11 @@ async function loadEsc(): Promise<(v: unknown) => string> {
 }
 
 /**
- * Compiles the arrow function that `loadLinks` hands to `links.map(...)` and
- * returns a row renderer bound to the served `esc()`.
+ * Compiles the served `renderLinkRow()` (the template `loadLinks` maps every
+ * link through) and returns it bound to the served `esc()`.
  */
 async function loadRowRenderer(): Promise<(l: Record<string, unknown>) => string> {
-  const script = await clientScript();
-  const anchor = "links.map((l) => {";
-  const start = script.indexOf(anchor);
-  if (start < 0) throw new Error("links.map row template not found");
-  const from = start + "links.map(".length;
-  const to = script.indexOf('}).join("")', from);
-  if (to < 0) throw new Error("end of links.map row template not found");
-  const arrow = script.slice(from, to + 1);
-  const esc = await loadEsc();
-  return new Function("esc", `return (${arrow});`)(esc) as (
-    l: Record<string, unknown>,
-  ) => string;
+  return loadClientFunction<(l: Record<string, unknown>) => string>("renderLinkRow");
 }
 
 /** Renders one links-table row through the shipped template. */
@@ -227,11 +216,7 @@ describe("links table — HTML-context escaping", () => {
 
 describe("links table — no inline event handlers", () => {
   it("the row template source contains no onclick attribute", async () => {
-    const script = await clientScript();
-    const anchor = "links.map((l) => {";
-    const start = script.indexOf(anchor);
-    const to = script.indexOf('}).join("")', start);
-    const template = script.slice(start, to);
+    const template = extractFunction(await clientScript(), "renderLinkRow");
 
     expect(template).not.toContain("onclick");
     expect(template).not.toMatch(/\bon[a-z]+\s*=/);
@@ -833,6 +818,7 @@ async function mountDashboard(): Promise<Harness> {
     "document",
     "esc",
     "renderClients",
+    "renderLinkRow",
     "fillBranchSelects",
     "showMetrics",
     `return async ${extractFunction(script, "loadLinks")}`,
@@ -841,6 +827,7 @@ async function mountDashboard(): Promise<Harness> {
     { getElementById: el },
     esc,
     renderClients,
+    await loadRowRenderer(),
     () => {},
     (id: string) => reopened.push(id),
   ) as () => Promise<void>;
@@ -1090,12 +1077,12 @@ describe("the dashboard script never triggers a load at parse time", () => {
       (m) => m[1].length,
     );
 
-    // One call per handler that changes the table: create form submit, bulk
-    // create, destination save, branch save, toggle, client-ref save, delete
-    // and refreshOwnership (a business or branch changed). The print queue
-    // and the review-screen toggle update their own field and reload
-    // nothing. A parse-time call anywhere pushes this to nine.
-    expect(statements).toHaveLength(8);
+    // One call per handler that reloads the table: create form submit, bulk
+    // create, delete, refreshOwnership (a business or branch changed) and
+    // repaintLink's fallback when the row is not on screen. Every field save
+    // repaints its own row instead. A parse-time call anywhere pushes this
+    // to six.
+    expect(statements).toHaveLength(5);
     expect(statements.every((indent) => indent > TOP_LEVEL_INDENT)).toBe(true);
   });
 
@@ -1774,8 +1761,10 @@ describe("the dashboard can edit any link's destination", () => {
     expect(fn).not.toMatch(/https?:\/\//);
   });
 
-  it("refreshes the table after saving", async () => {
-    expect(extractFunction(await clientScript(), "saveDestination")).toContain("loadLinks()");
+  it("repaints its own row after saving, with no table reload", async () => {
+    const fn = codeOnly(extractFunction(await clientScript(), "saveDestination"));
+    expect(fn).toContain("repaintLink(id,");
+    expect(fn).not.toContain("loadLinks()");
   });
 });
 
@@ -1852,7 +1841,8 @@ describe("links table shows how each link opens and where it belongs", () => {
     const fn = extractFunction(await clientScript(), "saveBranch");
     expect(fn).toContain('window.__api("PATCH", "/api/links/" + id');
     expect(fn).toContain('location_id: value === "" ? null : value');
-    expect(fn).toContain("loadLinks()");
+    expect(codeOnly(fn)).toContain("repaintLink(id,");
+    expect(codeOnly(fn)).not.toContain("loadLinks()");
   });
 });
 
@@ -2904,5 +2894,259 @@ describe("cards section", () => {
     const html = await serve();
 
     expect(html).toContain('href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Outfit:wght@400;500;600;700&amp;display=swap"');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Field saves repaint their own row (no table reload)
+// ---------------------------------------------------------------------------
+
+describe("field saves repaint only their own link", () => {
+  type Call = { method: string; path: string; body: unknown };
+
+  /**
+   * Compiles one served save function against stubs: a recording
+   * window.__api, a field with `value`, and spies for the repaint and the
+   * full reload, so a test sees exactly which path the save took.
+   */
+  async function mountSave(
+    name: string,
+    opts: { value: string; ok?: boolean; response?: unknown; win?: Record<string, unknown> },
+  ) {
+    const calls: Call[] = [];
+    const field = { value: opts.value, dataset: { current: "loc-old" } };
+    const spy = { repaint: [] as unknown[][], loadLinks: 0, alerts: 0, clients: 0 };
+    const win = {
+      ...opts.win,
+      __api: async (method: string, path: string, body: unknown) => {
+        calls.push({ method, path, body });
+        return { ok: opts.ok ?? true, json: async () => opts.response ?? { ok: true } };
+      },
+    };
+    const fn = new Function(
+      "window",
+      "document",
+      "repaintLink",
+      "loadLinks",
+      "alert",
+      "refreshClientsCard",
+      `return async ${extractFunction(await clientScript(), name)}`,
+    )(
+      win,
+      { getElementById: () => field },
+      (...args: unknown[]) => spy.repaint.push(args),
+      () => spy.loadLinks++,
+      () => spy.alerts++,
+      () => spy.clients++,
+    ) as (...args: unknown[]) => Promise<void>;
+    return { fn, calls, spy, field };
+  }
+
+  it("destination: one PATCH, repaints with the normalized URL the server stored", async () => {
+    const m = await mountSave("saveDestination", {
+      value: " example.com/menu ",
+      response: { ok: true, original_url: "https://example.com/menu" },
+    });
+    await m.fn("link-uuid");
+
+    expect(m.calls).toEqual([
+      { method: "PATCH", path: "/api/links/link-uuid", body: { original_url: "example.com/menu" } },
+    ]);
+    expect(m.spy.repaint).toEqual([
+      ["link-uuid", { original_url: "https://example.com/menu" }, "dest-link-uuid"],
+    ]);
+    expect(m.spy.loadLinks).toBe(0);
+  });
+
+  it("destination: a refused URL repaints nothing and keeps what was typed", async () => {
+    const m = await mountSave("saveDestination", {
+      value: "not a url",
+      ok: false,
+      response: { error: "Invalid URL" },
+    });
+    await m.fn("link-uuid");
+
+    expect(m.spy.repaint).toEqual([]);
+    expect(m.spy.loadLinks).toBe(0);
+    expect(m.spy.alerts).toBe(1);
+    expect(m.field.value).toBe("not a url");
+  });
+
+  it("branch: repaints with the branch and business names from the branches list", async () => {
+    const m = await mountSave("saveBranch", {
+      value: "loc-1",
+      win: { __branches: [{ id: "loc-1", name: "Centro", business_name: "Cafe Uno" }] },
+    });
+    await m.fn("link-uuid");
+
+    expect(m.calls).toHaveLength(1);
+    expect(m.spy.repaint).toEqual([
+      [
+        "link-uuid",
+        { location_id: "loc-1", location_name: "Centro", business_name: "Cafe Uno" },
+        "branch-link-uuid",
+      ],
+    ]);
+    expect(m.spy.loadLinks).toBe(0);
+  });
+
+  it("branch: unassigning clears the names", async () => {
+    const m = await mountSave("saveBranch", { value: "" });
+    await m.fn("link-uuid");
+
+    expect(m.calls[0]!.body).toEqual({ location_id: null });
+    expect(m.spy.repaint[0]![1]).toEqual({ location_id: null, location_name: null, business_name: null });
+  });
+
+  it("branch: on failure the picker goes back to the stored branch", async () => {
+    const m = await mountSave("saveBranch", { value: "loc-1", ok: false });
+    await m.fn("link-uuid");
+
+    expect(m.field.value).toBe("loc-old");
+    expect(m.spy.repaint).toEqual([]);
+    expect(m.spy.loadLinks).toBe(0);
+    expect(m.spy.alerts).toBe(1);
+  });
+
+  it("client ref: repaints the row and refreshes only the rollup", async () => {
+    const m = await mountSave("saveClientRef", { value: " CRM-7 " });
+    await m.fn("link-uuid");
+
+    expect(m.calls).toEqual([
+      { method: "PATCH", path: "/api/links/link-uuid", body: { client_ref: "CRM-7" } },
+    ]);
+    expect(m.spy.repaint).toEqual([["link-uuid", { client_ref: "CRM-7" }, "client-ref-link-uuid"]]);
+    expect(m.spy.clients).toBe(1);
+    expect(m.spy.loadLinks).toBe(0);
+  });
+
+  it("client ref: an emptied field is stored as null", async () => {
+    const m = await mountSave("saveClientRef", { value: "  " });
+    await m.fn("link-uuid");
+
+    expect(m.calls[0]!.body).toEqual({ client_ref: null });
+    expect(m.spy.repaint[0]![1]).toEqual({ client_ref: null });
+  });
+
+  it("disable/enable: repaints with the new state", async () => {
+    const m = await mountSave("toggleLink", { value: "" });
+    await m.fn("link-uuid", false);
+
+    expect(m.calls).toEqual([
+      { method: "PATCH", path: "/api/links/link-uuid", body: { is_active: false } },
+    ]);
+    expect(m.spy.repaint).toEqual([["link-uuid", { is_active: false }]]);
+    expect(m.spy.loadLinks).toBe(0);
+  });
+
+  it("disable/enable: a refused change repaints nothing", async () => {
+    const m = await mountSave("toggleLink", { value: "", ok: false });
+    await m.fn("link-uuid", false);
+
+    expect(m.spy.repaint).toEqual([]);
+    expect(m.spy.alerts).toBe(1);
+  });
+});
+
+describe("repaintLink", () => {
+  /** A stub element: children found by id, and replaceWith recorded. */
+  function node(name: string, extra: Record<string, unknown> = {}) {
+    const n: Record<string, any> = {
+      name,
+      replacedBy: null,
+      replaceWith(other: unknown) { n.replacedBy = other; },
+      ...extra,
+    };
+    return n;
+  }
+
+  async function mountRepaint(opts: { links?: unknown[]; panelOnScreen?: boolean } = {}) {
+    const loaded = node("loaded-country");
+    const typed = { id: "client-ref-abc", type: "text", value: "typed, not saved" };
+    const saved = { id: "dest-abc", type: "text", value: "example.com" };
+    const box = { id: "gate-box", type: "checkbox", value: "on" };
+    const oldRow = node("old-row");
+    const panel = node("old-panel", {
+      style: { display: "" },
+      previousElementSibling: oldRow,
+      querySelector: (sel: string) => (sel === "#country-abc" ? loaded : null),
+      querySelectorAll: () => [typed, saved, box],
+    });
+
+    const freshCountry = node("fresh-country");
+    const freshFields: Record<string, { value: string }> = {
+      "client-ref-abc": { value: "" },
+      "dest-abc": { value: "https://example.com" },
+      "gate-box": { value: "" },
+    };
+    const nextPanel = node("new-panel", {
+      style: { display: "none" },
+      querySelector: (sel: string) =>
+        sel === "#country-abc" ? freshCountry : freshFields[sel.slice(1)] ?? null,
+    });
+    const newRow = node("new-row");
+    let rendered: unknown = null;
+
+    const win: Record<string, any> = {
+      __links: opts.links ?? [{ id: "abc", original_url: null, is_active: true }],
+      __syncPrintQueue: (links: unknown[]) => { win.synced = links; },
+    };
+    const spy = { loadLinks: 0, filled: [] as unknown[] };
+    const repaint = new Function(
+      "window",
+      "document",
+      "renderLinkRow",
+      "fillBranchSelects",
+      "loadLinks",
+      "CSS",
+      `return ${extractFunction(await clientScript(), "repaintLink")}`,
+    )(
+      win,
+      {
+        getElementById: (id: string) => (opts.panelOnScreen === false ? null : id === "metrics-abc" ? panel : null),
+        createElement: () => ({
+          set innerHTML(html: string) { rendered = html; },
+          children: [newRow, nextPanel],
+        }),
+      },
+      (l: unknown) => { rendered = l; return "<tr></tr><tr></tr>"; },
+      (root: unknown) => spy.filled.push(root),
+      () => spy.loadLinks++,
+      { escape: (v: string) => v },
+    ) as (id: string, changes: unknown, savedFieldId?: string) => void;
+
+    return { repaint, win, spy, panel, oldRow, newRow, nextPanel, freshCountry, loaded, freshFields, rendered: () => rendered };
+  }
+
+  it("applies the change and replaces only this link's two rows", async () => {
+    const r = await mountRepaint();
+    r.repaint("abc", { original_url: "https://example.com" }, "dest-abc");
+
+    expect(r.win.__links[0]).toEqual({ id: "abc", original_url: "https://example.com", is_active: true });
+    expect(r.win.synced).toBe(r.win.__links);
+    expect(r.oldRow.replacedBy).toBe(r.newRow);
+    expect(r.panel.replacedBy).toBe(r.nextPanel);
+    expect(r.spy.filled).toEqual([r.nextPanel]);
+    expect(r.spy.loadLinks).toBe(0);
+  });
+
+  it("keeps the panel open, its fetched figures, and unsaved typing", async () => {
+    const r = await mountRepaint();
+    r.repaint("abc", { original_url: "https://example.com" }, "dest-abc");
+
+    expect(r.nextPanel.style.display).toBe("");
+    expect(r.freshCountry.replacedBy).toBe(r.loaded);
+    expect(r.freshFields["client-ref-abc"]!.value).toBe("typed, not saved");
+    // The saved field shows what the server stored, not what was typed.
+    expect(r.freshFields["dest-abc"]!.value).toBe("https://example.com");
+    expect(r.freshFields["gate-box"]!.value).toBe("");
+  });
+
+  it("falls back to the full load when the row is not on screen", async () => {
+    const r = await mountRepaint({ panelOnScreen: false });
+    r.repaint("abc", { is_active: false });
+
+    expect(r.spy.loadLinks).toBe(1);
+    expect(r.oldRow.replacedBy).toBeNull();
   });
 });

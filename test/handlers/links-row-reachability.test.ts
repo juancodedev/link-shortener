@@ -67,15 +67,17 @@ async function loadEsc(): Promise<(v: unknown) => string> {
 /** Renders one links-table row through the shipped template. */
 async function renderRow(over: Record<string, unknown> = {}): Promise<string> {
   const script = await clientScript();
-  const anchor = "links.map((l) => {";
-  const start = script.indexOf(anchor);
-  if (start < 0) throw new Error("links.map row template not found");
-  const from = start + "links.map(".length;
-  const to = script.indexOf('}).join("")', from);
-  if (to < 0) throw new Error("end of links.map row template not found");
-  const arrow = script.slice(from, to + 1);
+  const start = script.indexOf("function renderLinkRow(");
+  if (start < 0) throw new Error("renderLinkRow() not found");
+  let depth = 0;
+  let end = -1;
+  for (let i = script.indexOf("{", start); i < script.length; i++) {
+    if (script[i] === "{") depth++;
+    else if (script[i] === "}" && --depth === 0) { end = i + 1; break; }
+  }
+  if (end < 0) throw new Error("unterminated renderLinkRow()");
   const esc = await loadEsc();
-  const render = new Function("esc", `return (${arrow});`)(esc) as (
+  const render = new Function("esc", `${script.slice(start, end)}\nreturn renderLinkRow;`)(esc) as (
     l: Record<string, unknown>,
   ) => string;
   return render({

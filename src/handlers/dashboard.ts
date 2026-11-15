@@ -2157,11 +2157,25 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         const gateBody = document.getElementById("gate-body");
         const clientsBody = document.getElementById("clients-body");
 
-        loading.style.display = "";
-        table.style.display = "none";
-        empty.style.display = "none";
-        clientsCard.style.display = "none";
-        gateCard.style.display = "none";
+        // A table already on screen means this is a refresh after an edit, not
+        // the first load. Hiding it then collapsed the page and threw the owner
+        // back to the top after every Save, and the re-render closed the panel
+        // they were editing. So a refresh repaints in place and reopens the
+        // panels that were open.
+        const refreshing = table.style.display !== "none";
+        const openPanelIds = refreshing && tbody.querySelectorAll
+          ? Array.from(tbody.querySelectorAll('tr[id^="metrics-"]'))
+              .filter((row) => row.style.display !== "none")
+              .map((row) => row.id.slice("metrics-".length))
+          : [];
+
+        if (!refreshing) {
+          loading.style.display = "";
+          table.style.display = "none";
+          empty.style.display = "none";
+          clientsCard.style.display = "none";
+          gateCard.style.display = "none";
+        }
 
         try {
           // Two endpoints, two fetches: the links collection and the
@@ -2217,6 +2231,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           if (window.__syncPrintQueue) window.__syncPrintQueue(links);
 
           if (links.length === 0) {
+            table.style.display = "none";
             empty.style.display = "";
             return;
           }
@@ -2224,6 +2239,8 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           if (clients.length > 0) {
             clientsBody.innerHTML = renderClients(clients);
             clientsCard.style.display = "";
+          } else {
+            clientsCard.style.display = "none";
           }
 
           tbody.innerHTML = links.map((l) => {
@@ -2359,8 +2376,14 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           }).join("");
 
           table.style.display = "";
+          empty.style.display = "none";
           fillBranchSelects();
+          // showMetrics opens a closed panel and refetches its figures, which
+          // the re-render dropped along with the old row.
+          const noop = { preventDefault() {} };
+          openPanelIds.forEach((id) => showMetrics(id, "", noop));
         } catch (err) {
+          table.style.display = "none";
           empty.textContent = "Could not load links. " + (err instanceof Error ? err.message : "");
           empty.style.display = "";
         } finally {

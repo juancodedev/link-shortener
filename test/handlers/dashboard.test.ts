@@ -1091,11 +1091,11 @@ describe("the dashboard script never triggers a load at parse time", () => {
     );
 
     // One call per handler that changes the table: create form submit, bulk
-    // create, destination save, branch save, toggle, review-screen toggle,
-    // client-ref save, delete and refreshOwnership (a business or branch
-    // changed). The print queue is page state and reloads nothing. A
-    // parse-time call anywhere pushes this to ten.
-    expect(statements).toHaveLength(9);
+    // create, destination save, branch save, toggle, client-ref save, delete
+    // and refreshOwnership (a business or branch changed). The print queue
+    // and the review-screen toggle update their own field and reload
+    // nothing. A parse-time call anywhere pushes this to nine.
+    expect(statements).toHaveLength(8);
     expect(statements.every((indent) => indent > TOP_LEVEL_INDENT)).toBe(true);
   });
 
@@ -2228,6 +2228,69 @@ describe("review screen checkbox", () => {
     expect(script).toContain('case "toggle-gate":');
     const fn = extractFunction(script, "setGated");
     expect(fn).toContain('window.__api("PATCH", "/api/links/" + id, { is_gated: gated })');
+  });
+
+  it("renders both notes and shows only the one matching the state", async () => {
+    const on = await renderRow({ is_gated: true });
+    expect(on).toMatch(/<p class="field-note" data-gate-note="on">/);
+    expect(on).toMatch(/<p class="field-note" data-gate-note="off" hidden>/);
+
+    const off = await renderRow({ is_gated: false });
+    expect(off).toMatch(/<p class="field-note" data-gate-note="on" hidden>/);
+    expect(off).toMatch(/<p class="field-note" data-gate-note="off">/);
+  });
+});
+
+describe("setGated updates its field in place", () => {
+  /** Compiles the served setGated against a stub checkbox and its two notes. */
+  async function mountGate(ok: boolean) {
+    const notes = [
+      { dataset: { gateNote: "on" }, hidden: true },
+      { dataset: { gateNote: "off" }, hidden: false },
+    ];
+    // The click already flipped the box to checked: the owner asked for ON.
+    const box = {
+      checked: true,
+      disabled: false,
+      closest: () => ({ querySelectorAll: () => notes }),
+    };
+    const calls = { requests: [] as string[], loadLinks: 0, alerts: [] as string[] };
+    const win = {
+      __api: async (method: string, path: string) => {
+        calls.requests.push(`${method} ${path}`);
+        return { ok };
+      },
+    };
+    const setGated = new Function(
+      "window",
+      "loadLinks",
+      "alert",
+      `return async ${extractFunction(await clientScript(), "setGated")}`,
+    )(win, () => calls.loadLinks++, (m: string) => calls.alerts.push(m));
+    return { setGated, box, notes, calls };
+  }
+
+  it("flips the note with one request and no table reload", async () => {
+    const g = await mountGate(true);
+    await g.setGated("link-uuid", true, g.box);
+
+    expect(g.calls.requests).toEqual(["PATCH /api/links/link-uuid"]);
+    expect(g.calls.loadLinks).toBe(0);
+    expect(g.notes.map((n) => n.hidden)).toEqual([false, true]);
+    expect(g.box.checked).toBe(true);
+    expect(g.box.disabled).toBe(false);
+    expect(g.calls.alerts).toEqual([]);
+  });
+
+  it("puts the box and the note back when the server refuses", async () => {
+    const g = await mountGate(false);
+    await g.setGated("link-uuid", true, g.box);
+
+    expect(g.box.checked).toBe(false);
+    expect(g.notes.map((n) => n.hidden)).toEqual([true, false]);
+    expect(g.box.disabled).toBe(false);
+    expect(g.calls.loadLinks).toBe(0);
+    expect(g.calls.alerts).toHaveLength(1);
   });
 });
 

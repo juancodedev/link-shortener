@@ -2107,7 +2107,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           case "toggle-gate":
             // A click on a checkbox has already flipped it, so \`checked\` is
             // the state the owner asked for.
-            setGated(el.dataset.id, el.checked);
+            setGated(el.dataset.id, el.checked, el);
             break;
           case "save-destination":
             saveDestination(el.dataset.id);
@@ -2329,9 +2329,8 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
                         <input type="checkbox" data-action="toggle-gate" data-id="\${esc(l.id)}"\${l.is_gated ? " checked" : ""}>
                         <span>Show before redirecting</span>
                       </label>
-                      <p class="field-note">\${l.is_gated
-                        ? "Scans show the star rating, the Google button and a private comment form."
-                        : "Scans go straight to the destination. Nothing is recorded for the satisfaction panel."}</p>
+                      <p class="field-note" data-gate-note="on"\${l.is_gated ? "" : " hidden"}>Scans show the star rating, the Google button and a private comment form.</p>
+                      <p class="field-note" data-gate-note="off"\${l.is_gated ? " hidden" : ""}>Scans go straight to the destination. Nothing is recorded for the satisfaction panel.</p>
                     </div>
                     <div class="field">
                       <label>Tag state</label>
@@ -2448,18 +2447,33 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         }
       }
 
-      // Same update path as toggleLink. The server invalidates the cached
-      // redirect, so the next scan already follows the new choice.
-      // Re-renders on failure too: the checkbox already flipped in the browser,
-      // and only a reload puts it back to what the server actually holds.
-      async function setGated(id, gated) {
+      /**
+       * Saves the review-screen choice and updates only its own field.
+       *
+       * The click already flipped the box, so the request is the only wait:
+       * no table reload. Both notes are in the row and this shows the one
+       * that matches. On failure the box and the note go back to the state
+       * the server still holds. The server invalidates the cached redirect,
+       * so the next scan already follows the new choice.
+       */
+      async function setGated(id, gated, box) {
+        const showNote = (on) => {
+          box.closest(".field").querySelectorAll("[data-gate-note]").forEach((note) => {
+            note.hidden = (note.dataset.gateNote === "on") !== on;
+          });
+        };
+        box.disabled = true;
+        showNote(gated);
         try {
           const res = await window.__api("PATCH", "/api/links/" + id, { is_gated: gated });
           if (!res.ok) throw new Error("Failed");
         } catch (err) {
+          box.checked = !gated;
+          showNote(!gated);
           alert("Error: " + (err instanceof Error ? err.message : ""));
+        } finally {
+          box.disabled = false;
         }
-        loadLinks();
       }
 
       // Same update path as toggleLink — PATCH then re-render. An emptied field

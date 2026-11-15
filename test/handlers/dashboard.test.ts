@@ -768,6 +768,8 @@ interface Harness {
   requests: Request[];
   el: (id: string) => ElementStub;
   win: Record<string, any>;
+  /** Link ids whose panel loadLinks reopened through showMetrics. */
+  reopened: string[];
 }
 
 function stubElement(): ElementStub {
@@ -819,6 +821,7 @@ async function mountDashboard(): Promise<Harness> {
   };
   const win: Record<string, any> = {};
   const requests: Request[] = [];
+  const reopened: string[] = [];
 
   if (gateSrc) new Function("window", gateSrc)(win);
 
@@ -830,8 +833,17 @@ async function mountDashboard(): Promise<Harness> {
     "document",
     "esc",
     "renderClients",
+    "fillBranchSelects",
+    "showMetrics",
     `return async ${extractFunction(script, "loadLinks")}`,
-  )(win, { getElementById: el }, esc, renderClients) as () => Promise<void>;
+  )(
+    win,
+    { getElementById: el },
+    esc,
+    renderClients,
+    () => {},
+    (id: string) => reopened.push(id),
+  ) as () => Promise<void>;
 
   return {
     loadLinks,
@@ -840,6 +852,7 @@ async function mountDashboard(): Promise<Harness> {
     requests,
     el,
     win,
+    reopened,
   };
 }
 
@@ -990,6 +1003,73 @@ describe("loadLinks ordering against the auth bootstrap", () => {
     // Guarded, so loadLinks stays safe if it is ever invoked in a context where
     // the container script did not create the gate.
     expect(src).toMatch(/if \(window\.__apiReady\) await window\.__apiReady;/);
+  });
+});
+
+describe("loadLinks refresh after an edit", () => {
+  const LINK = {
+    id: "abc",
+    short_code: "abc",
+    short_url: "https://x.test/abc",
+    original_url: "https://example.com",
+    is_active: true,
+  };
+
+  /** Answers /api/links with one link; `hold` parks every request until released. */
+  function linkApi(requests: Request[], hold?: Promise<void>) {
+    return async (method: string, path: string) => {
+      requests.push({ method, path });
+      if (hold) await hold;
+      return { ok: true, json: async () => (path === "/api/links" ? [LINK] : []) };
+    };
+  }
+
+  it("keeps the table on screen and reopens the edited panel", async () => {
+    const dash = await mountDashboard();
+    dash.win.__api = linkApi(dash.requests);
+    dash.resolveGate();
+    await dash.loadLinks();
+    expect(dash.el("links-table").style.display).toBe("");
+
+    // The owner had the editing panel of "abc" open; "def" was closed.
+    (dash.el("links-body") as any).querySelectorAll = () => [
+      { id: "metrics-abc", style: { display: "" } },
+      { id: "metrics-def", style: { display: "none" } },
+    ];
+
+    let release = () => {};
+    dash.win.__api = linkApi(dash.requests, new Promise<void>((r) => { release = r; }));
+    const pending = dash.loadLinks();
+    await Promise.resolve();
+
+    // Mid-refresh the table must not collapse: collapsing it is what threw
+    // the owner back up the page after every Save.
+    expect(dash.el("links-table").style.display).toBe("");
+    expect(dash.el("links-loading").style.display).toBe("none");
+
+    release();
+    await pending;
+
+    expect(dash.el("links-table").style.display).toBe("");
+    expect(dash.reopened).toEqual(["abc"]);
+  });
+
+  it("still shows the loading state on the first load", async () => {
+    const dash = await mountDashboard();
+    let release = () => {};
+    dash.win.__api = linkApi(dash.requests, new Promise<void>((r) => { release = r; }));
+    dash.resolveGate();
+    const pending = dash.loadLinks();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(dash.el("links-loading").style.display).toBe("");
+    expect(dash.el("links-table").style.display).toBe("none");
+
+    release();
+    await pending;
+    expect(dash.el("links-table").style.display).toBe("");
+    expect(dash.reopened).toEqual([]);
   });
 });
 

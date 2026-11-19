@@ -40,7 +40,8 @@ Local development uses Hyperdrive pointed at a local Postgres instance. See
 | --- | --- |
 | `pnpm run dev` | Start the local dev server |
 | `pnpm run deploy` | Deploy to Cloudflare |
-| `pnpm run typecheck` | `tsc --noEmit` |
+| `pnpm run build:web` | Build the dashboard's React bundle into `dist-web/` (wrangler runs it before `dev` and `deploy`) |
+| `pnpm run typecheck` | `tsc --noEmit` for the Worker and for `web/` |
 | `pnpm test` | Run the Vitest suite |
 | `pnpm test:watch` | Run the Vitest suite in watch mode |
 | `pnpm run types` | Regenerate `worker-configuration.d.ts` |

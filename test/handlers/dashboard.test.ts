@@ -3203,3 +3203,14 @@ describe("repaintLink", () => {
     expect(r.oldRow.replacedBy).toBeNull();
   });
 });
+
+describe("React islands bundle", () => {
+  it("loads the bundle as a module after the page's own scripts", async () => {
+    const html = await serve();
+    const tag = '<script type="module" src="/assets/dashboard.js"></script>';
+
+    expect(html).toContain(tag);
+    expect(html.indexOf(tag)).toBeGreaterThan(html.lastIndexOf("loadLinks();"));
+    expect(html.indexOf(tag)).toBeLessThan(html.indexOf("</body>"));
+  });
+});

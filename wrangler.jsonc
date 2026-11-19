@@ -5,6 +5,11 @@
   "compatibility_date": "2025-09-06",
   "compatibility_flags": ["nodejs_compat"],
 
+  // The dashboard's React bundle (web/, built by `pnpm run build:web`).
+  // Paths that exist in dist-web are served before the Worker runs.
+  "assets": { "directory": "./dist-web" },
+  "build": { "command": "pnpm run build:web", "watch_dir": "web/src" },
+
   "observability": {
     "enabled": true,
     "logs": {

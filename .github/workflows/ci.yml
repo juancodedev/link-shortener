@@ -25,6 +25,9 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Build dashboard bundle
+        run: pnpm run build:web
+
       - name: Type check
         run: pnpm run typecheck
 

@@ -868,6 +868,9 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       if (typeof loadLinks === "function") loadLinks();
     })();
   </script>
+  <!-- React islands (web/, odd/tasks/dashboard-react.md S2): a module runs
+       after the scripts above, so window.__api already exists. -->
+  <script type="module" src="/assets/dashboard.js"></script>
 </body>
 </html>`;
 }

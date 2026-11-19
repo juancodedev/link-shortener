@@ -22,8 +22,10 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Build dashboard bundle
+        run: pnpm run build:web
       - name: Type check
-        run: pnpm exec tsc --noEmit
+        run: pnpm run typecheck
       - name: Run tests
         run: pnpm exec vitest run
 

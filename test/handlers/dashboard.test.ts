@@ -2796,60 +2796,26 @@ describe("print queue as page state", () => {
     expect(renders()).toBe(1);
   });
 
-  it("clears the batch on Mark as printed without a request", async () => {
+  it("empties the batch after a print run, resetting each row, with no request", async () => {
+    const { fns, win, shown, renders } = await harness(["clearPrintQueue"]);
+    win.__printQueue = [{ id: "a", short_code: "AAA" }, { id: "b", short_code: "BBB" }];
+
+    fns.clearPrintQueue();
+
+    expect(win.__printQueue).toEqual([]);
+    expect(shown).toEqual([["a", false], ["b", false]]);
+    expect(renders()).toBe(1);
+    expect(extractFunction(codeOnly(await clientScript()), "clearPrintQueue")).not.toContain("__api");
+  });
+
+  it("tells the Cards island about every change and lends it the queue helpers", async () => {
     const script = codeOnly(await clientScript());
-    const fn = extractFunction(script, "markCardsPrinted");
+    const render = extractFunction(script, "renderPrintQueue");
 
-    expect(fn).not.toContain("__api");
-    expect(fn).toContain("window.__printQueue = []");
-  });
-});
-
-describe("cards sheet layout", () => {
-  type Layout = { cols: number; rows: number; cap: number; pages: number; fits: boolean };
-  type Compute = (w: number, h: number, margin: number, gap: number, count: number) => Layout;
-  type Size = (preset: string, w: number, h: number) => { w: number; h: number; single: boolean };
-
-  it("fits 1×2 cards on A4, 2×3 on A3 and 3×2 on landscape A3 with a 10 mm margin and a 6 mm gap", async () => {
-    const compute = await loadClientFunction<Compute>("computeSheetLayout");
-
-    expect(compute(210, 297, 10, 6, 3)).toEqual({ cols: 1, rows: 2, cap: 2, pages: 2, fits: true });
-    expect(compute(297, 420, 10, 6, 5)).toEqual({ cols: 2, rows: 3, cap: 6, pages: 1, fits: true });
-    expect(compute(420, 297, 10, 6, 7)).toEqual({ cols: 3, rows: 2, cap: 6, pages: 2, fits: true });
-  });
-
-  it("says when the sheet is too small for one card", async () => {
-    const compute = await loadClientFunction<Compute>("computeSheetLayout");
-
-    expect(compute(100, 100, 10, 6, 1).fits).toBe(false);
-    expect(compute(100, 100, 0, 0, 1)).toEqual({ cols: 1, rows: 1, cap: 1, pages: 1, fits: true });
-  });
-
-  it("knows every preset of the original generator", async () => {
-    const size = await loadClientFunction<Size>("sheetPresetSize");
-
-    expect(size("297x420", 0, 0)).toEqual({ w: 297, h: 420, single: false });
-    expect(size("420x297", 0, 0)).toEqual({ w: 420, h: 297, single: false });
-    expect(size("210x297", 0, 0)).toEqual({ w: 210, h: 297, single: false });
-    expect(size("216x279", 0, 0)).toEqual({ w: 216, h: 279, single: false });
-    expect(size("100x100", 0, 0)).toEqual({ w: 100, h: 100, single: true });
-    expect(size("custom", 600, 400)).toEqual({ w: 600, h: 400, single: false });
-  });
-
-  it("knows the Chilean Oficio sheet (216×330 mm)", async () => {
-    const size = await loadClientFunction<Size>("sheetPresetSize");
-
-    expect(size("216x330", 0, 0)).toEqual({ w: 216, h: 330, single: false });
-  });
-
-  it("maps a typed width and height back to the matching sheet, or to custom", async () => {
-    type Match = (w: number, h: number, presets: string[]) => string;
-    const match = await loadClientFunction<Match>("presetForSize");
-    const presets = ["297x420", "420x297", "210x297", "216x279", "216x330", "100x100", "custom"];
-
-    expect(match(216, 330, presets)).toBe("216x330");
-    expect(match(210, 297, presets)).toBe("210x297");
-    expect(match(250, 350, presets)).toBe("custom");
+    expect(render).toContain('window.dispatchEvent(new Event("printqueuechange"))');
+    expect(render).toContain('document.getElementById("cards-count")');
+    expect(script).toContain("window.__setPrintQueued = setPrintQueued;");
+    expect(script).toContain("window.__clearPrintQueue = clearPrintQueue;");
   });
 });
 
@@ -2859,40 +2825,17 @@ describe("cards section", () => {
     return html.slice(start, html.indexOf("</section>", start));
   }
 
-  it("offers every option of the original generator", async () => {
+  it("hands the section to the React island (web/src/cards), with no server-rendered controls", async () => {
     const section = cardsSection(await serve());
+    const script = codeOnly(await clientScript());
 
-    for (const v of ["hybrid", "qr", "nfc"]) expect(section).toContain(`name="card-variant" value="${v}"`);
-    expect(section).toContain(">Híbrido: QR + NFC<");
-    expect(section).toContain(">Solo QR Centrado<");
-    expect(section).toContain(">Solo NFC Centrado<");
-    expect(section).toContain('<option value="official">Estándar Oficial Google</option>');
-    expect(section).toContain('<option value="minimal">Clean Minimalist Glass</option>');
-    for (const p of ["297x420", "420x297", "210x297", "216x279", "100x100", "custom"]) {
-      expect(section).toContain(`<option value="${p}"`);
+    expect(section).toContain('<div class="card" id="cards-root" data-island="cards"></div>');
+    for (const id of ["card-sheet", "card-sheets", "cards-controls", "cards-export", "cards-mark-printed"]) {
+      expect(section).not.toContain(`id="${id}"`);
     }
-    for (const id of ["card-mirror", "card-crop", "card-margin", "card-gap", "card-sheet-w", "card-sheet-h", "card-zoom"]) {
-      expect(section).toContain(`id="${id}"`);
+    for (const fn of ["renderCardSheets", "exportCards", "markCardsPrinted", "cardOptions", "computeSheetLayout"]) {
+      expect(script).not.toContain(`function ${fn}(`);
     }
-    expect(section).toContain('id="cards-export"');
-    expect(section).toContain('id="cards-mark-printed"');
-    expect(section).toContain('id="card-sheets"');
-  });
-
-  it("offers the Chilean Oficio sheet", async () => {
-    const section = cardsSection(await serve());
-
-    expect(section).toContain('<option value="216x330">Oficio (216×330 mm)</option>');
-  });
-
-  it("shows the selected sheet's real size in editable width and height fields", async () => {
-    const html = await serve();
-    const section = cardsSection(html);
-
-    expect(section).toContain('<input id="card-sheet-w" type="number" min="100" value="297">');
-    expect(section).toContain('<input id="card-sheet-h" type="number" min="100" value="420">');
-    const script = html.slice(html.indexOf("<script"));
-    expect(extractFunction(script, "renderCardSheets")).not.toContain(".disabled = o.preset");
   });
 
   it("starts the grid at the top-left margin instead of centring it", async () => {
@@ -2924,20 +2867,15 @@ describe("cards section", () => {
 
   it("prints only the sheets, at the sheet size, without the preview zoom", async () => {
     const html = await serve();
-    const script = codeOnly(await clientScript());
 
     expect(html).toContain("body.printing-cards");
     expect(html).toMatch(/body\.printing-cards #card-sheets\s*\{[^}]*zoom:\s*1 !important;/);
     expect(html).toMatch(/\.card-sheet \+ \.card-sheet\s*\{[^}]*break-before:\s*page;/);
-    expect(script).toContain('document.body.classList.add("printing-cards")');
-    expect(script).toMatch(/@page \{ size: " \+ size\.w \+ "mm " \+ size\.h \+ "mm; margin: 0; \}/);
-    expect(script).toContain('addEventListener("afterprint"');
   });
 
-  it("draws each card from the API, but keeps the queue itself in the page", async () => {
+  it("keeps the queue itself in the page", async () => {
     const script = codeOnly(await clientScript());
 
-    expect(script).toMatch(/"\/api\/links\/" \+ encodeURIComponent\(item\.id\) \+ "\/card\.svg\?design="/);
     expect(script).not.toContain("/api/links/print-queue");
     expect(script).not.toContain("/api/links/printed");
     expect(script).not.toContain("print_queued: queued");
@@ -3201,5 +3139,16 @@ describe("repaintLink", () => {
 
     expect(r.spy.loadLinks).toBe(1);
     expect(r.oldRow.replacedBy).toBeNull();
+  });
+});
+
+describe("React islands bundle", () => {
+  it("loads the bundle as a module after the page's own scripts", async () => {
+    const html = await serve();
+    const tag = '<script type="module" src="/assets/dashboard.js"></script>';
+
+    expect(html).toContain(tag);
+    expect(html.indexOf(tag)).toBeGreaterThan(html.lastIndexOf("loadLinks();"));
+    expect(html.indexOf(tag)).toBeLessThan(html.indexOf("</body>"));
   });
 });

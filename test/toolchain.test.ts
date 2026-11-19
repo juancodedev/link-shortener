@@ -9,6 +9,7 @@ import readmeRaw from "../README.md?raw";
 import ciYmlRaw from "../.github/workflows/ci.yml?raw";
 import deployYmlRaw from "../.github/workflows/deploy.yml?raw";
 import dependabotRaw from "../.github/dependabot.yml?raw";
+import wranglerRaw from "../wrangler.jsonc?raw";
 
 const readFileSync = (_p: string) => {
   throw new Error("use the ?raw imports, not the filesystem");
@@ -155,4 +156,28 @@ describe("documented commands match the toolchain", () => {
       ).toBe(true);
     }
   });
+});
+
+describe("the dashboard's React bundle is part of the build", () => {
+  it("wrangler serves dist-web as static assets and builds it before dev and deploy", () => {
+    expect(wranglerRaw).toMatch(/"assets":\s*\{\s*"directory":\s*"\.\/dist-web"\s*\}/);
+    expect(wranglerRaw).toMatch(/"build":\s*\{\s*"command":\s*"pnpm run build:web"/);
+    expect(pkg.scripts["build:web"]).toBe("vite build --config web/vite.config.ts");
+  });
+
+  it("typecheck covers the web app as well as the Worker", () => {
+    expect(pkg.scripts["typecheck"]).toBe("tsc --noEmit && tsc --noEmit -p web");
+  });
+
+  for (const [wf, yaml] of [["ci", ciYmlRaw], ["deploy", deployYmlRaw]] as const) {
+    it(`${wf}.yml builds the web bundle and type-checks both projects before the tests`, () => {
+      const build = yaml.indexOf("pnpm run build:web");
+      const typecheck = yaml.indexOf("pnpm run typecheck");
+      const tests = yaml.search(/pnpm (test|exec vitest run)/);
+      expect(build).toBeGreaterThan(-1);
+      expect(typecheck).toBeGreaterThan(-1);
+      expect(build).toBeLessThan(tests);
+      expect(typecheck).toBeLessThan(tests);
+    });
+  }
 });

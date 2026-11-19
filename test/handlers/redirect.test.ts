@@ -47,6 +47,7 @@ import {
   renderCardNotConfigured,
   renderSubscriptionPaused,
 } from "../../src/handlers/redirect";
+import { inlineScripts } from "../helpers/inline-scripts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1141,10 +1142,6 @@ describe("scanning a card that has no destination yet", () => {
 // ---------------------------------------------------------------------------
 
 describe("unconfigured card hands a logged-in owner to setup", () => {
-  function inlineScripts(html: string): string[] {
-    return [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!);
-  }
-
   /** Runs the page's inline scripts against a fake storage and location. */
   function runInBrowser(html: string, storage: Record<string, string> | "throws") {
     const replace = vi.fn();

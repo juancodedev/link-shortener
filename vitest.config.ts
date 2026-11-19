@@ -17,7 +17,12 @@ export default defineConfig({
       {
         // The dashboard's React islands, in a browser-like DOM.
         plugins: [react()],
-        test: { name: "web", environment: "jsdom", include: ["web/test/**/*.test.{ts,tsx}"] },
+        test: {
+          name: "web",
+          environment: "jsdom",
+          include: ["web/test/**/*.test.{ts,tsx}"],
+          setupFiles: ["web/test/setup.ts"],
+        },
       },
     ],
   },

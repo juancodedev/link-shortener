@@ -27,3 +27,11 @@ describe("mountIslands", () => {
     expect(document.querySelector('[data-island="links"]')!.textContent).toBe("legacy links");
   });
 });
+
+describe("island registry", () => {
+  it("registers the Cards section under the name its placeholder carries", async () => {
+    const { ISLANDS } = await import("../src/registry");
+
+    expect(Object.keys(ISLANDS)).toEqual(["cards"]);
+  });
+});

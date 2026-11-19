@@ -1055,60 +1055,15 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
 
     <section class="dash-section" data-section="cards" hidden>
     <!--
-      THE PRINT QUEUE (odd/tasks/print-queue-cards.md S4-S6).
+      THE PRINT QUEUE (odd/tasks/print-queue-cards.md S4-S6), drawn by the
+      React island in web/src/cards (odd/tasks/dashboard-react.md T2).
 
       Every link sent to print from the Links section, laid out as 10×10 cm
       review cards on the chosen sheet. The sheet below IS the print: same SVG,
       same millimetres; only the screen preview is zoomed. Cards start at the
       top-left margin so a part-used sheet can go through the printer again.
     -->
-    <div class="card" id="cards-root">
-      <h3>Cards to print</h3>
-      <p class="field-help">Links you send to print from the Links section wait here. A card leaves the queue when you mark it printed, remove it, or save its destination. The queue lives in this page only: reloading it starts empty.</p>
-      <ul id="cards-queue" class="cards-queue"></ul>
-      <div id="cards-controls" class="cards-controls">
-        <fieldset>
-          <legend>Variante</legend>
-          <label class="check-row"><input type="radio" name="card-variant" value="hybrid" checked>Híbrido: QR + NFC</label>
-          <label class="check-row"><input type="radio" name="card-variant" value="qr">Solo QR Centrado</label>
-          <label class="check-row"><input type="radio" name="card-variant" value="nfc">Solo NFC Centrado</label>
-        </fieldset>
-        <fieldset>
-          <legend>Diseño</legend>
-          <select id="card-design" aria-label="Diseño">
-            <option value="official">Estándar Oficial Google</option>
-            <option value="minimal">Clean Minimalist Glass</option>
-          </select>
-          <label class="check-row"><input type="checkbox" id="card-mirror">Modo Espejo (impresión posterior transparente)</label>
-          <label class="check-row"><input type="checkbox" id="card-crop" checked>Líneas / Guías de Corte (Radio R5)</label>
-        </fieldset>
-        <fieldset>
-          <legend>Hoja</legend>
-          <select id="card-sheet" aria-label="Hoja">
-            <option value="297x420">A3 vertical (297×420 mm)</option>
-            <option value="420x297">A3 horizontal (420×297 mm)</option>
-            <option value="210x297">A4 vertical (210×297 mm)</option>
-            <option value="216x279">Carta (216×279 mm)</option>
-            <option value="216x330">Oficio (216×330 mm)</option>
-            <option value="100x100">1 tarjeta por hoja (100×100 mm)</option>
-            <option value="custom">Medida personalizada (rollo / pliego)</option>
-          </select>
-          <div class="cards-mm">
-            <label>Margen hoja (mm)<input id="card-margin" type="number" min="0" value="10"></label>
-            <label>Separación (mm)<input id="card-gap" type="number" min="0" value="6"></label>
-            <label>Ancho hoja (mm)<input id="card-sheet-w" type="number" min="100" value="297"></label>
-            <label>Alto hoja (mm)<input id="card-sheet-h" type="number" min="100" value="420"></label>
-          </div>
-          <label class="gap-top-sm">Zoom vista previa<input id="card-zoom" type="range" min="25" max="100" value="45"></label>
-        </fieldset>
-      </div>
-      <div class="cards-actions">
-        <button type="button" id="cards-export" class="btn-sm btn-primary">Export PDF / Print</button>
-        <button type="button" id="cards-mark-printed" class="btn-sm btn-outline">Mark as printed</button>
-        <span id="cards-info" class="cards-info"></span>
-      </div>
-      <div id="card-sheets"></div>
-    </div>
+    <div class="card" id="cards-root" data-island="cards"></div>
     </section>
 
     <section class="dash-section" data-section="businesses" hidden>
@@ -1531,155 +1486,18 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       showSection(sectionFromHash(location.hash));
 
       // ---------------------------------------------------------------------
-      // Cards: the print queue as printable sheets
-      // (odd/tasks/print-queue-cards.md S4-S6)
+      // Cards: the print queue. The Cards section itself is a React island
+      // (web/src/cards, odd/tasks/dashboard-react.md T2); the queue stays
+      // here because the Links table edits it on every Send to print.
       // ---------------------------------------------------------------------
 
-      /** Sheet size in mm for a preset of the original generator. */
-      function sheetPresetSize(preset, customW, customH) {
-        if (preset === "custom") return { w: customW, h: customH, single: false };
-        const parts = String(preset).split("x").map(Number);
-        return { w: parts[0], h: parts[1], single: preset === "100x100" };
-      }
-
-      /** The preset whose size is exactly w×h, or "custom" when none is. */
-      function presetForSize(w, h, presets) {
-        const hit = presets.find((p) => p === w + "x" + h);
-        return hit || "custom";
-      }
-
-      /**
-       * Keeps the sheet selector and the width/height fields in agreement:
-       * picking a sheet writes its size into the fields, and typing a size
-       * selects the sheet it matches (or the custom one).
-       */
-      function syncSheetControls(changedId) {
-        const select = document.getElementById("card-sheet");
-        const wInput = document.getElementById("card-sheet-w");
-        const hInput = document.getElementById("card-sheet-h");
-        if (changedId === "card-sheet") {
-          if (select.value === "custom") return;
-          const size = sheetPresetSize(select.value, 0, 0);
-          wInput.value = size.w;
-          hInput.value = size.h;
-        } else if (changedId === "card-sheet-w" || changedId === "card-sheet-h") {
-          const presets = Array.from(select.options, (opt) => opt.value);
-          select.value = presetForSize(parseFloat(wInput.value), parseFloat(hInput.value), presets);
-        }
-      }
-
-      /**
-       * How many 100 mm cards fit, as columns and rows from the top-left
-       * margin. Never centred: the unused part of a sheet stays in one piece.
-       */
-      function computeSheetLayout(w, h, margin, gap, count) {
-        const card = 100;
-        const fits = w - 2 * margin + gap >= card + gap && h - 2 * margin + gap >= card + gap;
-        const cols = Math.max(1, Math.floor((w - 2 * margin + gap) / (card + gap)));
-        const rows = Math.max(1, Math.floor((h - 2 * margin + gap) / (card + gap)));
-        const cap = cols * rows;
-        return { cols: cols, rows: rows, cap: cap, pages: Math.max(1, Math.ceil(count / cap)), fits: fits };
-      }
-
       window.__printQueue = [];
-      const cardSvgCache = new Map();
-      let cardRenderToken = 0;
-
-      function cardOptions() {
-        const num = (id, d) => {
-          const v = parseFloat(document.getElementById(id).value);
-          return isNaN(v) || v < 0 ? d : v;
-        };
-        const checked = document.querySelector('input[name="card-variant"]:checked');
-        return {
-          variant: checked ? checked.value : "hybrid",
-          design: document.getElementById("card-design").value,
-          mirror: document.getElementById("card-mirror").checked,
-          crop: document.getElementById("card-crop").checked,
-          preset: document.getElementById("card-sheet").value,
-          margin: num("card-margin", 10),
-          gap: num("card-gap", 6),
-          w: num("card-sheet-w", 600),
-          h: num("card-sheet-h", 400),
-        };
-      }
-
-      function renderQueueList(queue) {
-        return queue.map((item) =>
-          '<li><span class="code">' + esc(item.short_code) + '</span>' +
-          '<button type="button" class="btn-sm btn-outline" data-action="unqueue-print" data-id="' + esc(item.id) + '">Remove</button></li>'
-        ).join("");
-      }
-
-      async function cardSvg(item, design, variant) {
-        const key = item.id + "|" + design + "|" + variant;
-        if (cardSvgCache.has(key)) return cardSvgCache.get(key);
-        const res = await window.__api("GET", "/api/links/" + encodeURIComponent(item.id) + "/card.svg?design=" + design + "&variant=" + variant);
-        if (!res.ok) throw new Error("card " + item.short_code + ": HTTP " + res.status);
-        const svg = await res.text();
-        cardSvgCache.set(key, svg);
-        return svg;
-      }
-
-      async function renderCardSheets() {
-        const token = ++cardRenderToken;
-        const queue = window.__printQueue;
-        const o = cardOptions();
-        const size = sheetPresetSize(o.preset, o.w, o.h);
-        const margin = size.single ? 0 : o.margin;
-        const gap = size.single ? 0 : o.gap;
-        const sheets = document.getElementById("card-sheets");
-        const info = document.getElementById("cards-info");
-        document.getElementById("cards-export").disabled = queue.length === 0;
-        document.getElementById("cards-mark-printed").disabled = queue.length === 0;
-        if (queue.length === 0) {
-          sheets.innerHTML = '<p class="gate-empty">No cards waiting to be printed. Send unconfigured links to print from the Links section.</p>';
-          info.textContent = "";
-          return;
-        }
-        const layout = computeSheetLayout(size.w, size.h, margin, gap, queue.length);
-        if (!layout.fits) {
-          sheets.innerHTML = "";
-          info.textContent = "The sheet is too small for a 100×100 mm card with that margin.";
-          return;
-        }
-        info.textContent = layout.cols + "×" + layout.rows + " = " + layout.cap + " cards per sheet · " +
-          queue.length + " card(s) · " + layout.pages + " sheet(s)";
-        let svgs;
-        try {
-          svgs = await Promise.all(queue.map((item) => cardSvg(item, o.design, o.variant)));
-        } catch (err) {
-          if (token !== cardRenderToken) return;
-          sheets.innerHTML = '<p class="gate-empty">Could not load the cards.</p>';
-          console.error("cards failed to load", err);
-          return;
-        }
-        if (token !== cardRenderToken) return;
-        sheets.textContent = "";
-        let sheet = null;
-        svgs.forEach((svg, i) => {
-          if (i % layout.cap === 0) {
-            sheet = document.createElement("div");
-            sheet.className = "card-sheet";
-            sheet.style.width = size.w + "mm";
-            sheet.style.height = size.h + "mm";
-            sheet.style.padding = margin + "mm";
-            sheet.style.gap = gap + "mm";
-            sheet.style.gridTemplateColumns = "repeat(" + layout.cols + ", 100mm)";
-            sheet.style.gridAutoRows = "100mm";
-            sheets.appendChild(sheet);
-          }
-          const card = document.createElement("div");
-          card.className = "print-card" + (o.mirror ? " is-mirror" : "") + (o.crop ? " is-crop" : "");
-          card.innerHTML = svg;
-          sheet.appendChild(card);
-        });
-      }
 
       /**
-       * Draws the Cards section from the in-browser queue. Nothing is fetched:
-       * the queue only carries cards from the Links table to this sheet for
-       * the print at hand, so it lives in this page and is gone on reload
+       * Publishes a queue change: the sidebar count here, and an event the
+       * Cards island listens to. Nothing is fetched: the queue only carries
+       * cards from the Links table to the sheet for the print at hand, so it
+       * lives in this page and is gone on reload
        * (odd/tasks/print-queue-cards.md S2-S3, L3).
        */
       function renderPrintQueue() {
@@ -1687,69 +1505,20 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         const badge = document.getElementById("cards-count");
         badge.textContent = String(n);
         badge.hidden = n === 0;
-        document.getElementById("cards-queue").innerHTML = renderQueueList(window.__printQueue);
-        renderCardSheets();
+        window.dispatchEvent(new Event("printqueuechange"));
       }
 
-      window.__syncPrintQueue = syncPrintQueue;
-
-      /**
-       * Prints only the sheets, at the sheet size with no page margin (S5).
-       * The @page rule and the body class exist just for this print and are
-       * removed afterwards, so "Print report" keeps the browser's page.
-       */
-      function exportCards() {
-        if (window.__printQueue.length === 0) return;
-        const o = cardOptions();
-        const size = sheetPresetSize(o.preset, o.w, o.h);
-        let style = document.getElementById("card-page-style");
-        if (!style) {
-          style = document.createElement("style");
-          style.id = "card-page-style";
-          document.head.appendChild(style);
-        }
-        // One millimetre shorter on paper: a sheet exactly the page height can
-        // spill a blank page in some print engines.
-        style.textContent = "@page { size: " + size.w + "mm " + size.h + "mm; margin: 0; }" +
-          " @media print { .card-sheet { height: " + (size.single ? size.h : size.h - 1) + "mm !important; } }";
-        document.body.classList.add("printing-cards");
-        window.print();
-      }
-
-      window.addEventListener("afterprint", () => {
-        document.body.classList.remove("printing-cards");
-        const style = document.getElementById("card-page-style");
-        if (style) style.textContent = "";
-      });
-
-      function markCardsPrinted() {
+      /** Empties the queue after a print run ("Mark as printed"), with no request. */
+      function clearPrintQueue() {
         const ids = window.__printQueue.map((item) => item.id);
-        if (ids.length === 0) return;
-        if (!confirm("Mark " + ids.length + " card(s) as printed? They leave the print queue.")) return;
         window.__printQueue = [];
         ids.forEach((id) => showQueuedState(id, false));
         renderPrintQueue();
       }
 
-      document.getElementById("cards-controls").addEventListener("input", (e) => {
-        if (e.target.id === "card-zoom") {
-          document.getElementById("card-sheets").style.setProperty("--card-zoom", String(e.target.value / 100));
-          return;
-        }
-        syncSheetControls(e.target.id);
-        renderCardSheets();
-      });
-      document.getElementById("cards-controls").addEventListener("change", (e) => {
-        if (e.target.id === "card-zoom") return;
-        syncSheetControls(e.target.id);
-        renderCardSheets();
-      });
-      document.getElementById("cards-export").addEventListener("click", exportCards);
-      document.getElementById("cards-mark-printed").addEventListener("click", markCardsPrinted);
-      document.getElementById("cards-queue").addEventListener("click", (e) => {
-        const el = e.target.closest('[data-action="unqueue-print"]');
-        if (el) setPrintQueued(el.dataset.id, false);
-      });
+      window.__syncPrintQueue = syncPrintQueue;
+      window.__setPrintQueued = setPrintQueued;
+      window.__clearPrintQueue = clearPrintQueue;
 
       async function loadFeedbackInbox() {
         const body = document.getElementById("feedback-body");

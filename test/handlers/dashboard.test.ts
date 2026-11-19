@@ -2834,6 +2834,22 @@ describe("cards sheet layout", () => {
     expect(size("100x100", 0, 0)).toEqual({ w: 100, h: 100, single: true });
     expect(size("custom", 600, 400)).toEqual({ w: 600, h: 400, single: false });
   });
+
+  it("knows the Chilean Oficio sheet (216×330 mm)", async () => {
+    const size = await loadClientFunction<Size>("sheetPresetSize");
+
+    expect(size("216x330", 0, 0)).toEqual({ w: 216, h: 330, single: false });
+  });
+
+  it("maps a typed width and height back to the matching sheet, or to custom", async () => {
+    type Match = (w: number, h: number, presets: string[]) => string;
+    const match = await loadClientFunction<Match>("presetForSize");
+    const presets = ["297x420", "420x297", "210x297", "216x279", "216x330", "100x100", "custom"];
+
+    expect(match(216, 330, presets)).toBe("216x330");
+    expect(match(210, 297, presets)).toBe("210x297");
+    expect(match(250, 350, presets)).toBe("custom");
+  });
 });
 
 describe("cards section", () => {
@@ -2862,11 +2878,47 @@ describe("cards section", () => {
     expect(section).toContain('id="card-sheets"');
   });
 
+  it("offers the Chilean Oficio sheet", async () => {
+    const section = cardsSection(await serve());
+
+    expect(section).toContain('<option value="216x330">Oficio (216×330 mm)</option>');
+  });
+
+  it("shows the selected sheet's real size in editable width and height fields", async () => {
+    const html = await serve();
+    const section = cardsSection(html);
+
+    expect(section).toContain('<input id="card-sheet-w" type="number" min="100" value="297">');
+    expect(section).toContain('<input id="card-sheet-h" type="number" min="100" value="420">');
+    const script = html.slice(html.indexOf("<script"));
+    expect(extractFunction(script, "renderCardSheets")).not.toContain(".disabled = o.preset");
+  });
+
   it("starts the grid at the top-left margin instead of centring it", async () => {
     const html = await serve();
 
     expect(html).toMatch(/\.card-sheet\s*\{[^}]*justify-content:\s*start;[^}]*align-content:\s*start;/);
     expect(html).not.toMatch(/\.card-sheet\s*\{[^}]*justify-content:\s*center/);
+  });
+
+  it("zooms only the sheets, so the empty-queue message keeps its normal size", async () => {
+    const html = await serve();
+
+    expect(html).toMatch(/\.card-sheet\s*\{[^}]*zoom:\s*var\(--card-zoom\);/);
+    expect(html).not.toMatch(/#card-sheets\s*\{[^}]*zoom:\s*var\(--card-zoom\)/);
+    expect(html).toMatch(/body\.printing-cards \.card-sheet\s*\{[^}]*zoom:\s*1 !important;/);
+  });
+
+  it("lines radio options up like the checkboxes", async () => {
+    const html = await serve();
+
+    expect(html).toMatch(/\.check-row input\[type="checkbox"\],\s*\.check-row input\[type="radio"\]\s*\{[^}]*width:\s*1\.125rem;/);
+  });
+
+  it("greys out a disabled outline button instead of red text on grey", async () => {
+    const html = await serve();
+
+    expect(html).toMatch(/\.btn-outline:disabled\s*\{[^}]*background:\s*transparent;[^}]*color:\s*var\(--ink-faint\);/);
   });
 
   it("prints only the sheets, at the sheet size, without the preview zoom", async () => {

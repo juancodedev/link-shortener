@@ -301,6 +301,7 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       border-color: var(--edge-strong);
     }
     .btn-outline:hover { background: var(--kraft-deep); }
+    .btn-outline:disabled { background: transparent; color: var(--ink-faint); border-color: var(--edge); }
     table {
       width: 100%;
       border-collapse: collapse;
@@ -671,7 +672,8 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       font-weight: 500;
       cursor: pointer;
     }
-    .check-row input[type="checkbox"] { width: 1.125rem; height: 1.125rem; margin: 0; flex: none; accent-color: var(--tag); }
+    .check-row input[type="checkbox"],
+    .check-row input[type="radio"] { width: 1.125rem; height: 1.125rem; margin: 0; flex: none; accent-color: var(--tag); }
     .gap-top { margin-top: 1rem; }
     .gap-top-sm { margin-top: 0.5rem; }
     .report-actions { display: flex; justify-content: flex-end; margin-bottom: 0.75rem; }
@@ -689,8 +691,9 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     .cards-info { font-size: 0.75rem; color: var(--ink-soft); }
     .cards-queue { list-style: none; padding: 0; margin: 0 0 0.75rem; display: flex; flex-wrap: wrap; gap: 0.375rem; }
     .cards-queue li { display: flex; align-items: center; gap: 0.375rem; background: var(--kraft-deep); border-radius: 999px; padding: 0.125rem 0.25rem 0.125rem 0.625rem; font-size: 0.75rem; }
-    #card-sheets { zoom: var(--card-zoom); overflow-x: auto; padding: 0.5rem 0; }
+    #card-sheets { overflow-x: auto; padding: 0.5rem 0; }
     .card-sheet {
+      zoom: var(--card-zoom);
       display: grid;
       justify-content: start;
       align-content: start;
@@ -730,7 +733,7 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       body.printing-cards #cards-root > :not(#card-sheets) { display: none !important; }
       body.printing-cards #cards-root { border: 0; padding: 0; margin: 0; background: none; }
       body.printing-cards #card-sheets { zoom: 1 !important; overflow: visible; padding: 0; }
-      body.printing-cards .card-sheet { margin: 0; outline: none; break-inside: avoid; overflow: hidden; }
+      body.printing-cards .card-sheet { zoom: 1 !important; margin: 0; outline: none; break-inside: avoid; overflow: hidden; }
       .card-sheet + .card-sheet { break-before: page; page-break-before: always; }
     }
   </style>
@@ -1083,14 +1086,15 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
             <option value="420x297">A3 horizontal (420×297 mm)</option>
             <option value="210x297">A4 vertical (210×297 mm)</option>
             <option value="216x279">Carta (216×279 mm)</option>
+            <option value="216x330">Oficio (216×330 mm)</option>
             <option value="100x100">1 tarjeta por hoja (100×100 mm)</option>
             <option value="custom">Medida personalizada (rollo / pliego)</option>
           </select>
           <div class="cards-mm">
             <label>Margen hoja (mm)<input id="card-margin" type="number" min="0" value="10"></label>
             <label>Separación (mm)<input id="card-gap" type="number" min="0" value="6"></label>
-            <label>Ancho hoja (mm)<input id="card-sheet-w" type="number" min="100" value="600" disabled></label>
-            <label>Alto hoja (mm)<input id="card-sheet-h" type="number" min="100" value="400" disabled></label>
+            <label>Ancho hoja (mm)<input id="card-sheet-w" type="number" min="100" value="297"></label>
+            <label>Alto hoja (mm)<input id="card-sheet-h" type="number" min="100" value="420"></label>
           </div>
           <label class="gap-top-sm">Zoom vista previa<input id="card-zoom" type="range" min="25" max="100" value="45"></label>
         </fieldset>
@@ -1535,6 +1539,32 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         return { w: parts[0], h: parts[1], single: preset === "100x100" };
       }
 
+      /** The preset whose size is exactly w×h, or "custom" when none is. */
+      function presetForSize(w, h, presets) {
+        const hit = presets.find((p) => p === w + "x" + h);
+        return hit || "custom";
+      }
+
+      /**
+       * Keeps the sheet selector and the width/height fields in agreement:
+       * picking a sheet writes its size into the fields, and typing a size
+       * selects the sheet it matches (or the custom one).
+       */
+      function syncSheetControls(changedId) {
+        const select = document.getElementById("card-sheet");
+        const wInput = document.getElementById("card-sheet-w");
+        const hInput = document.getElementById("card-sheet-h");
+        if (changedId === "card-sheet") {
+          if (select.value === "custom") return;
+          const size = sheetPresetSize(select.value, 0, 0);
+          wInput.value = size.w;
+          hInput.value = size.h;
+        } else if (changedId === "card-sheet-w" || changedId === "card-sheet-h") {
+          const presets = Array.from(select.options, (opt) => opt.value);
+          select.value = presetForSize(parseFloat(wInput.value), parseFloat(hInput.value), presets);
+        }
+      }
+
       /**
        * How many 100 mm cards fit, as columns and rows from the top-left
        * margin. Never centred: the unused part of a sheet stays in one piece.
@@ -1595,8 +1625,6 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         const size = sheetPresetSize(o.preset, o.w, o.h);
         const margin = size.single ? 0 : o.margin;
         const gap = size.single ? 0 : o.gap;
-        document.getElementById("card-sheet-w").disabled = o.preset !== "custom";
-        document.getElementById("card-sheet-h").disabled = o.preset !== "custom";
         const sheets = document.getElementById("card-sheets");
         const info = document.getElementById("cards-info");
         document.getElementById("cards-export").disabled = queue.length === 0;
@@ -1705,10 +1733,13 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           document.getElementById("card-sheets").style.setProperty("--card-zoom", String(e.target.value / 100));
           return;
         }
+        syncSheetControls(e.target.id);
         renderCardSheets();
       });
       document.getElementById("cards-controls").addEventListener("change", (e) => {
-        if (e.target.id !== "card-zoom") renderCardSheets();
+        if (e.target.id === "card-zoom") return;
+        syncSheetControls(e.target.id);
+        renderCardSheets();
       });
       document.getElementById("cards-export").addEventListener("click", exportCards);
       document.getElementById("cards-mark-printed").addEventListener("click", markCardsPrinted);

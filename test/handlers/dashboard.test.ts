@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { dashboardHandler } from "../../src/handlers/dashboard";
+import { inlineScripts } from "../helpers/inline-scripts";
 
 // ---------------------------------------------------------------------------
 // Stored-XSS regression tests for the dashboard.
@@ -49,7 +50,7 @@ async function serve(): Promise<string> {
  */
 async function clientScript(): Promise<string> {
   const html = await serve();
-  const script = html.match(/<script>([\s\S]*?)<\/script>/i)?.[1];
+  const script = inlineScripts(html)[0];
   if (!script || !script.includes("links-body")) {
     throw new Error("dashboard client script not found in served HTML");
   }
@@ -1861,7 +1862,7 @@ describe("the served client script parses", () => {
    */
   it("is valid JavaScript", async () => {
     const html = await serve();
-    const blocks = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+    const blocks = inlineScripts(html);
     const client = blocks.find((b) => b.includes("links-body"));
     expect(client).toBeDefined();
 
@@ -1893,7 +1894,7 @@ describe("the served client script parses", () => {
     // string. The parse test above is what proves it for the whole block; this
     // one pins that no window.prompt with multi-line text came back.
     const html = await serve();
-    const blocks = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+    const blocks = inlineScripts(html);
     const client = blocks.find((b) => b.includes("links-body"))!;
 
     expect(client).not.toMatch(/window\.prompt\("[^"]*\n/);

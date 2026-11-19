@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { Hono } from "hono";
 import { renderSetupPage, setupHandler } from "../../src/handlers/setup";
 import { loginHandler, SAFE_NEXT_PATH } from "../../src/handlers/auth";
+import { inlineScripts } from "../helpers/inline-scripts";
 
 // ---------------------------------------------------------------------------
 // GET /setup/:code — card quick setup
@@ -180,7 +181,7 @@ async function settle() {
 
 async function runSetupPage(code: string, opts: BrowserOpts) {
   const html = renderSetupPage({ code, supabaseUrl: "https://x.supabase.co", supabaseAnonKey: "anon" });
-  const inline = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!);
+  const inline = inlineScripts(html);
 
   const els: Record<string, FakeEl> = {};
   let onSubmit: ((e: unknown) => Promise<void>) | undefined;

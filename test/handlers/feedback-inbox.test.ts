@@ -153,8 +153,7 @@ describe("empty and truncated states", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The injection guard — the same one `gate-panel.test.ts` carries, for the same
-// reason: `dashboard.ts` ships this function with `.toString()`, so a
+// The injection guard: `dashboard.ts` ships this function with `.toString()`, so a
 // module-scope helper is a ReferenceError in the browser and invisible here.
 // ---------------------------------------------------------------------------
 

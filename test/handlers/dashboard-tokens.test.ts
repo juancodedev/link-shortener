@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { dashboardHandler } from "../../src/handlers/dashboard";
-import { renderGatePanel } from "../../src/handlers/gate-panel";
 
 // ---------------------------------------------------------------------------
 // The token layer — regression guard.
@@ -188,59 +187,5 @@ describe("token layer — the vocabulary is the domain's", () => {
 
     const generic = declared.filter((t) => /^(gray|grey|blue|red|green|slate|zinc|neutral)-?\d*$/.test(t));
     expect(generic, `generic scale name(s): ${generic.join(", ")}`).toEqual([]);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 4. The gate panel is part of the same layer
-// ---------------------------------------------------------------------------
-
-describe("token layer — the review-gate panel", () => {
-  const payload = {
-    split: {
-      totalScans: 10,
-      derivationRate: 0.6,
-      google: { scans: 6, rated: 4, avgRating: 4.5 },
-      private: { scans: 4, rated: 3, avgRating: 3.5 },
-      sentimentGap: 1,
-    },
-    locations: [
-      { locationName: "Cafe Central", totalScans: 7, derivationRate: 0.5 },
-    ],
-    peaks: [
-      { bucketStart: 1_700_000_000, total: 3, google: 2, derivationRate: 0.66 },
-      { bucketStart: 1_700_086_400, total: 5, google: 4, derivationRate: 0.8 },
-    ],
-    meta: { minRatedSample: 3 },
-  };
-
-  it("emits no hex colour literal", () => {
-    const html = renderGatePanel(payload as any);
-
-    const offenders = html.match(new RegExp(HEX.source, "g")) ?? [];
-    expect(
-      offenders,
-      `hardcoded colour(s) in the gate panel: ${[...new Set(offenders)].join(", ")}`,
-    ).toEqual([]);
-  });
-
-  it("emits no colour-bearing inline style", () => {
-    const html = renderGatePanel(payload as any);
-    const styles = [...html.matchAll(/style="([^"]*)"/g)].map((m) => m[1]);
-
-    const coloured = styles.filter((s) => HEX.test(s) || /color\s*:/.test(s) || /background\s*:/.test(s));
-    // The peak bar's height is computed inline and must stay — it is data, not
-    // styling. Only colour is banned here.
-    expect(
-      coloured,
-      `gate-panel inline style(s) still carrying a colour: ${coloured.join(" | ")}`,
-    ).toEqual([]);
-  });
-
-  it("still renders the computed bar heights inline", () => {
-    const html = renderGatePanel(payload as any);
-
-    // Guards the rule above from being over-applied: `height:NN%` is data.
-    expect(html).toMatch(/style="[^"]*height:\s*\d+%/);
   });
 });

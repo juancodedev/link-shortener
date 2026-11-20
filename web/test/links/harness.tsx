@@ -1,12 +1,14 @@
 import { act, render } from "@testing-library/react";
 import { vi } from "vitest";
 import { LinksSection } from "../../src/links/LinksSection";
+import { onOverviewChange, type OverviewChange } from "../../src/overview/changes";
 import { clearPrintQueue, installPrintQueue } from "../../src/print-queue";
 
 /**
  * Stands in for the server-rendered dashboard around the Links island:
  * window.__api (which, like the real one, THROWS on a non-ok response), the
- * readiness gate, and the bridges the legacy page exposes.
+ * readiness gate, and the bridges the legacy page exposes. The changes the
+ * island announces to the Overview island are recorded too.
  */
 
 export type Call = { method: string; path: string; body?: unknown };
@@ -56,8 +58,6 @@ export function installApi(handler: Handler): Call[] {
 
 type Routes = {
   links?: unknown[] | (() => unknown);
-  clients?: unknown;
-  gate?: unknown;
   clicks?: (id: string) => unknown;
   patch?: (id: string, body: unknown) => unknown;
   del?: (id: string) => unknown;
@@ -75,8 +75,6 @@ export function standardApi(routes: Routes = {}): Call[] {
     if (method === "GET" && path === "/api/links") {
       return typeof routes.links === "function" ? routes.links() : (routes.links ?? [link()]);
     }
-    if (method === "GET" && path === "/api/clients/metrics") return routes.clients ?? [];
-    if (method === "GET" && path === "/api/review-gate/metrics") return routes.gate ?? { rated: 0 };
     if (method === "POST" && path === "/api/links") {
       if (routes.create) return routes.create(body);
       const sent = body as { original_url?: string };
@@ -100,18 +98,18 @@ export function standardApi(routes: Routes = {}): Call[] {
 }
 
 export type Bridges = {
-  overview: Array<Record<string, unknown>>;
-  clientsRefreshed: number;
+  /** Every change announced to the Overview island, in order. */
+  overview: OverviewChange[];
 };
 
-/** The legacy page's bridges, recorded. */
+let stopRecording = () => {};
+
+/** The legacy page's bridges, and the Overview changes, recorded. */
 export function installLegacy(): Bridges {
-  const bridges: Bridges = { overview: [], clientsRefreshed: 0 };
+  const bridges: Bridges = { overview: [] };
   window.__apiReady = Promise.resolve();
-  window.__renderOverviewCards = (cards) => bridges.overview.push(cards as Record<string, unknown>);
-  window.__refreshClientsCard = () => {
-    bridges.clientsRefreshed++;
-  };
+  stopRecording();
+  stopRecording = onOverviewChange((change) => bridges.overview.push(change));
   window.__branches = undefined;
   window.__businesses = undefined;
   installPrintQueue();

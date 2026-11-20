@@ -12,7 +12,8 @@ import { dashboardHandler } from "../../src/handlers/dashboard";
 // Ref column — is pinned in web/test/links/rows.test.tsx.
 //
 // What stays here is what the server still serves: the stylesheet rule that
-// hides those cells, and the client rollup's own table.
+// hides those cells. The client rollup's table is the Overview island's
+// (web/test/overview/overview.test.tsx).
 // ---------------------------------------------------------------------------
 
 function mockContext() {
@@ -29,12 +30,6 @@ function mockContext() {
 async function serve(): Promise<string> {
   return (await dashboardHandler(mockContext())).text();
 }
-
-describe("the client_ref rollup keeps its own table", () => {
-  it("leaves the stores-by-client-ref rollup with its own header", async () => {
-    expect(await serve()).toContain("Stores by Client Ref");
-  });
-});
 
 describe("narrow screens hide informational columns, never the actions", () => {
   it("applies only below 768px", async () => {

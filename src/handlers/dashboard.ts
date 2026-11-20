@@ -1,7 +1,6 @@
 import type { Handler } from "hono";
 import type { AppEnv, HonoVars } from "../types/env";
 import { VISITOR_ESTIMATE_CAVEAT } from "../analytics/metrics";
-import { renderGatePanel } from "./gate-panel";
 import { renderFeedbackInbox } from "./feedback-inbox";
 import { resolveMaxActiveLinks } from "../api/links";
 import { icon } from "./icons";
@@ -510,8 +509,8 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       margin-top: 0.25rem;
     }
 
-    /* Gate panel sub-headings and empty state. Shared with
-       src/handlers/gate-panel.ts, which emits these classes. */
+    /* Gate panel sub-headings and empty state. Shared with the Overview
+       island (web/src/overview), which emits these classes. */
     .gate-h {
       margin: 1.25rem 0 0.5rem;
       font-size: 0.875rem;
@@ -865,10 +864,9 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       if (typeof loadFeedbackEmail === "function") loadFeedbackEmail();
       if (typeof loadFeedbackInbox === "function") loadFeedbackInbox();
       if (typeof loadBranches === "function") loadBranches();
-      if (typeof loadHourlyTraffic === "function") loadHourlyTraffic();
-      // No links load here: the Links island (a module, so it runs after this
-      // page is parsed) loads itself once this gate opens. Calling it from
-      // here as well would load the table twice.
+      // No links or Overview loads here: those islands (a module, so it runs
+      // after this page is parsed) load themselves once this gate opens.
+      // Calling them from here as well would load them twice.
     })();
   </script>
   <!-- React islands (web/, odd/tasks/dashboard-react.md S2): a module runs
@@ -911,44 +909,17 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
     </aside>
     <main class="sections">
     <section class="dash-section" data-section="overview" hidden>
-    <!-- The report is what the owner forwards: the print stylesheet keeps the
-         metric cards and drops everything that is a control. -->
-    <div class="report-actions no-print">
-      <button type="button" id="print-report" class="btn-sm btn-outline">${icon("print")}<span>Print report</span></button>
-    </div>
-    <!-- Review gate. Presentable as a screenshot on purpose: this screen is
-         what the owner forwards as their monthly report, so every figure here
-         carries its own qualification in the markup rather than in a tooltip
-         that a screenshot would not capture. -->
-    <div class="card" id="gate-card" style="display:none;">
-      <h3>Customer satisfaction</h3>
-      <div id="gate-body"><div class="loading">Loading...</div></div>
-    </div>
+    <!--
+      THE OVERVIEW SECTION, drawn by the React island in web/src/overview
+      (odd/tasks/dashboard-react.md T4): the print button and the report
+      cards (satisfaction, busy hours, stores by client_ref), each loading
+      its own data. The <section> stays here, so showSection and the print
+      rules keyed on data-section="overview" keep working on it.
 
-    <!-- Busy hours. Same screenshot discipline as the panel above: the window
-         and the time zone are printed under the chart, not in a tooltip. -->
-    <div class="card" id="traffic-card" style="display:none;">
-      <h3>Busy hours</h3>
-      <div id="traffic-body"></div>
-    </div>
-
-    <div class="card" id="clients-card" style="display:none;">
-      <h3>Stores by Client Ref</h3>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Client Ref</th>
-              <th>Unique Visitors</th>
-              <th>Sessions</th>
-            </tr>
-          </thead>
-          <tbody id="clients-body"></tbody>
-        </table>
-      </div>
-      <!-- Same caveat, next to the store-level rollup. -->
-      <p class="estimate-note">${VISITOR_ESTIMATE_CAVEAT}</p>
-    </div>
+      Nothing is served inside: every card starts hidden until its data
+      arrives, and a print button without its script would do nothing.
+    -->
+    <div id="overview-root" data-island="overview"></div>
     </section>
 
     <section class="dash-section" data-section="links">
@@ -1075,7 +1046,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       /**
        * The esbuild runtime shim.
        *
-       * \`renderGatePanel.toString()\` below serialises the ALREADY-BUNDLED
+       * \`renderFeedbackInbox.toString()\` below serialises the ALREADY-BUNDLED
        * function, because the Worker this handler ships in was compiled by
        * esbuild with \`keepNames: true\` — which rewrites every named function
        * inside the body to a \`__name(fn, "fn")\` statement. Those statements
@@ -1083,8 +1054,9 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
        *
        * \`__name\` is defined at the top of the Worker bundle, in module scope,
        * so it does not exist in this page. Without this line the very first
-       * call throws \`ReferenceError: __name is not defined\` and the gate panel
-       * never renders.
+       * call throws \`ReferenceError: __name is not defined\` and the comments
+       * inbox never renders. (The review-gate panel, the first function
+       * injected this way, is a React component now: web/src/overview.)
        *
        * This is the same helper, byte for byte, that esbuild's own browser
        * runtime declares. It is not a no-op shim: function declarations already
@@ -1097,8 +1069,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       var __name = (target, value) =>
         Object.defineProperty(target, "name", { value, configurable: true });
 
-      const renderGatePanel = ${renderGatePanel.toString()};
-      // Same injection, same caveat: self-contained, see feedback-inbox.ts.
+      // Self-contained on purpose, see feedback-inbox.ts.
       const renderFeedbackInbox = ${renderFeedbackInbox.toString()};
       /**
        * Readiness gate for the auth bootstrap.
@@ -1198,7 +1169,6 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       }
 
       document.getElementById("feedback-filter").addEventListener("change", () => loadFeedbackInbox());
-      document.getElementById("print-report").addEventListener("click", () => window.print());
 
       // ---------------------------------------------------------------------
       // Sidebar sections (odd/tasks/print-queue-cards.md S1). The hash names
@@ -1229,45 +1199,13 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       // ---------------------------------------------------------------------
       // Bridges for the React islands (web/, odd/tasks/dashboard-react.md).
       //
-      // The Links section (T3a/T3b) and the print queue are React now. What
-      // they still need from this page, and only that, is lent through
-      // window: the Overview cards their load paints (L9) and the client
-      // rollup refresh. The print queue and window.__loadLinks are lent the
-      // other way, by the bundle (web/src/print-queue.ts, web/src/links).
+      // The Links (T3a/T3b) and Overview (T4) sections and the print queue
+      // are React now, and each loads its own data (L13). What this page
+      // still lends them is window.__api and its readiness gate, and the
+      // branches load (loadBranches, announced with brancheschange). The
+      // print queue and window.__loadLinks are lent the other way, by the
+      // bundle (web/src/print-queue.ts, web/src/links).
       // ---------------------------------------------------------------------
-
-      /**
-       * Paints the Overview's gate and clients cards from the Links island's
-       * load. \`hide\` starts a first load; \`gate\` is the review-gate payload,
-       * rendered only if renderGatePanel can render it (the card degrades to
-       * hidden otherwise); \`clients\` is the client_ref rollup, shown only when
-       * it has rows.
-       */
-      window.__renderOverviewCards = function (cards) {
-        const gateCard = document.getElementById("gate-card");
-        const clientsCard = document.getElementById("clients-card");
-        if (cards.hide) {
-          gateCard.style.display = "none";
-          clientsCard.style.display = "none";
-        }
-        if ("gate" in cards) {
-          try {
-            document.getElementById("gate-body").innerHTML = renderGatePanel(cards.gate);
-            gateCard.style.display = "";
-          } catch (err) {
-            console.error("gate panel failed to render", err);
-          }
-        }
-        if (Array.isArray(cards.clients)) {
-          if (cards.clients.length > 0) {
-            document.getElementById("clients-body").innerHTML = renderClients(cards.clients);
-            clientsCard.style.display = "";
-          } else {
-            clientsCard.style.display = "none";
-          }
-        }
-      };
-      window.__refreshClientsCard = refreshClientsCard;
 
       async function loadFeedbackInbox() {
         const body = document.getElementById("feedback-body");
@@ -1378,81 +1316,15 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       });
 
       /**
-       * Renders the per-store rollup.
-       *
-       * \`client_ref\` is the identifier the user types per store, so it is user
-       * data from a Referer-adjacent source: it passes through esc() like every
-       * other record field. The caveat above this table is static server
-       * markup, so it is already on the page before a row renders.
-       */
-      function renderClients(clients) {
-        if (!clients || clients.length === 0) {
-          return "<tr><td colspan=\\"3\\" class=\\"empty-cell\\">No client identifiers yet — set one on a link to see store-level visitors.</td></tr>";
-        }
-        return clients.map((c) => \`<tr>
-          <td><span class="code">\${esc(c.client_ref)}</span></td>
-          <td>\${esc(c.unique_visitors)}</td>
-          <td>\${esc(c.sessions)}</td>
-        </tr>\`).join("");
-      }
-
-      /**
-       * The busy-hours chart: 24 CSS bars, one per local hour of the day.
-       *
-       * Bar height is the hour against the busiest one, like the peak chart in
-       * the satisfaction panel. The busiest hour is also written out as text,
-       * because a screenshot of bars alone does not say which bar is 13:00.
-       */
-      function renderHourlyTraffic(payload) {
-        const hours = (payload && Array.isArray(payload.hours)) ? payload.hours : [];
-        const label = (h) => String(h).padStart(2, "0") + ":00";
-        const footnote = '<p class="estimate-note">Last ' + esc(payload && payload.window) +
-          " · " + esc(payload && payload.time_zone) + " time. Every scan counts, including repeat scans.</p>";
-        const busiest = hours.reduce((top, h) => (h.scans > top.scans ? h : top), { hour: 0, scans: 0 });
-        if (busiest.scans === 0) {
-          return '<p class="gate-empty">No scans in the last ' + esc(payload && payload.window) + " yet.</p>";
-        }
-        const bars = hours.map((h) => {
-          const height = Math.round((h.scans / busiest.scans) * 100);
-          return '<div class="hour-bar" style="height:' + height + '%;" title="' +
-            esc(label(h.hour)) + " · " + esc(h.scans) + ' scans"></div>';
-        }).join("");
-        return '<p class="hour-summary">Busiest hour: ' + label(busiest.hour) + "–" +
-            label((busiest.hour + 1) % 24) + " (" + esc(busiest.scans) + " scans)</p>" +
-          '<div class="peak-chart">' + bars + "</div>" +
-          '<div class="peak-axis"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>23:00</span></div>' +
-          footnote;
-      }
-
-      /**
-       * Loads the busy-hours card on its own. It degrades to hidden on failure
-       * instead of failing the links table: it is a report, not the workflow.
-       */
-      async function loadHourlyTraffic() {
-        const card = document.getElementById("traffic-card");
-        const body = document.getElementById("traffic-body");
-        if (!card || !body) return;
-        try {
-          const res = await window.__api("GET", "/api/traffic/hourly");
-          if (!res.ok) throw new Error("hourly traffic: HTTP " + res.status);
-          body.innerHTML = renderHourlyTraffic(await res.json());
-          card.style.display = "";
-        } catch (err) {
-          card.style.display = "none";
-          console.error("hourly traffic failed to load", err);
-        }
-      }
-
-      /**
        * Escapes a value for interpolation into innerHTML or a double-quoted
        * attribute value.
        *
-       * The cards this page still renders (the client rollup, busy hours,
-       * businesses) are built by assigning a string to innerHTML, so every
-       * interpolated value is an injection vector. This helper is the only
-       * sanctioned way to put record data into that markup. The links table
-       * no longer needs it: it is a React island and renders record data as
-       * text (web/src/links).
+       * The card this page still renders by string (businesses and branches) is
+       * built by assigning a string to innerHTML, so every interpolated value
+       * is an injection vector. This helper is the only sanctioned way to put
+       * record data into that markup. The links table and the Overview cards
+       * no longer need it: they are React islands and render record data as
+       * text (web/src/links, web/src/overview).
        *
        * It is NOT a defence for JavaScript context. An onclick="..." body is
        * handed to the JS engine, where &quot; and &#39; are ordinary characters
@@ -1467,25 +1339,6 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           .replace(/>/g, "&gt;")
           .replace(/"/g, "&quot;")
           .replace(/'/g, "&#39;");
-      }
-
-      /**
-       * Refreshes the client_ref rollup in the background. A client_ref save
-       * regroups it; nothing else on the table depends on it.
-       */
-      async function refreshClientsCard() {
-        try {
-          const res = await window.__api("GET", "/api/clients/metrics");
-          if (!res || !res.ok) return;
-          const payload = await res.json();
-          const clients = Array.isArray(payload) ? payload : [];
-          if (clients.length > 0) {
-            document.getElementById("clients-body").innerHTML = renderClients(clients);
-          }
-          document.getElementById("clients-card").style.display = clients.length > 0 ? "" : "none";
-        } catch (err) {
-          console.error("client rollup refresh failed", err);
-        }
       }
 
       /**

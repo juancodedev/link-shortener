@@ -20,16 +20,6 @@ export type Branch = {
 /** A business ("local") as GET /api/businesses returns it. */
 export type Business = { id: string; name: string; is_active?: boolean };
 
-/** What the Links island hands the legacy Overview renderers (L9). */
-export type OverviewCards = {
-  /** Hide the gate and clients cards: a first load is starting. */
-  hide?: boolean;
-  /** The review-gate payload, painted by the legacy renderGatePanel. */
-  gate?: unknown;
-  /** The client_ref rollup, painted by the legacy renderClients. */
-  clients?: unknown[];
-};
-
 declare global {
   interface Window {
     /** Authenticated fetch: Bearer token, tenant header, 401 → /login. Throws on any non-ok response. */
@@ -44,10 +34,6 @@ declare global {
     __clearPrintQueue: () => void;
     /** Reloads the Links table; set by the Links island while it is mounted, for the legacy refreshOwnership. */
     __loadLinks?: () => Promise<void>;
-    /** Legacy: paints the Overview's gate and clients cards from the Links load. */
-    __renderOverviewCards?: (cards: OverviewCards) => void;
-    /** Legacy: refetches and repaints the client_ref rollup. */
-    __refreshClientsCard?: () => void;
     /** Legacy: the tenant's branches and businesses, set by loadBranches. */
     __branches?: Branch[];
     __businesses?: Business[];

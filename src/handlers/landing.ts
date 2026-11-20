@@ -315,7 +315,7 @@ export const landingHandler: Handler<{ Bindings: AppEnv }> = (c) => {
   </main>
 
   <footer>
-    <div class="wrap">Más Reseñas. Hecho con Cloudflare Workers y Supabase.</div>
+    <div class="wrap">Más Reseñas. Desarrollado por <a href="https://www.juancode.dev">juancode.dev</a>.</div>
   </footer>
 
   ${SUPABASE_JS_SCRIPT}

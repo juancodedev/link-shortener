@@ -600,7 +600,7 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
 
     /* Small shared utilities that used to be inline style attributes.
        Only the ones no script touches: a display:none stays inline, because
-       loadLinks toggles those elements through .style.display. */
+       a script toggles those elements through .style.display. */
     .nav-email { font-size: 0.813rem; color: var(--ink-soft); margin-right: 0.75rem; }
     .caption { font-size: 0.813rem; color: var(--ink-soft); }
     .caption-sm { font-size: 0.75rem; color: var(--ink-soft); }
@@ -769,7 +769,7 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       window.__token = session.access_token;
 
       // Defined before __api can reach it: __api calls this synchronously on a
-      // 409, and loadLinks() runs at the end of this IIFE.
+      // 409, and the boot loads run at the end of this IIFE.
       window.__showTenantPicker = function (available) {
         var host = document.getElementById("tenant-picker");
         if (!host) {
@@ -848,7 +848,8 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       };
 
       // Open the readiness gate LAST, once the helper it guards actually
-      // exists. Every loadLinks() caller suspended on this promise resumes here
+      // exists. Every caller suspended on this promise (the Links island's
+      // load among them, web/src/links) resumes here
       // and finds a callable window.__api, however early it was invoked.
       // Resolving it any earlier — on the session, before the assignment — would
       // hand every waiter straight back the race this gate exists to close.
@@ -858,14 +859,16 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       // fail. Leaving waiters parked is the honest outcome, not a leak.
       window.__apiReadyResolve?.();
 
-      // Once, at boot, not on every loadLinks(): the feedback address belongs
+      // Once, at boot, not on every links load: the feedback address belongs
       // to the tenant and not to any row, so re-reading it whenever a link is
       // toggled would be a request per keystroke of someone else's workflow.
       if (typeof loadFeedbackEmail === "function") loadFeedbackEmail();
       if (typeof loadFeedbackInbox === "function") loadFeedbackInbox();
       if (typeof loadBranches === "function") loadBranches();
       if (typeof loadHourlyTraffic === "function") loadHourlyTraffic();
-      if (typeof loadLinks === "function") loadLinks();
+      // No links load here: the Links island (a module, so it runs after this
+      // page is parsed) loads itself once this gate opens. Calling it from
+      // here as well would load the table twice.
     })();
   </script>
   <!-- React islands (web/, odd/tasks/dashboard-react.md S2): a module runs
@@ -949,97 +952,25 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
     </section>
 
     <section class="dash-section" data-section="links">
-    <div class="card">
-      <h3>Create Short Link</h3>
-      <form id="create-form">
-        <label for="url">Destination URL</label>
-        <!--
-          NOT required.
+    <!--
+      THE LINKS SECTION, drawn by the React island in web/src/links
+      (odd/tasks/dashboard-react.md T3a/T3b): the create form, bulk card
+      stock, the links table and the QR modal. The <section> stays here, so
+      showSection and the print rules keep working on it; the island replaces
+      what is inside #links-root when it mounts.
 
-          Card stock is manufactured before its destination exists: the owner
-          creates the link, the designer prints the short_code as a QR, and the
-          real URL is loaded later. \`required\` would block that at the
-          browser and leave the API able to do something the form cannot reach.
-
-          The field stays first and stays labelled. Leaving it blank is a
-          deliberate act, not a default, and the help text says what it means —
-          an accidental empty submit should not silently create a card that
-          points nowhere.
-        -->
-        <input type="text" id="url" placeholder="example.com or https://...">
-        <p class="field-help">Leave empty to create a card first and add its destination later. Until you do, its QR opens a \"not configured\" page.</p>
-        <label for="slug">Custom short code (optional)</label>
-        <!--
-          Pre-printed tags. A sticker is printed ONCE and lives in the world for
-          months, so the code on it must be one the user chose deliberately —
-          \`cafe-central\` is meaningful to a store owner in a way \`x7f3b2q\` is not.
-          Leaving this blank falls back to a random code, exactly as before.
-
-          The rules (3-32 chars, letters/digits/-/_ only, no leading or trailing
-          hyphen, not an app route) are enforced server-side in
-          src/utils/short-code.ts; this pattern only helps the user see the shape
-          before they hit the error.
-        -->
-        <input type="text" id="slug" placeholder="cafe-central" maxlength="32" pattern="[A-Za-z0-9_-]+">
-        <label for="title">Title (optional)</label>
-        <input type="text" id="title" placeholder="My awesome link" maxlength="200">
-        <!--
-          THE REVIEW SCREEN IS OPT-IN.
-
-          Unchecked, a scan is a plain 302 to the destination — for a Google
-          review link, the customer lands on Google's own form. Checked, the
-          scan shows our review screen first (stars, Google button, private
-          comment). Only checked links feed the satisfaction panel, because
-          only they record anything; the help text says so.
-        -->
-        <label class="check-row">
-          <input type="checkbox" id="gated">
-          <span>Show the review screen before redirecting</span>
-        </label>
-        <p class="field-help">Off: the scan goes straight to the destination. On: customers see the star rating and can leave you a private comment. Only links with this on feed the satisfaction panel.</p>
-        <button type="submit">Shorten</button>
-      </form>
-      <div id="create-msg" class="message"></div>
-      <div id="result" class="gap-top" style="display:none;">
-        <p class="caption">Your short link:</p>
-        <input type="text" id="short-url" readonly class="short-url" onclick="this.select();navigator.clipboard.writeText(this.value)">
-      </div>
-      <!--
-        Card stock is a different job from shortening a URL, so it gets its own
-        entry point rather than an option on this form. An owner making a hundred
-        stickers does not want a hundred submissions.
-      -->
-      <hr style="margin:1.25rem 0;border:none;border-top:1px solid var(--edge);">
-      <button type="button" id="open-bulk" class="btn-sm btn-outline">
-        Create cards in bulk...
-      </button>
-    </div>
-
-
+      What the server puts there is the first paint before the bundle runs:
+      the table's title, its loading state and the visitor caveat. No form is
+      served, because a form without its script would submit as a plain GET.
+      data-link-limit carries the plan limit, which only the server knows.
+    -->
+    <div id="links-root" data-island="links" data-link-limit="${activeLinkLimit}">
     <div class="card no-print" id="links-card">
       <h3>Your Links (<span id="link-count">0</span>/${activeLinkLimit})</h3>
       <div id="links-loading" class="loading">Loading...</div>
-      <div class="table-wrap">
-      <table id="links-table" style="display:none;">
-        <thead>
-          <tr>
-            <th>Short Code</th>
-            <th class="hide-sm">Business / branch</th>
-            <th class="hide-sm">URL</th>
-            <th class="hide-sm">Opens</th>
-            <th>Clicks</th>
-            <th>Status</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="links-body"></tbody>
-      </table>
-      </div>
-      <div id="links-empty" class="empty" style="display:none;">
-        No links yet. Create your first one above!
-      </div>
       <!--
-        Server-rendered, not injected by script, and not behind a tooltip.
+        Server-rendered, not injected by script, and not behind a tooltip (the
+        island renders the same sentence once it mounts).
 
         This is the whole point of the caveat's placement: a store owner acts on
         the visitor number, so the limitation has to be on the page before they
@@ -1050,6 +981,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         in src/analytics/metrics.ts so the two cannot drift apart.
       -->
       <p class="estimate-note"><strong>About visitor figures:</strong> ${VISITOR_ESTIMATE_CAVEAT}</p>
+    </div>
     </div>
     </section>
 
@@ -1139,100 +1071,6 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
     </main>
     </div>
 
-    <!-- QR code modal -->
-    <div id="qr-modal" class="qr-modal hidden" onclick="this.classList.add('hidden')">
-      <div class="qr-card" onclick="event.stopPropagation()">
-        <h3 class="qr-title">QR Code</h3>
-        <img id="qr-img" src="" alt="QR Code" class="qr-img">
-        <p id="qr-url" class="qr-url"></p>
-        <!--
-          PRINT-SHEET ENTRY POINT (T3.4).
-
-          The whole point of this phase is a URL that goes on a sticker. The modal
-          already DISPLAYS that URL, but a <p> is not something a user can
-          usefully copy: selecting it by hand, with a word-break to dodge, is
-          exactly the friction that ends with a mistyped code on a sticker.
-
-          So the one action the user came here for is a real control. It copies
-          the URL from the DOM — never from a re-derived string — so what lands
-          on the sticker is byte-for-byte what the QR image encodes.
-
-          Wired with addEventListener, NOT onclick="...". No inline handler is
-          added anywhere in this file: an attribute body is handed to the JS
-          engine, where the HTML entities esc() emits are ordinary characters
-          that terminate nothing. The pre-existing inline handlers on the modal
-          chrome are static and carry no record data; this one is not that.
-        -->
-        <button id="copy-print-sheet" class="btn-sm btn-outline gap-top-sm">Copy URL for print sheet</button>
-        <button class="btn-sm gap-top-sm" onclick="document.getElementById('qr-modal').classList.add('hidden')">Close</button>
-      </div>
-    </div>
-
-    <!--
-      MANUFACTURING CARD STOCK IN BULK.
-
-      One card at a time is the wrong shape for the job. An owner making a
-      hundred stickers does not want a hundred form submissions; they want to
-      say "ten of these" and receive a print sheet they can hand to a designer.
-
-      This creates them WITHOUT a destination, which is the state the whole flow
-      depends on: the QR goes on the card now and the review URL is loaded later,
-      when it is settled. A card created with a destination already filled in
-      commits the owner to knowing the URL before the sticker exists.
-
-      The modal asks for a COUNT and nothing else. Every field the create form
-      has — title, client_ref, location — is per-card by nature, and pretending
-      otherwise would mean inventing a bulk meaning for each one. Those stay on
-      the row, editable after the fact.
-
-      Deliberately NOT wired through data-action: that switch is for record
-      actions, and this acts on no record. It is a static button with a static
-      listener, which is the same discipline the create form follows.
-    -->
-    <div id="bulk-modal" class="qr-modal hidden" onclick="this.classList.add('hidden')">
-      <div class="qr-card" onclick="event.stopPropagation()" style="max-width:26rem;">
-        <h3 class="qr-title">Create cards in bulk</h3>
-        <p class="field-help">
-          Each card gets its own QR and no destination yet. Print them, and load
-          the real URL whenever it is settled — until then, scanning a card
-          opens a \"not configured\" page rather than a broken link.
-        </p>
-        <label for="bulk-count">How many cards</label>
-        <input type="number" id="bulk-count" min="1" max="200" step="1" value="10">
-        <label for="bulk-label" class="gap-top-sm">Label for this batch <span class="field-note">(optional)</span></label>
-        <input type="text" id="bulk-label" maxlength="200" placeholder="e.g. Main room — tables 1 to 10">
-        <label class="check-row gap-top-sm">
-          <input type="checkbox" id="bulk-gated">
-          <span>Show the review screen before redirecting</span>
-        </label>
-        <p class="field-help">
-          Off: once a destination is loaded, scans go straight to it. On:
-          customers see the star rating and can leave a private comment — and
-          only these cards feed the satisfaction panel. Changeable per card later.
-        </p>
-        <p class="field-help">
-          Printed under the code on every card, and written to the sheet's CSV, so
-          the designer knows which sticker is which before cutting. One field for
-          the whole batch beats typing it ten times.
-        </p>
-        <div id="bulk-msg" class="message"></div>
-        <div id="bulk-result" style="display:none;">
-          <p class="caption" id="bulk-summary"></p>
-          <button type="button" id="bulk-download" class="btn-sm btn-primary gap-top-sm">
-            Download print sheet (.zip)
-          </button>
-          <p class="field-help">
-            One SVG per card plus a links.csv listing them. The cards go straight
-            to your designer.
-          </p>
-        </div>
-        <div class="gap-top-sm" style="display:flex;gap:.5rem;">
-          <button type="button" id="bulk-create" class="btn-sm btn-primary">Create them</button>
-          <button class="btn-sm gap-top-sm" onclick="document.getElementById('bulk-modal').classList.add('hidden')">Close</button>
-        </div>
-      </div>
-    </div>
-
     <script>
       /**
        * The esbuild runtime shim.
@@ -1271,9 +1109,9 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
        * anything that reached for it at parse time died on
        * "window.__api is not a function".
        *
-       * The dependency is real, so it is expressed as a dependency: loadLinks
-       * awaits this promise, and the bootstrap resolves it once the helper is
-       * defined. A bare loadLinks() call here is gone because it was never
+       * The dependency is real, so it is expressed as a dependency: the Links
+       * island (web/src/links) awaits this promise, and the bootstrap resolves
+       * it once the helper is defined. A bare load call here is gone because it was never
        * right — this script can only wire things up, the load belongs to the
        * bootstrap that owns the session. A setTimeout would have hidden the
        * race rather than closing it, and would flake differently under load.
@@ -1283,103 +1121,6 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
        */
       window.__apiReady = new Promise((resolve) => { window.__apiReadyResolve = resolve; });
 
-      /**
-       * Copies the QR modal's URL to the clipboard — the print-sheet handoff.
-       *
-       * Reads #qr-url's textContent rather than rebuilding the URL, so the
-       * copied string cannot drift from the one the QR image encodes. showQR
-       * writes that element with textContent (never innerHTML), so what is read
-       * back here is the plain URL and not markup.
-       */
-      document.getElementById("copy-print-sheet").addEventListener("click", async (e) => {
-        const btn = e.currentTarget;
-        const url = document.getElementById("qr-url").textContent;
-        if (!url) return;
-        try {
-          await navigator.clipboard.writeText(url);
-          const original = btn.textContent;
-          btn.textContent = "Copied!";
-          setTimeout(() => { btn.textContent = original; }, 1500);
-        } catch {
-          // Clipboard access can be refused; surfacing the text beats a silent
-          // no-op, because the user's next move is to hand-write the code on a
-          // sticker and a typo there is unrecoverable.
-          alert("Copy failed — select the URL above and copy it manually.");
-        }
-      });
-
-      document.getElementById("create-form").addEventListener("submit", async (e) => {
-        e.preventDefault();
-        const btn = e.target.querySelector("button");
-        const msg = document.getElementById("create-msg");
-        const result = document.getElementById("result");
-        btn.disabled = true;
-        btn.textContent = "Creating...";
-        msg.className = "message";
-        result.style.display = "none";
-
-        try {
-          // A blank slug field means "generate one for me" and must stay
-          // optional, so it is sent as undefined rather than as "". The server
-          // treats an explicit empty string as absent too, but a client should
-          // not lean on that when it can simply omit the key.
-          const slugValue = document.getElementById("slug").value.trim();
-
-          // A blank destination is OMITTED, not sent as "". The server treats "" as
-          // absent too, but omitting states the intent at the boundary rather
-          // than relying on a coercion the reader has to go and find. This is
-          // what makes card stock creatable from the form.
-          const urlValue = document.getElementById("url").value.trim();
-
-          const res = await window.__api("POST", "/api/links", {
-            ...(urlValue ? { original_url: urlValue } : {}),
-            title: document.getElementById("title").value || undefined,
-            slug: slugValue || undefined,
-            is_gated: document.getElementById("gated").checked,
-          });
-
-          if (!res.ok) {
-            const err = await res.json();
-            throw new Error(err.error || "Failed to create link");
-          }
-
-          const data = await res.json();
-          document.getElementById("short-url").value = data.short_url;
-          result.style.display = "";
-          document.getElementById("url").value = "";
-          document.getElementById("title").value = "";
-          document.getElementById("slug").value = "";
-          document.getElementById("gated").checked = false;
-          msg.className = "message success";
-          // A card and a link are different objects, and saying "Link created!" for one
-          // that has nowhere to point yet is a small lie the owner discovers
-          // later, when a customer scans the sticker. Name the state instead.
-          msg.textContent = data.original_url
-            ? "Link created! Copied to clipboard."
-            : "Card created! Its QR opens a 'not configured' page until you add a destination.";
-          navigator.clipboard.writeText(data.short_url);
-          loadLinks();
-        } catch (err) {
-          msg.className = "message error";
-          msg.textContent = err instanceof Error ? err.message : "Error";
-        } finally {
-          btn.disabled = false;
-          btn.textContent = "Shorten";
-        }
-      });
-
-      // ---------------------------------------------------------------------
-      // Bulk card creation
-      //
-      // The count is the only input, and that is deliberate: every other field
-      // on a link is per-card by nature, and inventing a bulk meaning for each
-      // would be inventing vocabulary the product does not have. They stay
-      // editable on the row afterwards.
-      //
-      // The generated ids are kept in module scope rather than in the DOM,
-      // because the download button needs them and a data-* attribute would be
-      // a second copy of the same list that could drift out of sync with it.
-      // ---------------------------------------------------------------------
       // ---------------------------------------------------------------------
       // Feedback email
       //
@@ -1409,7 +1150,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       // tenant, not to any link row, so re-reading them on every table refresh
       // would be a request per toggle for data that did not change.
       //
-      // Kept out of loadLinks' all-or-nothing fetch on purpose. A failure here
+      // Kept out of the links load's all-or-nothing fetch on purpose. A failure here
       // says so in this card and leaves the rest of the dashboard working;
       // the links table should not disappear because the inbox could not load.
       // ---------------------------------------------------------------------
@@ -1486,39 +1227,47 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       showSection(sectionFromHash(location.hash));
 
       // ---------------------------------------------------------------------
-      // Cards: the print queue. The Cards section itself is a React island
-      // (web/src/cards, odd/tasks/dashboard-react.md T2); the queue stays
-      // here because the Links table edits it on every Send to print.
+      // Bridges for the React islands (web/, odd/tasks/dashboard-react.md).
+      //
+      // The Links section (T3a/T3b) and the print queue are React now. What
+      // they still need from this page, and only that, is lent through
+      // window: the Overview cards their load paints (L9) and the client
+      // rollup refresh. The print queue and window.__loadLinks are lent the
+      // other way, by the bundle (web/src/print-queue.ts, web/src/links).
       // ---------------------------------------------------------------------
 
-      window.__printQueue = [];
-
       /**
-       * Publishes a queue change: the sidebar count here, and an event the
-       * Cards island listens to. Nothing is fetched: the queue only carries
-       * cards from the Links table to the sheet for the print at hand, so it
-       * lives in this page and is gone on reload
-       * (odd/tasks/print-queue-cards.md S2-S3, L3).
+       * Paints the Overview's gate and clients cards from the Links island's
+       * load. \`hide\` starts a first load; \`gate\` is the review-gate payload,
+       * rendered only if renderGatePanel can render it (the card degrades to
+       * hidden otherwise); \`clients\` is the client_ref rollup, shown only when
+       * it has rows.
        */
-      function renderPrintQueue() {
-        const n = window.__printQueue.length;
-        const badge = document.getElementById("cards-count");
-        badge.textContent = String(n);
-        badge.hidden = n === 0;
-        window.dispatchEvent(new Event("printqueuechange"));
-      }
-
-      /** Empties the queue after a print run ("Mark as printed"), with no request. */
-      function clearPrintQueue() {
-        const ids = window.__printQueue.map((item) => item.id);
-        window.__printQueue = [];
-        ids.forEach((id) => showQueuedState(id, false));
-        renderPrintQueue();
-      }
-
-      window.__syncPrintQueue = syncPrintQueue;
-      window.__setPrintQueued = setPrintQueued;
-      window.__clearPrintQueue = clearPrintQueue;
+      window.__renderOverviewCards = function (cards) {
+        const gateCard = document.getElementById("gate-card");
+        const clientsCard = document.getElementById("clients-card");
+        if (cards.hide) {
+          gateCard.style.display = "none";
+          clientsCard.style.display = "none";
+        }
+        if ("gate" in cards) {
+          try {
+            document.getElementById("gate-body").innerHTML = renderGatePanel(cards.gate);
+            gateCard.style.display = "";
+          } catch (err) {
+            console.error("gate panel failed to render", err);
+          }
+        }
+        if (Array.isArray(cards.clients)) {
+          if (cards.clients.length > 0) {
+            document.getElementById("clients-body").innerHTML = renderClients(cards.clients);
+            clientsCard.style.display = "";
+          } else {
+            clientsCard.style.display = "none";
+          }
+        }
+      };
+      window.__refreshClientsCard = refreshClientsCard;
 
       async function loadFeedbackInbox() {
         const body = document.getElementById("feedback-body");
@@ -1628,158 +1377,6 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         }
       });
 
-      // >>> BULK BLOCK — the dashboard test scopes its row-action assertion to
-      // exactly this range.
-      let bulkIds = [];
-
-      document.getElementById("open-bulk").addEventListener("click", () => {
-        bulkIds = [];
-        document.getElementById("bulk-result").style.display = "none";
-        const msg = document.getElementById("bulk-msg");
-        msg.className = "message";
-        msg.textContent = "";
-        document.getElementById("bulk-modal").classList.remove("hidden");
-      });
-
-      document.getElementById("bulk-create").addEventListener("click", async () => {
-        const btn = document.getElementById("bulk-create");
-        const msg = document.getElementById("bulk-msg");
-        const count = parseInt(document.getElementById("bulk-count").value, 10);
-
-        // Validated here as well as on the server: the server is what makes it
-        // safe, but a button that does nothing for ten seconds because the count
-        // was 0 teaches the owner that the button is broken.
-        if (!Number.isInteger(count) || count < 1 || count > 200) {
-          msg.className = "message error";
-          msg.textContent = "Enter a number between 1 and 200.";
-          return;
-        }
-
-        btn.disabled = true;
-        btn.textContent = "Creating...";
-        msg.className = "message";
-        msg.textContent = "";
-
-        try {
-          // No destination, and \`is_gated\` as the owner chose it. It used to be
-          // forced on; it is opt-in now (odd/tasks/review-screen-refresh.md, S1)
-          // and the modal's help text states the cost: an ungated card goes
-          // straight to its destination and records nothing for the panel.
-          // The label is applied to EVERY card in the batch on purpose. It is
-          // one field for the whole run rather than one per card, because the
-          // question being asked is "where does this batch go" — ten stickers
-          // for the main room — not ten separate identities.
-          const label = document.getElementById("bulk-label").value.trim();
-          const gated = document.getElementById("bulk-gated").checked;
-          const links = Array.from({ length: count }, () => ({
-            is_gated: gated,
-            ...(label ? { client_ref: label } : {}),
-          }));
-          const res = await window.__api("POST", "/api/links/batch", { links });
-
-          const body = await res.json();
-          // A partial batch is reported, never treated as success. Nine of ten
-          // cards is a shortfall the owner discovers at the printer.
-          const created = (body.results || []).filter((r) => r.status === 201);
-
-          if (!res.ok && !created.length) {
-            throw new Error(body.error || "Could not create the cards");
-          }
-
-          bulkIds = created.map((r) => r.link.id);
-
-          document.getElementById("bulk-result").style.display = "";
-          const failed = (body.results || []).length - created.length;
-          document.getElementById("bulk-summary").textContent =
-            created.length + (created.length === 1 ? " card created. " : " cards created. ") +
-            (failed ? failed + " failed — try those again." : "");
-
-          msg.className = failed ? "message error" : "message success";
-          if (!failed) msg.textContent = "";
-          loadLinks();
-        } catch (err) {
-          msg.className = "message error";
-          msg.textContent = err instanceof Error ? err.message : "Error";
-        } finally {
-          btn.disabled = false;
-          btn.textContent = "Create them";
-        }
-      });
-
-      document.getElementById("bulk-download").addEventListener("click", async () => {
-        const msg = document.getElementById("bulk-msg");
-
-        if (!bulkIds.length) {
-          msg.className = "message error";
-          msg.textContent = "Create the cards first.";
-          return;
-        }
-
-        try {
-          // Through __api, NOT a hand-rolled fetch.
-          //
-          // This handler used to do its own fetch with its own headers, reading
-          // the token from localStorage. The dashboard keeps it on window.__token,
-          // so the sheet request went out as
-          // an empty bearer token and came back 401, while the create (which
-          // does go through the helper) had already succeeded: the modal
-          // cheerfully claimed ten cards existed and none could be printed.
-          //
-          // __api returns the response rather than a parsed body, so a blob
-          // downloads through it unchanged — and the 401-to-login redirect, the
-          // 409 tenant picker, and the server's own error text all come along
-          // instead of being reimplemented slightly wrong.
-          const res = await window.__api("POST", "/api/links/qr-sheet.zip", {
-            link_ids: bulkIds,
-          });
-
-          const blob = await res.blob();
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = "cards.zip";
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          // Revoked immediately after the click: the download has already been
-          // handed to the browser, and leaving the object URL alive pins the
-          // whole ZIP in memory for the life of the tab.
-          URL.revokeObjectURL(url);
-        } catch (err) {
-          msg.className = "message error";
-          msg.textContent = err instanceof Error ? err.message : "Error";
-        }
-      });
-      // <<< BULK BLOCK
-
-      /**
-       * Renders the two visitor figures for one link.
-       *
-       * Deliberately NOT the \`([k, v]) => ...\` breakdown mapper: these two are
-       * not a key/value breakdown, they are the headline pair, and giving them
-       * their own renderer keeps the invariant that every such shape is
-       * escaped rather than assuming the breakdown mapper was reused.
-       *
-       * EQUAL WEIGHT, ON PURPOSE. The product decision is that neither figure
-       * is the "real" one: \`unique_visitors\` answers "how many people came
-       * back", \`sessions\` answers "how many separate visits". Presenting one as
-       * the primary number and the other as a footnote would smuggle in a
-       * hierarchy the user explicitly rejected. Same markup, same weight, both
-       * qualified by the caveat baked into the panel around them.
-       *
-       * The window labels come from the API response rather than being written
-       * here, so the text can never describe a different window than the SQL
-       * actually used. \`?? 0\` matters: a bare missing value would render the
-       * string "undefined" next to a real number, which reads as a measurement
-       * rather than as an absence.
-       */
-      function renderVisitors(data) {
-        const uniqueWindow = data.unique_window || "1 day";
-        const sessionWindow = data.session_window || "30 minutes";
-        return \`<div class="metric-row"><span>Unique visitors (last \${esc(uniqueWindow)})</span><strong>\${esc(data.unique_visitors ?? 0)}</strong></div>
-                <div class="metric-row"><span>Sessions (per \${esc(sessionWindow)})</span><strong>\${esc(data.sessions ?? 0)}</strong></div>\`;
-      }
-
       /**
        * Renders the per-store rollup.
        *
@@ -1850,16 +1447,17 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
        * Escapes a value for interpolation into innerHTML or a double-quoted
        * attribute value.
        *
-       * The links table and the metric panels are both built by assigning a
-       * string to innerHTML, so every interpolated value is an injection
-       * vector. This helper is the only sanctioned way to put record data into
-       * markup: short_code, original_url, clicks_count, client_ref, and the
-       * click-breakdown keys and counts all pass through it.
+       * The cards this page still renders (the client rollup, busy hours,
+       * businesses) are built by assigning a string to innerHTML, so every
+       * interpolated value is an injection vector. This helper is the only
+       * sanctioned way to put record data into that markup. The links table
+       * no longer needs it: it is a React island and renders record data as
+       * text (web/src/links).
        *
        * It is NOT a defence for JavaScript context. An onclick="..." body is
        * handed to the JS engine, where &quot; and &#39; are ordinary characters
-       * that terminate nothing — so the table carries no inline handlers at
-       * all, and values reach JS through data-* attributes read via \`dataset\`.
+       * that terminate nothing — so no generated markup carries an inline
+       * handler, and values reach JS through data-* attributes read via \`dataset\`.
        */
       function esc(value) {
         if (value === null || value === undefined) return "";
@@ -1869,428 +1467,6 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           .replace(/>/g, "&gt;")
           .replace(/"/g, "&quot;")
           .replace(/'/g, "&#39;");
-      }
-
-      /**
-       * One delegated click handler for the whole links table.
-       *
-       * The rows used to carry inline onclick="..." attributes with record data
-       * interpolated into them. HTML-escaping cannot secure that position: the
-       * parser hands the attribute body straight to the JS engine, where the
-       * escaped entities are literal characters, so a short_code of ');alert(1)//
-       * still closes the argument list. Escaping the attribute would have been
-       * misleading — the only real fix is to keep user data out of source text.
-       *
-       * So the handlers live here and read what they need from the clicked
-       * element's dataset. Each existing function keeps its signature; only the
-       * call site moved.
-       */
-      function onLinksTableClick(e) {
-        const el = e.target.closest("[data-action]");
-        if (!el) return;
-        switch (el.dataset.action) {
-          case "copy":
-            copyUrl(el.dataset.url, el);
-            break;
-          case "qr":
-            showQR(el.dataset.url, e);
-            break;
-          case "metrics":
-            showMetrics(el.dataset.id, el.dataset.code, e);
-            break;
-          case "edit":
-            openEditor(el.dataset.id, el.dataset.code, e);
-            break;
-          case "save-client-ref":
-            saveClientRef(el.dataset.id);
-            break;
-          case "toggle":
-            toggleLink(el.dataset.id, el.dataset.active === "true");
-            break;
-          case "toggle-gate":
-            // A click on a checkbox has already flipped it, so \`checked\` is
-            // the state the owner asked for.
-            setGated(el.dataset.id, el.checked, el);
-            break;
-          case "save-destination":
-            saveDestination(el.dataset.id);
-            break;
-          case "save-branch":
-            saveBranch(el.dataset.id);
-            break;
-          case "delete":
-            deleteLink(el.dataset.id);
-            break;
-          case "queue-print":
-            setPrintQueued(el.dataset.id, true, el.dataset.code);
-            break;
-          case "unqueue-print":
-            setPrintQueued(el.dataset.id, false);
-            break;
-        }
-      }
-
-      // #links-body is stable across refreshes: loadLinks replaces its
-      // innerHTML, never the element itself, so this one listener survives
-      // every re-render instead of needing rebinding per row.
-      document.getElementById("links-body").addEventListener("click", onLinksTableClick);
-
-      /**
-       * Renders one link as its two table rows: the row itself and its
-       * editing panel. loadLinks renders every link through it, and
-       * repaintLink renders a single one after a save.
-       */
-      function renderLinkRow(l) {
-        const status = !l.is_active ? "inactive"
-          : (l.expires_at && new Date(l.expires_at) < new Date()) ? "expired"
-          : "active";
-        const shortUrl = l.short_url || "";
-        return \`<tr>
-          <td><span class="code" data-action="copy" data-url="\${esc(shortUrl)}" data-code="\${esc(l.short_code)}" title="Click to copy \${esc(shortUrl)}">\${esc(l.short_code)}</span></td>
-          <td class="hide-sm">\${l.location_name
-            ? \`<span class="owner-business">\${esc(l.business_name || "No business")}</span><span class="owner-branch">\${esc(l.location_name)}</span>\`
-            : '<span class="owner-none">Unassigned</span>'}</td>
-          <td class="hide-sm">\${l.original_url
-            ? \`<span class="url-trunc" title="\${esc(l.original_url)}">\${esc(l.original_url)}</span>\`
-            : l.print_queued
-              ? \`<button class="btn-sm btn-outline" data-action="unqueue-print" data-id="\${esc(l.id)}" data-code="\${esc(l.short_code)}">Remove from queue</button>\`
-              : \`<button class="btn-sm btn-outline" data-action="queue-print" data-id="\${esc(l.id)}" data-code="\${esc(l.short_code)}">Send to print</button>\`}</td>
-          <td class="hide-sm">\${l.is_gated
-            ? '<span class="badge badge-gated">Review screen</span>'
-            : '<span class="badge badge-direct">Direct</span>'}</td>
-          <td><a href="#" data-action="metrics" data-id="\${esc(l.id)}" data-code="\${esc(l.short_code)}" class="clicks-link">\${esc(l.clicks_count)}</a></td>
-          <td><span class="badge badge-\${status}">\${status}</span>\${l.original_url ? "" : \` <span class="badge badge-queued" data-print-badge="\${esc(l.id)}"\${l.print_queued ? "" : " hidden"}>To print</span>\`}</td>
-          <td><div class="row-actions"><button class="btn-sm btn-outline" data-action="edit" data-id="\${esc(l.id)}" data-code="\${esc(l.short_code)}">Edit</button><button class="btn-sm btn-danger" data-action="delete" data-id="\${esc(l.id)}">Del</button></div></td>
-        </tr>
-        <tr id="metrics-\${esc(l.id)}" style="display:none;">
-          <td colspan="7" class="flush-cell">
-            <div class="panel-pad">
-              <!-- WHAT LEFT THE ROW, AND WHY IT LIVES HERE
-                   The client-ref field and the state change used to sit in
-                   this row. Measured, that row carried a 130px editable input
-                   and four buttons into a 92.7px cell: the buttons stacked
-                   four rows tall, and because the actions column is LAST,
-                   auto table layout pushed it off the right edge where
-                   overflow-x:auto hid it with no affordance at all. On a
-                   390px phone, 392px of the table was simply not on screen.
-
-                   Both controls belong here anyway. This panel is opened by
-                   the clicks cell -- the primary action of the row -- and it
-                   already holds everything else you do TO a tag rather than
-                   read ABOUT one. An editable identifier and a lifecycle
-                   change are not reading. -->
-              <div class="panel-controls">
-                <div class="field">
-                  <label for="client-ref-\${esc(l.id)}">Client ref</label>
-                  <div class="field-row">
-                    <input type="text" id="client-ref-\${esc(l.id)}" value="\${esc(l.client_ref)}" placeholder="None" maxlength="200" class="client-ref-input">
-                    <button class="btn-sm btn-outline" data-action="save-client-ref" data-id="\${esc(l.id)}">Save</button>
-                  </div>
-                </div>
-                <div class="field">
-                  <label>Print sheet</label>
-                  <div class="field-row">
-                    <button class="btn-sm" data-action="qr" data-url="\${esc(shortUrl)}">QR code</button>\${l.original_url ? "" : l.print_queued
-                      ? \`<button class="btn-sm btn-outline" data-action="unqueue-print" data-id="\${esc(l.id)}" data-code="\${esc(l.short_code)}">Remove from queue</button>\`
-                      : \`<button class="btn-sm btn-outline" data-action="queue-print" data-id="\${esc(l.id)}" data-code="\${esc(l.short_code)}">Send to print</button>\`}
-                  </div>
-                  <p class="field-note">The code that goes on the sticker. This is the destination the printed tag resolves to.</p>
-                </div>
-                <div class="field">
-                  <label for="dest-\${esc(l.id)}">Destination</label>
-                  <div class="field-row">
-                    <input type="text" id="dest-\${esc(l.id)}" value="\${esc(l.original_url)}" placeholder="Not configured yet" class="client-ref-input">
-                    <button class="btn-sm btn-primary" data-action="save-destination" data-id="\${esc(l.id)}">Save</button>
-                  </div>
-                  <!--
-                    Editable on EVERY link, not only on card stock. The short
-                    code is what is printed, so the destination can change
-                    at any time without reprinting. Emptying the field turns
-                    the link back into card stock.
-                  -->
-                  <p class="field-note">\${l.original_url
-                    ? "Where the printed code leads. Changing it does not need a reprint."
-                    : 'This card has no destination yet. Anyone who scans it opens a "not configured" page. Save the URL whenever it is settled — the printed sticker does not need reprinting.'}</p>
-                </div>
-                <div class="field">
-                  <label for="branch-\${esc(l.id)}">Branch</label>
-                  <div class="field-row">
-                    <select id="branch-\${esc(l.id)}" data-current="\${esc(l.location_id)}" class="client-ref-input"></select>
-                    <button class="btn-sm btn-outline" data-action="save-branch" data-id="\${esc(l.id)}">Save</button>
-                  </div>
-                  <p class="field-note">The business and branch this sticker belongs to. Its comments and ratings are grouped there.</p>
-                </div>
-                <div class="field">
-                  <label>Review screen</label>
-                  <label class="check-row">
-                    <input type="checkbox" data-action="toggle-gate" data-id="\${esc(l.id)}"\${l.is_gated ? " checked" : ""}>
-                    <span>Show before redirecting</span>
-                  </label>
-                  <p class="field-note" data-gate-note="on"\${l.is_gated ? "" : " hidden"}>Scans show the star rating, the Google button and a private comment form.</p>
-                  <p class="field-note" data-gate-note="off"\${l.is_gated ? " hidden" : ""}>Scans go straight to the destination. Nothing is recorded for the satisfaction panel.</p>
-                </div>
-                <div class="field">
-                  <label>Tag state</label>
-                  <div class="field-row">
-                    <button class="btn-sm btn-outline" data-action="toggle" data-id="\${esc(l.id)}" data-active="\${!l.is_active}">\${l.is_active ? "Disable" : "Enable"}</button>
-                  </div>
-                  <!-- The reason the redirect is a 302 and not a 301, said
-                       where the decision is made. It was absent from the
-                       interface entirely; odd/analysis/dashboard-directions.md
-                       calls that absence out by name. -->
-                  <p class="field-note">\${l.is_active
-                    ? "This tag stops working. Anyone holding the printed sticker keeps the old destination until their browser cache expires."
-                    : "This tag starts working again. The printed sticker works from the next scan."}</p>
-                </div>
-              </div>
-              <div class="metric-box visitors-box">
-                <h4>Visitors (estimate)</h4>
-                <div id="visitors-\${esc(l.id)}"><div class="loading">Loading...</div></div>
-                <!-- Build-time interpolation of a compile-time constant:
-                     the caveat text ships inside the served markup, so it is
-                     present wherever the numbers are, not just in the docs.
-                     No user data is involved, so nothing to escape here. -->
-                <p class="estimate-note">${VISITOR_ESTIMATE_CAVEAT}</p>
-              </div>
-              <div class="metrics-grid">
-              <div class="metric-box">
-                <h4>By Country</h4>
-                <div id="country-\${esc(l.id)}"><div class="loading">Loading...</div></div>
-              </div>
-              <div class="metric-box">
-                <h4>By Device</h4>
-                <div id="device-\${esc(l.id)}"><div class="loading">Loading...</div></div>
-              </div>
-              <div class="metric-box">
-                <h4>By Source</h4>
-                <div id="source-\${esc(l.id)}"><div class="loading">Loading...</div></div>
-              </div>
-            </div>
-            </div>
-          </td>
-        </tr>\`;
-      }
-
-      async function loadLinks() {
-        // Safe to call at ANY point in the page lifecycle.
-        //
-        // The gate is awaited before the first request, not after it, so this
-        // holds for every caller and for every number of endpoints that follows
-        // — the one-request form this function had before the client_ref rollup
-        // got its own URL, and the two-request form shipped today. A caller that
-        // arrives while getSession() is still in flight parks here instead of
-        // throwing, and its load happens the moment the helper exists.
-        //
-        // Guarded because loadLinks may also be reached in a context where this
-        // script's gate was never created; there is nothing to wait for, so the
-        // load proceeds and fails (or succeeds) on its own merits.
-        if (window.__apiReady) await window.__apiReady;
-
-        const loading = document.getElementById("links-loading");
-        const table = document.getElementById("links-table");
-        const empty = document.getElementById("links-empty");
-        const tbody = document.getElementById("links-body");
-        const count = document.getElementById("link-count");
-        const clientsCard = document.getElementById("clients-card");
-        const gateCard = document.getElementById("gate-card");
-        const gateBody = document.getElementById("gate-body");
-        const clientsBody = document.getElementById("clients-body");
-
-        // A table already on screen means this is a refresh after an edit, not
-        // the first load. Hiding it then collapsed the page and threw the owner
-        // back to the top after every Save, and the re-render closed the panel
-        // they were editing. So a refresh repaints in place and reopens the
-        // panels that were open.
-        const refreshing = table.style.display !== "none";
-        const openPanelIds = refreshing && tbody.querySelectorAll
-          ? Array.from(tbody.querySelectorAll('tr[id^="metrics-"]'))
-              .filter((row) => row.style.display !== "none")
-              .map((row) => row.id.slice("metrics-".length))
-          : [];
-
-        if (!refreshing) {
-          loading.style.display = "";
-          table.style.display = "none";
-          empty.style.display = "none";
-          clientsCard.style.display = "none";
-          gateCard.style.display = "none";
-        }
-
-        try {
-          // Two endpoints, two fetches: the links collection and the
-          // per-client_ref rollup. They used to be ONE response, which meant
-          // GET /api/links had to wrap its array in an object to carry the
-          // rollup — a shape change that broke every caller expecting the
-          // original array. The rollup keeps its metrics and its panel; it just
-          // has its own URL now.
-          //
-          // Fetched together so the panel and the table still arrive in one
-          // paint. A failure in EITHER one fails the load, because the previous
-          // behaviour was also all-or-nothing and a half-rendered dashboard is
-          // harder to trust than an error message.
-          const [linksRes, clientsRes, gateRes] = await Promise.all([
-            window.__api("GET", "/api/links"),
-            window.__api("GET", "/api/clients/metrics"),
-            window.__api("GET", "/api/review-gate/metrics"),
-          ]);
-          if (!linksRes || !linksRes.ok) throw new Error("Failed to load links");
-          if (!clientsRes || !clientsRes.ok) throw new Error("Failed to load client metrics");
-
-          // The gate panel is the exception to the all-or-nothing rule the two
-          // fetches above follow. Its numbers qualify each other — a derivation
-          // rate beside a satisfaction mean with a different sample — so a
-          // partial paint is worse than no paint. But a tenant who has never
-          // activated a gated link has no rows, and failing the whole dashboard
-          // over an empty panel would be wrong. So this one degrades to hidden,
-          // and only if the panel could not be rendered at all.
-          if (gateRes && gateRes.ok) {
-            try {
-              gateBody.innerHTML = renderGatePanel(await gateRes.json());
-              gateCard.style.display = "";
-            } catch (err) {
-              console.error("gate panel failed to render", err);
-            }
-          }
-
-          const links = await linksRes.json();
-          // An array is the documented contract for /api/links. If that ever
-          // changes again the dashboard says so rather than rendering an empty
-          // table that looks like "you have no links".
-          if (!Array.isArray(links)) throw new Error("Unexpected /api/links response shape");
-
-          // The rollup panel degrades to nothing rather than failing: an empty
-          // list is its own honest meaning ("no store has recorded traffic"),
-          // and there is no figure here that a wrong zero would fake.
-          const clientsPayload = await clientsRes.json();
-          const clients = Array.isArray(clientsPayload) ? clientsPayload : [];
-
-          count.textContent = links.length;
-          // The print queue lives in this page; a refresh only prunes it.
-          // Reached through window so loadLinks stays callable on its own.
-          if (window.__syncPrintQueue) window.__syncPrintQueue(links);
-          // Kept so a save can repaint its own row without the whole list.
-          window.__links = links;
-
-          if (links.length === 0) {
-            table.style.display = "none";
-            empty.style.display = "";
-            return;
-          }
-
-          if (clients.length > 0) {
-            clientsBody.innerHTML = renderClients(clients);
-            clientsCard.style.display = "";
-          } else {
-            clientsCard.style.display = "none";
-          }
-
-          tbody.innerHTML = links.map(renderLinkRow).join("");
-
-          table.style.display = "";
-          empty.style.display = "none";
-          fillBranchSelects();
-          // showMetrics opens a closed panel and refetches its figures, which
-          // the re-render dropped along with the old row.
-          const noop = { preventDefault() {} };
-          openPanelIds.forEach((id) => showMetrics(id, "", noop));
-        } catch (err) {
-          table.style.display = "none";
-          empty.textContent = "Could not load links. " + (err instanceof Error ? err.message : "");
-          empty.style.display = "";
-        } finally {
-          loading.style.display = "none";
-        }
-      }
-
-      /**
-       * Sends an unconfigured link to the print queue, or takes it out
-       * (odd/tasks/print-queue-cards.md S2-S3). Synchronous and local: the
-       * queue is page state, so the row and the Cards section change on the
-       * click itself, with no request and no table reload.
-       */
-      function setPrintQueued(id, queued, code) {
-        const queue = window.__printQueue;
-        const at = queue.findIndex((item) => item.id === id);
-        if (queued && at < 0) queue.push({ id: id, short_code: code || "" });
-        if (!queued && at >= 0) queue.splice(at, 1);
-        showQueuedState(id, queued);
-        renderPrintQueue();
-      }
-
-      /**
-       * Flips one link's print controls in place. The table is not
-       * re-rendered, so an open editing panel stays open. Both copies of the
-       * button (row and panel) and the "To print" badge follow.
-       */
-      function showQueuedState(id, queued) {
-        const body = document.getElementById("links-body");
-        body.querySelectorAll('[data-id="' + CSS.escape(id) + '"]').forEach((btn) => {
-          if (btn.dataset.action !== "queue-print" && btn.dataset.action !== "unqueue-print") return;
-          btn.dataset.action = queued ? "unqueue-print" : "queue-print";
-          btn.textContent = queued ? "Remove from queue" : "Send to print";
-        });
-        const badge = body.querySelector('[data-print-badge="' + CSS.escape(id) + '"]');
-        if (badge) badge.hidden = !queued;
-      }
-
-      /**
-       * Reconciles the queue with a fresh links list: a link that was deleted
-       * or got a destination leaves the queue (S3b), and each remaining row is
-       * marked so the table renders its queued state.
-       */
-      function syncPrintQueue(links) {
-        const byId = new Map(links.map((l) => [l.id, l]));
-        window.__printQueue = window.__printQueue.filter((item) => {
-          const l = byId.get(item.id);
-          return Boolean(l) && !l.original_url;
-        });
-        const queued = new Set(window.__printQueue.map((item) => item.id));
-        links.forEach((l) => { l.print_queued = queued.has(l.id); });
-        renderPrintQueue();
-      }
-
-      /**
-       * Repaints one link's rows after a save, without reloading the table.
-       *
-       * The change is applied to the list the last load returned, and only
-       * this link's two rows are replaced. The new panel keeps what the old
-       * one held: whether it was open, the figures it already fetched, and
-       * anything typed in its other fields. \`savedFieldId\` is the field the
-       * save just stored, so it shows the value the server kept instead.
-       */
-      function repaintLink(id, changes, savedFieldId) {
-        const link = (window.__links || []).find((l) => l.id === id);
-        const panel = document.getElementById("metrics-" + id);
-        if (!link || !panel) {
-          // Nothing on screen to patch: fall back to the full load.
-          loadLinks();
-          return;
-        }
-        Object.assign(link, changes);
-        // A destination takes the link out of the print queue.
-        if (window.__syncPrintQueue) window.__syncPrintQueue(window.__links);
-
-        const scratch = document.createElement("tbody");
-        scratch.innerHTML = renderLinkRow(link);
-        const row = scratch.children[0];
-        const nextPanel = scratch.children[1];
-        const find = (root, fieldId) => root.querySelector("#" + CSS.escape(fieldId));
-
-        nextPanel.style.display = panel.style.display;
-        ["visitors-", "country-", "device-", "source-"].forEach((prefix) => {
-          const fresh = find(nextPanel, prefix + id);
-          const loaded = find(panel, prefix + id);
-          if (fresh && loaded) fresh.replaceWith(loaded);
-        });
-        fillBranchSelects(nextPanel);
-        panel.querySelectorAll("input[id], select[id]").forEach((field) => {
-          if (field.id === savedFieldId || field.type === "checkbox") return;
-          const fresh = find(nextPanel, field.id);
-          if (fresh) fresh.value = field.value;
-        });
-
-        panel.previousElementSibling.replaceWith(row);
-        panel.replaceWith(nextPanel);
       }
 
       /**
@@ -2312,157 +1488,11 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         }
       }
 
-      async function toggleLink(id, active) {
-        try {
-          const res = await window.__api("PATCH", "/api/links/" + id, { is_active: active });
-          if (!res.ok) throw new Error("Failed");
-          repaintLink(id, { is_active: active });
-        } catch (err) {
-          alert("Error: " + (err instanceof Error ? err.message : ""));
-        }
-      }
-
-      /**
-       * Saves the review-screen choice and updates only its own field.
-       *
-       * The click already flipped the box, so the request is the only wait:
-       * no table reload. Both notes are in the row and this shows the one
-       * that matches. On failure the box and the note go back to the state
-       * the server still holds. The server invalidates the cached redirect,
-       * so the next scan already follows the new choice.
-       */
-      async function setGated(id, gated, box) {
-        const showNote = (on) => {
-          box.closest(".field").querySelectorAll("[data-gate-note]").forEach((note) => {
-            note.hidden = (note.dataset.gateNote === "on") !== on;
-          });
-        };
-        box.disabled = true;
-        showNote(gated);
-        try {
-          const res = await window.__api("PATCH", "/api/links/" + id, { is_gated: gated });
-          if (!res.ok) throw new Error("Failed");
-        } catch (err) {
-          box.checked = !gated;
-          showNote(!gated);
-          alert("Error: " + (err instanceof Error ? err.message : ""));
-        } finally {
-          box.disabled = false;
-        }
-      }
-
-      // Same update path as toggleLink: PATCH, then repaint this link only. An
-      // emptied field is sent as null so clearing the identifier removes it
-      // rather than storing an empty string that would never match a CRM record.
-      async function saveClientRef(id) {
-        const input = document.getElementById("client-ref-" + id);
-        if (!input) return;
-        const value = input.value.trim();
-        try {
-          const res = await window.__api("PATCH", "/api/links/" + id, {
-            client_ref: value === "" ? null : value,
-          });
-          if (!res.ok) throw new Error("Failed");
-          repaintLink(id, { client_ref: value === "" ? null : value }, "client-ref-" + id);
-          refreshClientsCard();
-        } catch (err) {
-          alert("Error: " + (err instanceof Error ? err.message : ""));
-        }
-      }
-
-      /**
-       * Saves a link's destination from its row field.
-       *
-       * Any link, not only card stock: the short code is what is printed, so
-       * the destination can change at any time without reprinting. An emptied
-       * field is sent as null, which turns the link back into card stock — the
-       * escape hatch for a typo'd URL.
-       *
-       * Not validated here on purpose. The same URL rules apply as on create,
-       * and a second copy of them in the browser is how the two drift apart.
-       *
-       * The row is repainted with the destination as the server stored it
-       * (normalized). On failure nothing is repainted, so the typed value
-       * stays in the field to be corrected.
-       */
-      async function saveDestination(id) {
-        const input = document.getElementById("dest-" + id);
-        if (!input) return;
-        const value = input.value.trim();
-        try {
-          const res = await window.__api("PATCH", "/api/links/" + id, {
-            original_url: value === "" ? null : value,
-          });
-          const body = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(body.error || "Failed");
-          repaintLink(id, { original_url: body.original_url ?? null }, "dest-" + id);
-        } catch (err) {
-          alert("Error: " + (err instanceof Error ? err.message : ""));
-        }
-      }
-
-      /**
-       * Assigns a link to a branch (location), or to none with "".
-       *
-       * The owner column shows the branch and business names, taken from the
-       * branches list the picker was filled from. On failure the picker goes
-       * back to the branch the server still holds.
-       */
-      async function saveBranch(id) {
-        const select = document.getElementById("branch-" + id);
-        if (!select) return;
-        const value = select.value;
-        try {
-          const res = await window.__api("PATCH", "/api/links/" + id, {
-            location_id: value === "" ? null : value,
-          });
-          if (!res.ok) throw new Error("Failed");
-          const branch = (window.__branches || []).find((b) => b.id === value);
-          repaintLink(id, {
-            location_id: value === "" ? null : value,
-            location_name: branch ? branch.name : null,
-            business_name: branch ? branch.business_name : null,
-          }, "branch-" + id);
-        } catch (err) {
-          select.value = select.dataset.current || "";
-          alert("Error: " + (err instanceof Error ? err.message : ""));
-        }
-      }
-
-      /**
-       * Fills every row's branch picker from the branches list.
-       *
-       * Done after the table is in the DOM rather than inside the row template,
-       * so the template stays a pure function of the link (the tests compile
-       * and run it on its own). Options are built with DOM APIs, never with
-       * innerHTML, because branch and business names are typed by a person.
-       */
-      function fillBranchSelects(root = document) {
-        const all = window.__branches || [];
-        const branches = pickableBranches(all, window.__businesses || []);
-        const label = (b) => (b.business_name ? b.business_name + " — " : "") + b.name;
-        root.querySelectorAll('select[id^="branch-"]').forEach((select) => {
-          const current = select.dataset.current || "";
-          select.textContent = "";
-          select.add(new Option("Unassigned", ""));
-          branches.forEach((b) => select.add(new Option(label(b), b.id, false, b.id === current)));
-          // The branches list has not loaded (or failed), but the link HAS a
-          // branch. Without this the picker would show "Unassigned" selected,
-          // and one Save would silently detach the link.
-          // The same holds for a link whose branch was switched off: it stays,
-          // named and marked, until someone picks another.
-          if (current && !branches.some((b) => b.id === current)) {
-            const known = all.find((b) => b.id === current);
-            select.add(new Option(known ? label(known) + " (inactive)" : "Current branch", current, true, true));
-          }
-        });
-      }
-
       /**
        * Loads the tenant's branches (locations, with their business) for the
-       * row pickers, then refills any picker already on screen. Separate from
-       * loadLinks: the list changes when branches are managed, not when a link
-       * is toggled.
+       * row pickers, then tells the Links island, which rebuilds its pickers
+       * from window.__branches. Separate from the links load: the list changes
+       * when branches are managed, not when a link is toggled.
        */
       async function loadBranches() {
         const card = document.getElementById("businesses-body");
@@ -2481,7 +1511,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           console.error("branches failed to load", err);
           if (card) card.innerHTML = '<p class="gate-empty">Could not load businesses.</p>';
         }
-        fillBranchSelects();
+        window.dispatchEvent(new Event("brancheschange"));
       }
 
       /**
@@ -2550,7 +1580,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       /** Reloads everything that shows a business or branch name. */
       function refreshOwnership() {
         loadBranches();
-        loadLinks();
+        if (window.__loadLinks) window.__loadLinks();
       }
 
       function showBusinessesMessage(text, kind) {
@@ -2626,9 +1656,8 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         refreshOwnership();
       }
 
-      // Static and delegated listeners, like the create form's. Not routed
-      // through the links table's data-action switch: these act on businesses
-      // and branches, not on a link row.
+      // Static and delegated listeners: these act on businesses and branches,
+      // not on a link row.
       document.getElementById("add-business").addEventListener("click", addBusiness);
       document.getElementById("businesses-body").addEventListener("click", (e) => {
         const el = e.target.closest("[data-biz-action]");
@@ -2638,124 +1667,6 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         else if (el.dataset.bizAction === "toggle-business") setBusinessActive(el.dataset.businessId, el.dataset.active === "true");
         else if (el.dataset.bizAction === "toggle-branch") setBranchActive(el.dataset.locationId, el.dataset.active === "true");
       });
-
-      /**
-       * The row's Edit button. Opens the same panel the clicks count opens —
-       * destination, branch, review screen — and puts the cursor in the
-       * destination field. Unlike the clicks count it never CLOSES the panel:
-       * pressing Edit on an open row should keep it open.
-       */
-      function openEditor(id, code, e) {
-        e.preventDefault();
-        const row = document.getElementById("metrics-" + id);
-        if (row && row.style.display === "none") showMetrics(id, code, e);
-        const input = document.getElementById("dest-" + id);
-        if (input) input.focus();
-      }
-
-      async function showMetrics(linkId, code, e) {
-        e.preventDefault();
-        const row = document.getElementById("metrics-" + linkId);
-        const isOpen = row.style.display !== "none";
-
-        if (isOpen) {
-          row.style.display = "none";
-          return;
-        }
-
-        row.style.display = "";
-        const countryDiv = document.getElementById("country-" + linkId);
-        const deviceDiv = document.getElementById("device-" + linkId);
-        const sourceDiv = document.getElementById("source-" + linkId);
-        const visitorsDiv = document.getElementById("visitors-" + linkId);
-
-        if (countryDiv.dataset.loaded) return;
-
-        try {
-          const res = await window.__api("GET", "/api/links/" + linkId + "/clicks");
-          if (!res) throw new Error("No response");
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.error || "Server error");
-
-          visitorsDiv.innerHTML = renderVisitors(data);
-
-          // The breakdown keys come from request data (a Referer header can
-          // carry arbitrary text as referrer_source), so they are escaped here
-          // exactly like the link fields are.
-          countryDiv.innerHTML = Object.entries(data.by_country)
-            .sort((a, b) => b[1] - a[1])
-            .map(([k, v]) => \`<div class="metric-row"><span>\${esc(k)}</span><strong>\${esc(v)}</strong></div>\`)
-            .join("") || "<div class='metric-row'>No data</div>";
-
-          deviceDiv.innerHTML = Object.entries(data.by_device)
-            .sort((a, b) => b[1] - a[1])
-            .map(([k, v]) => \`<div class="metric-row"><span>\${esc(k)}</span><strong>\${esc(v)}</strong></div>\`)
-            .join("") || "<div class='metric-row'>No data</div>";
-
-          sourceDiv.innerHTML = Object.entries(data.by_source || {})
-            .sort((a, b) => b[1] - a[1])
-            .map(([k, v]) => \`<div class="metric-row"><span>\${esc(k)}</span><strong>\${esc(v)}</strong></div>\`)
-            .join("") || "<div class='metric-row'>No data</div>";
-
-          countryDiv.dataset.loaded = "1";
-        } catch (err) {
-          countryDiv.innerHTML = "<div class='metric-row'>Error: " + esc(err instanceof Error ? err.message : "Unknown") + "</div>";
-        }
-      }
-
-      /**
-       * Opens the QR modal for a short URL.
-       *
-       * Takes the URL RAW and encodes exactly once, right here, because this
-       * is the only place that builds a query string. The call site used to
-       * encode too, and that second layer is what shipped: the QR image
-       * encoded \`https%3A%2F%2F…\` instead of \`https://…\`, so scanning a sticker
-       * landed nowhere. Two encodes and one decode is not a transformation, it
-       * is a coin flip.
-       *
-       * The displayed text is the raw url, NOT a decoded one. Decoding here
-       * would only exist to undo the call site's encode; with that gone, a
-       * \`decodeURIComponent\` on a plain URL is not a no-op — it throws on a
-       * literal \`%\`.
-       *
-       * This is also what makes the print-sheet handoff honest: #qr-url holds
-       * the same bytes the QR encodes, so the copy button cannot drift.
-       */
-      function showQR(url, e) {
-        e.stopPropagation();
-        document.getElementById("qr-img").src = "https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=" + encodeURIComponent(url);
-        document.getElementById("qr-url").textContent = url;
-        document.getElementById("qr-modal").classList.remove("hidden");
-      }
-
-      async function deleteLink(id) {
-        if (!confirm("Delete this link permanently?")) return;
-        try {
-          const res = await window.__api("DELETE", "/api/links/" + id);
-          if (!res.ok) throw new Error("Failed");
-          loadLinks();
-        } catch (err) {
-          alert("Error: " + (err instanceof Error ? err.message : ""));
-        }
-      }
-
-      async function copyUrl(url, el) {
-        try {
-          await navigator.clipboard.writeText(url);
-          el.textContent = "Copied!";
-          setTimeout(() => { el.textContent = el.dataset.code; }, 1500);
-        } catch {
-          // Fallback for older browsers
-          const input = document.createElement("input");
-          input.value = url;
-          document.body.appendChild(input);
-          input.select();
-          document.execCommand("copy");
-          document.body.removeChild(input);
-          el.textContent = "Copied!";
-          setTimeout(() => { el.textContent = el.dataset.code; }, 1500);
-        }
-      }
     </script>
   `;
 

@@ -29,9 +29,9 @@ describe("mountIslands", () => {
 });
 
 describe("island registry", () => {
-  it("registers the Cards section under the name its placeholder carries", async () => {
+  it("registers each migrated section under the name its placeholder carries", async () => {
     const { ISLANDS } = await import("../src/registry");
 
-    expect(Object.keys(ISLANDS)).toEqual(["cards"]);
+    expect(Object.keys(ISLANDS)).toEqual(["cards", "links"]);
   });
 });

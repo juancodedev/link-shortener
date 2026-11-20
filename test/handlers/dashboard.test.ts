@@ -3,21 +3,23 @@ import { dashboardHandler } from "../../src/handlers/dashboard";
 import { inlineScripts } from "../helpers/inline-scripts";
 
 // ---------------------------------------------------------------------------
-// Stored-XSS regression tests for the dashboard.
+// The served dashboard page.
 //
-// The links table is built client-side: the handler serves an HTML shell whose
-// inline <script> assigns a template string to `tbody.innerHTML`. The server
-// never renders a row itself, so these tests extract the real row template out
-// of the SERVED output and execute it. Asserting against a hand-copied copy of
-// the template would pass while the shipped code stayed vulnerable, which is
-// exactly the regression this file exists to prevent.
+// Most of the dashboard is built client-side by the inline <script> this
+// handler serves, so these tests extract the real functions out of the SERVED
+// output and execute them. Asserting against a hand-copied copy would pass
+// while the shipped code stayed broken.
+//
+// Sections that moved to React islands (odd/tasks/dashboard-react.md) are
+// tested as components in web/test instead: the Links section (table, create
+// form, bulk cards, QR modal) and the print queue in web/test/links and
+// web/test/print-queue.test.ts (T3a/T3b). What stays here for them is the
+// served shell: the mount point, the first paint, and the bridges this page
+// lends the island.
 // ---------------------------------------------------------------------------
 
 const XSS_URL = '<img src=x onerror=alert(1)>';
-// Escapes a JS string literal inside an inline onclick="..." handler.
-const XSS_CODE = "');alert(1)//";
 const XSS_ATTR = '"><img src=x onerror=alert(1)>';
-const ESCAPED_ATTR = "&quot;&gt;&lt;img src=x onerror=alert(1)&gt;";
 
 // ---------------------------------------------------------------------------
 // Helpers: mock Hono context
@@ -44,14 +46,17 @@ async function serve(): Promise<string> {
 }
 
 /**
- * Returns the inline <script> block that owns the links table. The shell's
- * other inline block is the Supabase auth bootstrap and is not a `<script>` with
- * no attributes, so `<script>` matches only the dashboard body.
+ * A statement only the dashboard's own inline <script> block carries (the
+ * readiness gate it creates). The shell's other inline block is the Supabase
+ * auth bootstrap, which resolves the gate but never creates it.
  */
+const CLIENT_SCRIPT_MARKER = "window.__apiReady = new Promise";
+
+/** Returns the dashboard's own inline <script> block. */
 async function clientScript(): Promise<string> {
   const html = await serve();
   const script = inlineScripts(html)[0];
-  if (!script || !script.includes("links-body")) {
+  if (!script || !script.includes(CLIENT_SCRIPT_MARKER)) {
     throw new Error("dashboard client script not found in served HTML");
   }
   return script;
@@ -96,46 +101,6 @@ async function loadEsc(): Promise<(v: unknown) => string> {
 }
 
 /**
- * Compiles the served `renderLinkRow()` (the template `loadLinks` maps every
- * link through) and returns it bound to the served `esc()`.
- */
-async function loadRowRenderer(): Promise<(l: Record<string, unknown>) => string> {
-  return loadClientFunction<(l: Record<string, unknown>) => string>("renderLinkRow");
-}
-
-/** Renders one links-table row through the shipped template. */
-async function renderRow(over: Record<string, unknown> = {}): Promise<string> {
-  const link = {
-    id: "link-uuid",
-    short_code: "abc1234",
-    short_url: "https://short.link/abc1234",
-    original_url: "https://example.com",
-    title: null,
-    client_ref: null,
-    clicks_count: 5,
-    is_active: true,
-    expires_at: null,
-    ...over,
-  };
-  return (await loadRowRenderer())(link);
-}
-
-/**
- * Compiles the `([k, v]) => ...` mapper used by the metric breakdown
- * renderers. All three renderers (country/device/source) share its shape; the
- * tests assert on the shared source plus the number of call sites.
- */
-async function loadMetricMapper(): Promise<(entry: [string, number]) => string> {
-  const script = await clientScript();
-  const match = script.match(/\.map\(\(\[k, v\]\) => (`[\s\S]*?`)\)/);
-  if (!match) throw new Error("metric breakdown mapper not found");
-  const esc = await loadEsc();
-  return new Function("esc", `return (([k, v]) => ${match[1]});`)(esc) as (
-    entry: [string, number],
-  ) => string;
-}
-
-/**
  * Compiles a named client-side function out of the SERVED script, bound to the
  * served `esc()`. Used for the Phase 2 renderers, which are deliberately their
  * own functions rather than the shared breakdown mapper.
@@ -150,6 +115,10 @@ async function loadClientFunction<T>(name: string): Promise<T> {
 // Shell contract
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Shell contract
+// ---------------------------------------------------------------------------
+
 describe("dashboardHandler shell", () => {
   it("serves HTML with a text/html content type", async () => {
     const response = await dashboardHandler(mockContext());
@@ -158,170 +127,35 @@ describe("dashboardHandler shell", () => {
     expect(response.headers.get("Content-Type")).toContain("text/html");
   });
 
-  it("serves the dashboard markup and the empty table body", async () => {
+  it("serves the Links section's content as the React island's mount point, titled before the bundle runs", async () => {
     const html = await serve();
 
-    expect(html).toContain('<tbody id="links-body"></tbody>');
-    expect(html).toContain("Your Links");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Class A — HTML context: escaping
-// ---------------------------------------------------------------------------
-
-describe("links table — HTML-context escaping", () => {
-  it("never emits a raw <img when original_url carries markup", async () => {
-    const row = await renderRow({ original_url: XSS_URL });
-
-    // The `<` is neutralised, so no element is ever created. The literal text
-    // "onerror=" legitimately survives as escaped text content — asserting its
-    // absence would be asserting an escaping artifact, not the invariant.
-    expect(row).not.toContain("<img");
-    expect(row).toContain("&lt;img");
-  });
-
-  it("escapes the URL in the title attribute as well as the text node", async () => {
-    // XSS_ATTR opens with a quote: unescaped it would close the title
-    // attribute early and let the attacker add attributes of their own.
-    const row = await renderRow({ original_url: XSS_ATTR });
-
-    expect(row).not.toContain('"><img');
-    // Every render position escaped: the title attribute, the text node, and
-    // the panel's editable destination field.
-    expect(row.split(`title="${ESCAPED_ATTR}"`).length - 1).toBe(1);
-    expect(row.split(`value="${ESCAPED_ATTR}"`).length - 1).toBe(1);
-    expect(row.split(ESCAPED_ATTR).length - 1).toBe(3);
-  });
-
-  it("escapes client_ref in the input value", async () => {
-    const row = await renderRow({ client_ref: XSS_ATTR });
-
-    expect(row).not.toContain('<img src=x');
-    expect(row).toContain("&quot;&gt;&lt;img");
-  });
-
-  it("renders null and undefined fields as empty rather than 'null'", async () => {
-    const esc = await loadEsc();
-
-    expect(esc(null)).toBe("");
-    expect(esc(undefined)).toBe("");
-    const row = await renderRow({ client_ref: null, original_url: "https://example.com" });
-    expect(row).not.toContain("null");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Class B — JavaScript context: no inline handlers at all
-// ---------------------------------------------------------------------------
-
-describe("links table — no inline event handlers", () => {
-  it("the row template source contains no onclick attribute", async () => {
-    const template = extractFunction(await clientScript(), "renderLinkRow");
-
-    expect(template).not.toContain("onclick");
-    expect(template).not.toMatch(/\bon[a-z]+\s*=/);
-  });
-
-  it("renders rows with no inline handler attribute at all", async () => {
-    const row = await renderRow();
-
-    expect(row).not.toContain("onclick");
-    expect(row).not.toMatch(/\son[a-z]+\s*=\s*["']/);
-  });
-
-  it("delivers short_code only via data-* attributes, never into a handler", async () => {
-    const row = await renderRow({ short_code: XSS_CODE });
-
-    expect(row).not.toContain("onclick");
-    // Escaped in the attribute, so the payload cannot reopen a JS string.
-    expect(row).not.toContain(XSS_CODE);
-    expect(row).toContain("data-code=");
-  });
-
-  it("marks every interactive control with a data-action for delegation", async () => {
-    const row = await renderRow();
-
-    const actions = [...row.matchAll(/data-action="([^"]+)"/g)].map((m) => m[1]);
-    expect(actions.sort()).toEqual(
-      ["copy", "delete", "edit", "metrics", "qr", "save-branch", "save-client-ref", "save-destination", "toggle", "toggle-gate"].sort(),
+    // The <section> stays server-rendered (showSection and the print rules
+    // act on it); everything inside it is the island's.
+    expect(html).toMatch(
+      /<section class="dash-section" data-section="links">\s*<!--[\s\S]*?-->\s*<div id="links-root" data-island="links" data-link-limit="\d+">\s*<div class="card no-print" id="links-card">/,
     );
+    expect(html).toContain("Your Links");
+    // The table itself is the island's (web/src/links); the server ships none.
+    expect(html).not.toContain('id="links-table"');
+    expect(html).not.toContain('id="links-body"');
   });
 
-  it("binds one delegated click listener on the stable #links-body ancestor", async () => {
-    const script = await clientScript();
+  it("serves no Links markup the island now draws: no create form, no bulk or QR modal", async () => {
+    const html = await serve();
 
-    expect(script).toMatch(/getElementById\("links-body"\)\s*\n?\s*\.addEventListener\("click"/);
-    expect(script).toContain('closest("[data-action]")');
-    // Every action is dispatched from the dataset, never from a string literal.
-    for (const action of ["copy", "qr", "metrics", "edit", "save-client-ref", "save-destination", "save-branch", "toggle", "toggle-gate", "delete"]) {
-      expect(script).toMatch(new RegExp(`case "${action}":`));
+    // web/test/links/create.test.tsx, bulk.test.tsx and qr.test.tsx pin them.
+    for (const id of ["create-form", "url", "slug", "gated", "create-msg", "result", "short-url", "open-bulk", "bulk-modal", "bulk-count", "bulk-label", "bulk-gated", "qr-modal", "qr-img", "qr-url", "copy-print-sheet"]) {
+      expect(html, id).not.toContain(`id="${id}"`);
     }
-  });
-
-  it("keeps the existing client-side function signatures intact", async () => {
-    const script = await clientScript();
-
-    expect(script).toMatch(/function copyUrl\(url, el\)/);
-    expect(script).toMatch(/function showQR\(url, e\)/);
-    expect(script).toMatch(/async function toggleLink\(id, active\)/);
-    expect(script).toMatch(/async function saveClientRef\(id\)/);
-    expect(script).toMatch(/async function showMetrics\(linkId, code, e\)/);
-    expect(script).toMatch(/async function deleteLink\(id\)/);
-  });
-
-  it("preserves the copy-to-clipboard visual feedback via dataset.code", async () => {
-    const script = await clientScript();
-
-    expect(script).toContain("el.textContent = \"Copied!\"");
-    expect(script).toContain("el.textContent = el.dataset.code");
+    // And with them went the last inline handlers: an attribute body is
+    // handed to the JS engine, where esc()'s entities terminate nothing.
+    expect(html).not.toMatch(/<[^>]+\sonclick=/i);
   });
 });
 
 // ---------------------------------------------------------------------------
-// Metric breakdown renderers
-// ---------------------------------------------------------------------------
-
-describe("metric breakdown renderers", () => {
-  it("escapes the breakdown key before it reaches innerHTML", async () => {
-    const row = (await loadMetricMapper())([XSS_URL, 3]);
-
-    expect(row).not.toContain("<img");
-    expect(row).toContain("&lt;img");
-  });
-
-  it("escapes the breakdown value as well as the key", async () => {
-    const mapper = await loadMetricMapper();
-    const row = mapper(["US", XSS_URL]);
-
-    expect(row).not.toContain("<img");
-    expect(row).toContain("&lt;img");
-  });
-
-  it("routes all three breakdown panels through the escaping mapper", async () => {
-    const script = await clientScript();
-
-    // by_country, by_device, by_source — three call sites, one mapper shape.
-    expect(script.match(/\.map\(\(\[k, v\]\) => `[\s\S]*?`\)/g)).toHaveLength(3);
-    for (const field of ["by_country", "by_device", "by_source"]) {
-      // by_source is read defensively as `data.by_source || {}`
-      expect(script).toContain(`Object.entries(data.${field}`);
-    }
-  });
-
-  it("escapes err.message before it is concatenated into innerHTML", async () => {
-    const script = await clientScript();
-    const render = script.match(
-      /countryDiv\.innerHTML = "<div class='metric-row'>Error: "[\s\S]*?<\/div>";/,
-    )?.[0];
-
-    expect(render).toBeDefined();
-    expect(render).toContain("esc(");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// The esc() helper itself
+// The esc() helper itself (still used by the cards this page renders)
 // ---------------------------------------------------------------------------
 
 describe("esc() helper", () => {
@@ -351,6 +185,12 @@ describe("esc() helper", () => {
 
     expect(esc(42)).toBe("42");
     expect(esc(0)).toBe("0");
+  });
+  it("renders null and undefined as empty rather than 'null'", async () => {
+    const esc = await loadEsc();
+
+    expect(esc(null)).toBe("");
+    expect(esc(undefined)).toBe("");
   });
 });
 
@@ -437,24 +277,6 @@ describe("visitor figures — the caveat is in the rendered markup", () => {
     expect(text).toMatch(/UNDER-report/i);
   });
 
-  it("repeats the caveat inside each link's metrics panel, next to the numbers", async () => {
-    // The static note is above the table; the numbers are inside the expander.
-    // Someone who expands a row without scrolling up must still meet the caveat.
-    const row = await renderRow();
-
-    expect(row).toContain(VISITOR_ESTIMATE_CAVEAT);
-    // It sits in the same panel as the two figures, not somewhere off in a footer.
-    const panel = row.slice(row.indexOf("Visitors (estimate)"));
-    expect(panel).toContain("visitors-");
-    expect(panel).toContain(VISITOR_ESTIMATE_CAVEAT);
-  });
-
-  it("labels the panel as an estimate in its own heading", async () => {
-    const row = await renderRow();
-
-    // The heading is what is visible at a glance; the caveat is the detail.
-    expect(row).toContain("Visitors (estimate)");
-  });
 
   it("shows the store-level rollup behind the same caveat", async () => {
     const region = await staticRegion();
@@ -465,89 +287,6 @@ describe("visitor figures — the caveat is in the rendered markup", () => {
     // that lives inside the inline script.
     const card = region.slice(region.indexOf('id="clients-card"'));
     expect(card).toContain(VISITOR_ESTIMATE_CAVEAT);
-  });
-});
-
-describe("renderVisitors", () => {
-  type Render = (data: Record<string, unknown>) => string;
-
-  it("renders both figures when the API supplies them", async () => {
-    const render = await loadClientFunction<Render>("renderVisitors");
-
-    const html = render({
-      unique_visitors: 30,
-      sessions: 42,
-      unique_window: "1 day",
-      session_window: "30 minutes",
-    });
-
-    expect(html).toContain("30");
-    expect(html).toContain("42");
-  });
-
-  it("gives the two figures identical markup — no hierarchy between them", async () => {
-    const render = await loadClientFunction<Render>("renderVisitors");
-
-    const html = render({
-      unique_visitors: 30,
-      sessions: 42,
-      unique_window: "1 day",
-      session_window: "30 minutes",
-    });
-
-    const rows = [...html.matchAll(/<div class="metric-row">[\s\S]*?<\/div>/g)].map((m) => m[0]);
-    expect(rows).toHaveLength(2);
-
-    // Same container, same label element, same value element, same ordering of
-    // label-then-value. If one figure were ever rendered as <h4> and the other
-    // as <strong>, or given its own class, this fails.
-    for (const row of rows) {
-      expect(row).toContain('<span>');
-      expect(row).toContain("<strong>");
-      expect(row).toContain('class="metric-row"');
-    }
-    // Neither is marked up as primary, secondary, or a footnote.
-    expect(html).not.toMatch(/class="[^"]*(primary|secondary|highlight|subtle)/i);
-  });
-
-  it("labels each figure with the window the API actually used", async () => {
-    const render = await loadClientFunction<Render>("renderVisitors");
-
-    const html = render({
-      unique_visitors: 30,
-      sessions: 42,
-      unique_window: "7 days",
-      session_window: "15 minutes",
-    });
-
-    // Read from the response, not hardcoded here — otherwise the label can
-    // describe a window the SQL no longer uses.
-    expect(html).toContain("7 days");
-    expect(html).toContain("15 minutes");
-  });
-
-  it("reports zero rather than undefined when a figure is absent", async () => {
-    const render = await loadClientFunction<Render>("renderVisitors");
-
-    const html = render({});
-
-    // "undefined" next to a real number reads as a measurement.
-    expect(html).not.toContain("undefined");
-    expect(html.match(/<strong>0<\/strong>/g)).toHaveLength(2);
-  });
-
-  it("escapes the window labels it interpolates", async () => {
-    const render = await loadClientFunction<Render>("renderVisitors");
-
-    const html = render({
-      unique_visitors: 1,
-      sessions: 1,
-      unique_window: XSS_URL,
-      session_window: XSS_URL,
-    });
-
-    expect(html).not.toContain("<img");
-    expect(html).toContain("&lt;img");
   });
 });
 
@@ -665,7 +404,7 @@ describe("printable report", () => {
   it("marks the links table as not part of the report and offers a print button", async () => {
     const html = await serve();
 
-    expect(html).toContain('<div class="card no-print" id="links-card">');
+    expect(html).toMatch(/<div class="card no-print" id="links-card"[^>]*>/);
     expect(html).toContain('id="print-report"');
     expect(codeOnly(await clientScript())).toContain("window.print()");
   });
@@ -682,58 +421,22 @@ describe("hourly traffic card", () => {
   });
 });
 
-describe("Phase 2 markup did not regress the escaping and delegation guards", () => {
-  it("keeps the metrics row free of inline event handlers", async () => {
-    // The visitors box was added inside the row template — the exact place
-    // Phase 1.5 removed the injected-JS vulnerability from.
-    const row = await renderRow();
-
-    expect(row).not.toContain("onclick");
-    expect(row).not.toMatch(/\son[a-z]+\s*=\s*["']/);
-  });
-
-  it("adds no new delegated actions to the links table", async () => {
-    const row = await renderRow();
-
-    const actions = [...row.matchAll(/data-action="([^"]+)"/g)].map((m) => m[1]);
-    expect(actions.sort()).toEqual(
-      ["copy", "delete", "edit", "metrics", "qr", "save-branch", "save-client-ref", "save-destination", "toggle", "toggle-gate"].sort(),
-    );
-  });
-
-  it("keeps exactly three breakdown panels on the shared mapper", async () => {
-    const script = await clientScript();
-
-    // The visitor pair has its own renderer precisely so it does not inflate
-    // this count.
-    expect(script.match(/\.map\(\(\[k, v\]\) => `[\s\S]*?`\)/g)).toHaveLength(3);
-  });
-});
-
 // ---------------------------------------------------------------------------
-// The loadLinks / auth-bootstrap ordering
+// The auth bootstrap and the readiness gate
 //
 // The dashboard serves TWO inline scripts and they do not run in a
 // cooperative order:
 //
-//   <script>  (container)   defines loadLinks, wires the create form
+//   <script>  (container)   creates window.__apiReady, wires the page
 //   <script src=...supabase>
 //   <script>  (shell)       async IIFE -> await sb.auth.getSession()
-//                           -> defines window.__api -> loadLinks()
+//                           -> defines window.__api -> resolves the gate
+//   <script type=module>    the React islands; the Links island awaits the
+//                           gate, then loads (web/test/links/loading.test.tsx)
 //
-// The shell bootstrap suspends on a network round-trip, so anything the
-// container script does at parse time runs while window.__api does not yet
-// exist. A parse-time `loadLinks()` there therefore reached
-// `window.__api("GET", ...)` and threw a TypeError that loadLinks' own catch
-// turned into "Could not load links. window.__api is not a function".
-//
-// There is no DOM in the workers pool, so these tests do not simulate clicks or
-// run a live page. They work on the SERVED script two ways: the ordering
-// behaviour is exercised by executing the shipped `loadLinks` against a stub
-// `window`/`document` — which is where the real defect lived, inside the
-// function rather than in a click handler — and the parse-time wiring is
-// asserted on the served source, because that part genuinely is about the
-// order of statements in the document.
+// The shell bootstrap suspends on a network round-trip, so anything that runs
+// before it resolves finds no window.__api. Loading the links at parse time
+// once rendered "Could not load links. window.__api is not a function".
 // ---------------------------------------------------------------------------
 
 type ElementStub = {
@@ -743,21 +446,6 @@ type ElementStub = {
   dataset: Record<string, unknown>;
   addEventListener: (type: string, handler: unknown) => void;
 };
-
-type Request = { method: string; path: string };
-
-interface Harness {
-  /** The shipped loadLinks, bound to the stubs below. */
-  loadLinks: () => Promise<void>;
-  /** Exactly what the shell bootstrap calls once window.__api exists. */
-  resolveGate: () => void;
-  requests: Request[];
-  el: (id: string) => ElementStub;
-  win: Record<string, any>;
-  /** Link ids whose panel loadLinks reopened through showMetrics. */
-  reopened: string[];
-}
-
 function stubElement(): ElementStub {
   return {
     style: { display: "" },
@@ -765,90 +453,6 @@ function stubElement(): ElementStub {
     innerHTML: "",
     dataset: {},
     addEventListener: () => {},
-  };
-}
-
-/**
- * The elements this page serves already hidden, per its own inline styles:
- * #links-table, #links-empty and #clients-card all carry display:none and are
- * revealed by loadLinks once it has something to show. Without seeding that, a
- * stub that starts blank could not tell "loadLinks revealed nothing" apart from
- * "loadLinks revealed the empty state" — which is the whole assertion.
- */
-const SERVED_HIDDEN_IDS = ["links-table", "links-empty", "clients-card"];
-
-/**
- * Compiles the served `loadLinks()` against a stub DOM and an EMPTY window.
- *
- * The stub document returns a fresh element per id, so loadLinks runs its real
- * body — real assignments, real try/catch — without a browser. `window.__api`
- * is deliberately left undefined: that is exactly the state the container
- * script sees while the shell bootstrap is still awaiting getSession().
- */
-async function mountDashboard(): Promise<Harness> {
-  const script = await clientScript();
-  const esc = await loadEsc();
-  const renderClients = await loadClientFunction<(c: unknown) => string>("renderClients");
-
-  // The gate statement is served source, not a stand-in. It is applied only if
-  // the page actually creates one: on the pre-fix page there is no gate, and
-  // the harness must still be able to run loadLinks so the test fails on its
-  // own assertion — the rendered production error — instead of on a missing
-  // fixture. That keeps the RED evidence about the defect rather than the rig.
-  const gateSrc = script.match(/\n\s*(window\.__apiReady = new Promise\(.*\);)\n/)?.[1];
-
-  const elements: Record<string, ElementStub> = {};
-  const el = (id: string): ElementStub => {
-    if (!elements[id]) {
-      elements[id] = stubElement();
-      if (SERVED_HIDDEN_IDS.includes(id)) elements[id].style.display = "none";
-    }
-    return elements[id];
-  };
-  const win: Record<string, any> = {};
-  const requests: Request[] = [];
-  const reopened: string[] = [];
-
-  if (gateSrc) new Function("window", gateSrc)(win);
-
-  // extractFunction() matches on `function loadLinks(`, which drops the `async`
-  // keyword, so the prefix is restored here — the shipped function is async and
-  // its body awaits.
-  const loadLinks = new Function(
-    "window",
-    "document",
-    "esc",
-    "renderClients",
-    "renderLinkRow",
-    "fillBranchSelects",
-    "showMetrics",
-    `return async ${extractFunction(script, "loadLinks")}`,
-  )(
-    win,
-    { getElementById: el },
-    esc,
-    renderClients,
-    await loadRowRenderer(),
-    () => {},
-    (id: string) => reopened.push(id),
-  ) as () => Promise<void>;
-
-  return {
-    loadLinks,
-    // Optional call: a page without a gate must not hang this harness.
-    resolveGate: () => win.__apiReadyResolve?.(),
-    requests,
-    el,
-    win,
-    reopened,
-  };
-}
-
-/** A window.__api that records its calls and answers with empty collections. */
-function recordingApi(requests: Request[]) {
-  return async (method: string, path: string) => {
-    requests.push({ method, path });
-    return { ok: true, json: async () => [] };
   };
 }
 
@@ -891,200 +495,25 @@ async function runAuthBootstrap(session: unknown) {
   };
 }
 
-describe("loadLinks ordering against the auth bootstrap", () => {
-  it("does not throw or request anything when invoked before the session resolves", async () => {
-    const dash = await mountDashboard();
-
-    // Parse-time ordering: loadLinks runs, window.__api does not exist yet.
-    const pending = dash.loadLinks();
-
-    // The defect surfaced as a rendered error, because loadLinks swallows the
-    // TypeError into the empty state. That message is the production symptom.
-    expect(dash.requests).toHaveLength(0);
-    expect(dash.el("links-empty").textContent).toBe("");
-    expect(dash.el("links-empty").style.display).toBe("none");
-
-    // And it is still waiting rather than having silently failed.
-    dash.win.__api = recordingApi(dash.requests);
-    dash.resolveGate();
-    await pending;
-
-    // The load it deferred actually happens, once the API is available.
-    //
-    // Asserted by SHAPE rather than by endpoint list, because the property
-    // under test is the ordering and not the number of requests: the same
-    // invariant has to hold for the one-request form of loadLinks that predates
-    // the client_ref rollup getting its own URL. The shipped endpoint set is
-    // pinned separately below.
-    expect(dash.requests.length).toBeGreaterThan(0);
-    for (const request of dash.requests) {
-      expect(request.method).toBe("GET");
-      expect(request.path).toMatch(/^\/api\//);
-    }
-    // The load ran to completion rather than parking half-rendered.
-    expect(dash.el("link-count").textContent).toBe(0);
-    expect(dash.el("links-loading").style.display).toBe("none");
-  });
-
-  it("uses whatever window.__api is bound at resolve time, not one captured early", async () => {
-    const dash = await mountDashboard();
-
-    const pending = dash.loadLinks();
-    // Bound AFTER loadLinks was invoked and while it was suspended.
-    dash.win.__api = recordingApi(dash.requests);
-    dash.resolveGate();
-    await pending;
-
-    // Nothing is requested until the late-bound helper is actually called, so
-    // a request here can only have come through the binding made after the
-    // invocation. Zero would mean the deferred load never ran.
-    expect(dash.requests.length).toBeGreaterThan(0);
-    expect(dash.el("links-empty").textContent).toBe("");
-  });
-
-  it("loads normally for a caller that runs after the gate is already open", async () => {
-    const dash = await mountDashboard();
-    dash.win.__api = recordingApi(dash.requests);
-    dash.resolveGate();
-    await Promise.resolve();
-
-    await dash.loadLinks();
-
-    // The gate adds a microtask to an already-open path; it does not swallow
-    // the load. This is the case the four in-handler refreshes depend on.
-    expect(dash.requests.length).toBeGreaterThan(0);
-    expect(dash.el("links-loading").style.display).toBe("none");
-  });
-
-  it("issues the shipped endpoint set once the gate opens", async () => {
-    // The contract itself: the links collection, the client_ref rollup, and
-    // the review-gate panel, fetched together. Pinned here rather than inside
-    // the ordering tests so those stay independent of how many endpoints
-    // loadLinks asks for.
-    const dash = await mountDashboard();
-    dash.win.__api = recordingApi(dash.requests);
-
-    const pending = dash.loadLinks();
-    dash.resolveGate();
-    await pending;
-
-    expect(dash.requests.map((r) => `${r.method} ${r.path}`)).toEqual([
-      "GET /api/links",
-      "GET /api/clients/metrics",
-      "GET /api/review-gate/metrics",
-    ]);
-  });
-
-  it("waits on the gate before the first request, whatever the endpoint count", async () => {
-    const src = extractFunction(await clientScript(), "loadLinks");
-
-    const gateAt = src.indexOf("__apiReady");
-    const firstRequestAt = src.indexOf("window.__api(");
-
-    expect(gateAt).toBeGreaterThan(-1);
-    expect(firstRequestAt).toBeGreaterThan(-1);
-    // The gate is awaited once, ahead of every request in the function. That
-    // ordering — not a particular number of endpoints — is what makes the fix
-    // hold for BOTH the one-request form of loadLinks (links only, pre-Phase 2)
-    // and the two-request form shipped today.
-    expect(gateAt).toBeLessThan(firstRequestAt);
-    // Guarded, so loadLinks stays safe if it is ever invoked in a context where
-    // the container script did not create the gate.
-    expect(src).toMatch(/if \(window\.__apiReady\) await window\.__apiReady;/);
-  });
-});
-
-describe("loadLinks refresh after an edit", () => {
-  const LINK = {
-    id: "abc",
-    short_code: "abc",
-    short_url: "https://x.test/abc",
-    original_url: "https://example.com",
-    is_active: true,
-  };
-
-  /** Answers /api/links with one link; `hold` parks every request until released. */
-  function linkApi(requests: Request[], hold?: Promise<void>) {
-    return async (method: string, path: string) => {
-      requests.push({ method, path });
-      if (hold) await hold;
-      return { ok: true, json: async () => (path === "/api/links" ? [LINK] : []) };
-    };
-  }
-
-  it("keeps the table on screen and reopens the edited panel", async () => {
-    const dash = await mountDashboard();
-    dash.win.__api = linkApi(dash.requests);
-    dash.resolveGate();
-    await dash.loadLinks();
-    expect(dash.el("links-table").style.display).toBe("");
-
-    // The owner had the editing panel of "abc" open; "def" was closed.
-    (dash.el("links-body") as any).querySelectorAll = () => [
-      { id: "metrics-abc", style: { display: "" } },
-      { id: "metrics-def", style: { display: "none" } },
-    ];
-
-    let release = () => {};
-    dash.win.__api = linkApi(dash.requests, new Promise<void>((r) => { release = r; }));
-    const pending = dash.loadLinks();
-    await Promise.resolve();
-
-    // Mid-refresh the table must not collapse: collapsing it is what threw
-    // the owner back up the page after every Save.
-    expect(dash.el("links-table").style.display).toBe("");
-    expect(dash.el("links-loading").style.display).toBe("none");
-
-    release();
-    await pending;
-
-    expect(dash.el("links-table").style.display).toBe("");
-    expect(dash.reopened).toEqual(["abc"]);
-  });
-
-  it("still shows the loading state on the first load", async () => {
-    const dash = await mountDashboard();
-    let release = () => {};
-    dash.win.__api = linkApi(dash.requests, new Promise<void>((r) => { release = r; }));
-    dash.resolveGate();
-    const pending = dash.loadLinks();
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(dash.el("links-loading").style.display).toBe("");
-    expect(dash.el("links-table").style.display).toBe("none");
-
-    release();
-    await pending;
-    expect(dash.el("links-table").style.display).toBe("");
-    expect(dash.reopened).toEqual([]);
-  });
-});
-
 describe("the dashboard script never triggers a load at parse time", () => {
-  it("never calls loadLinks from the script's top-level wiring", async () => {
+  it("reloads the Links island only from handlers, never from the script's top-level wiring", async () => {
     const script = await clientScript();
 
-    // Matched as whole STATEMENTS at line start, so the prose beside the gate
-    // is free to name loadLinks() while explaining why it no longer calls it.
-    //
-    // Indentation carries the information here: this served script indents its
-    // top-level statements by exactly six spaces, and every call that lives
-    // inside a function or an event handler sits deeper. A bare loadLinks()
-    // statement at the parse-time indentation is exactly the regression — it
-    // ran before the session resolved and before window.__api existed.
+    // Matched as whole STATEMENTS. This served script indents its top-level
+    // statements by exactly six spaces; every call inside a function or an
+    // event handler sits deeper. A call at the parse-time indentation would
+    // run before the session resolved and before window.__api existed.
     const TOP_LEVEL_INDENT = 6;
-    const statements = [...script.matchAll(/^([ \t]*)loadLinks\(\);[ \t]*$/gm)].map(
+    const statements = [...script.matchAll(/^([ \t]*)if \(window\.__loadLinks\) window\.__loadLinks\(\);[ \t]*$/gm)].map(
       (m) => m[1].length,
     );
 
-    // One call per handler that reloads the table: create form submit, bulk
-    // create, delete, refreshOwnership (a business or branch changed) and
-    // repaintLink's fallback when the row is not on screen. Every field save
-    // repaints its own row instead. A parse-time call anywhere pushes this
-    // to six.
-    expect(statements).toHaveLength(5);
+    // Only refreshOwnership (a business or branch changed) is left. The
+    // create form, bulk cards, delete and the field saves live in the island
+    // and reload through its own load.
+    expect(statements).toHaveLength(1);
     expect(statements.every((indent) => indent > TOP_LEVEL_INDENT)).toBe(true);
+    expect(codeOnly(script)).not.toMatch(/\bloadLinks\(/);
   });
 
   it("creates the readiness gate in the container script, before the auth script", async () => {
@@ -1114,23 +543,20 @@ describe("the auth bootstrap gates its own load", () => {
     expect(apiTypeAtResolve()).toBe("function");
   });
 
-  it("keeps its guarded loadLinks call after the resolve", async () => {
+  it("leaves the links load to the island, and still boots the branches after the resolve", async () => {
     const html = await serve();
     const auth = html.slice(html.indexOf("<script src="));
+    const iife = auth.slice(0, auth.indexOf("})();"));
 
-    // Matched as the whole statement, so the explanatory comment above it
-    // cannot satisfy — or break — the ordering assertion.
-    const call = 'if (typeof loadLinks === "function") loadLinks();';
-    const callAt = auth.indexOf(call);
-    const resolveAt = auth.indexOf("window.__apiReadyResolve?.()");
-    const helperAt = auth.indexOf("window.__api = async");
-
-    expect(callAt).toBeGreaterThan(-1);
-    expect(resolveAt).toBeGreaterThan(-1);
-    // The gate opens after the helper exists, not merely after the session.
-    expect(helperAt).toBeLessThan(resolveAt);
-    // And before the bootstrap's own load, so nothing is left waiting.
-    expect(resolveAt).toBeLessThan(callAt);
+    // The island loads itself once the gate opens; a call here too would load
+    // the table twice.
+    expect(codeOnly(iife)).not.toContain("loadLinks");
+    const resolveAt = iife.indexOf("window.__apiReadyResolve?.()");
+    const helperAt = iife.indexOf("window.__api = async");
+    const branchesAt = iife.indexOf('if (typeof loadBranches === "function") loadBranches();');
+    expect(helperAt).toBeGreaterThan(-1);
+    expect(resolveAt).toBeGreaterThan(helperAt);
+    expect(branchesAt).toBeGreaterThan(resolveAt);
   });
 
   it("redirects without opening the gate or defining the api helper", async () => {
@@ -1192,8 +618,8 @@ describe("dashboard — tenant switcher", () => {
     expect(await script()).toContain("t.role");
   });
 
-  // __api calls the picker synchronously on a 409, and loadLinks runs at the end
-  // of the same IIFE. Defined later, it is undefined at the moment of call.
+  // __api calls the picker synchronously on a 409, and the boot loads run at
+  // the end of the same IIFE. Defined later, it is undefined at the moment of call.
   it("defines the picker before any API call can reach it", async () => {
     const src = await script();
     expect(src.indexOf("__showTenantPicker = function")).toBeGreaterThan(-1);
@@ -1299,553 +725,41 @@ describe("the dashboard declares the esbuild runtime its injected panel calls", 
 });
 
 // ---------------------------------------------------------------------------
-// The QR encoding guard.
+// The api helper's auth contract
 //
-// The QR image is fetched from a third-party service with the URL as a query
-// parameter, so the URL gets percent-encoded for transport. The service decodes
-// that parameter once and encodes whatever it finds inside the QR image.
-//
-// That makes the round trip exact only if the payload is encoded ONCE. The
-// handler encoded twice — once at the click handler and again inside showQR —
-// so the image encoded `https%3A%2F%2F...` and scanning a sticker led nowhere.
-// The bug was invisible in the UI: the caption under the image decoded its way
-// back to a correct-looking URL, so the only place the wrong bytes appeared was
-// the one place that mattered.
-//
-// These tests drive the SERVED click handler against the SERVED showQR and read
-// the query parameter the way the service does, so the assertion is about the
-// bytes the QR will actually carry.
+// The Links island's requests (bulk cards and their print sheet included,
+// web/test/links/bulk.test.tsx) all go through window.__api, so the helper
+// itself has to keep carrying the whole contract.
 // ---------------------------------------------------------------------------
 
-const SHORT_URL = "https://shorter.juancode.dev/X4tonhH";
-
-describe("the QR image encodes the short URL, not its encoded form", () => {
-  /**
-   * Drives the REAL click handler against the REAL showQR and reports the bytes
-   * the QR image will carry.
-   *
-   * Both halves matter. The double encode was split across them — the click
-   * handler encoded, and showQR encoded again — so testing showQR in isolation
-   * passes against the shipped bug. Only the whole path, handler included,
-   * shows the payload the QR service actually receives.
-   */
-  async function clickQr(rawUrl: string) {
-    const script = await clientScript();
-
-    const written: Record<string, any> = {
-      "qr-img": { src: "" },
-      "qr-url": { textContent: "" },
-      "qr-modal": { classList: { remove: () => {} } },
-    };
-    const document = { getElementById: (id: string) => written[id] };
-
-    // The other actions are never reached, so their helpers are deliberately
-    // absent — an undefined identifier only throws on the branch that uses it.
-    // eslint-disable-next-line no-new-func
-    const onLinksTableClick = new Function(
-      "document",
-      `${extractFunction(script, "showQR")}\n${extractFunction(script, "onLinksTableClick")}\nreturn onLinksTableClick;`,
-    )(document);
-
-    const el = { dataset: { action: "qr", url: rawUrl } };
-    onLinksTableClick({
-      target: { closest: (sel: string) => (sel === "[data-action]" ? el : null) },
-      // Forwarded verbatim to showQR, which stops the row's own click handler.
-      stopPropagation: () => {},
-    });
-
-    return {
-      // Exactly what the QR service receives as `data`, after its own decode.
-      qrPayload: new URL(written["qr-img"].src).searchParams.get("data"),
-      caption: written["qr-url"].textContent,
-      rawSrc: written["qr-img"].src,
-    };
-  }
-
-  it("round-trips a plain short URL through the query parameter", async () => {
-    const { qrPayload } = await clickQr(SHORT_URL);
-    expect(qrPayload).toBe(SHORT_URL);
-  });
-
-  it("shows the same bytes the QR encodes", async () => {
-    // The print-sheet handoff reads #qr-url. If the caption and the payload can
-    // disagree, the owner copies one string and prints a QR carrying another.
-    const { qrPayload, caption } = await clickQr(SHORT_URL);
-    expect(caption).toBe(qrPayload);
-  });
-
-  it("still encodes reserved characters so the query parameter survives", async () => {
-    // One layer of encoding is not the same as none: a bare `&` or `#` in the
-    // payload would terminate the parameter or start a fragment.
-    const awkward = "https://shorter.juancode.dev/a?b=1&c=2#frag";
-    const { qrPayload, rawSrc } = await clickQr(awkward);
-
-    expect(qrPayload).toBe(awkward);
-    expect(rawSrc).toContain("%26");
-  });
-
-  it("does not double-encode at the click handler", async () => {
-    // The regression, stated at the source: the payload is already encoded by
-    // the time showQR encodes it a second time.
-    const script = await clientScript();
-    expect(script).not.toMatch(/showQR\(\s*encodeURIComponent/);
-  });
-
-  it("never decodes in showQR, which would throw on a literal %", async () => {
-    const src = extractFunction(await clientScript(), "showQR");
-    expect(src).not.toContain("decodeURIComponent");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Creating card stock from the form (T4 UI)
-//
-// The API can create a destination-less link. If the form still says
-// `required`, that capability is unreachable by the person who needs it, and
-// the API is right for no one. These tests pin the two halves of the form —
-// that the browser does not block an empty destination, and that the handler
-// omits the key rather than sending a blank one.
-// ---------------------------------------------------------------------------
-
-describe("the create form can manufacture card stock", () => {
-  it("does not mark the destination as required", async () => {
+describe("the api helper", () => {
+  it("carries the bearer token and the tenant on every request", async () => {
+    // Asserted against the WHOLE served page: __api lives in the shell's
+    // bootstrap block, not in clientScript().
     const html = await serve();
 
-    // `required` would block the exact flow this feature exists for, in the
-    // one place the owner actually types.
-    expect(html).not.toMatch(/<input[^>]*id="url"[^>]*\brequired\b/);
-  });
-
-  it("keeps the destination field, labelled and first", async () => {
-    const html = await serve();
-
-    // Optional must not mean hidden or deprioritised — creating a normal link
-    // is the common case and must stay the obvious one.
-    expect(html).toContain('<label for="url">Destination URL</label>');
-    expect(html).toContain('id="url"');
-  });
-
-  it("says what an empty destination produces", async () => {
-    const html = await serve();
-
-    // A blank submit that silently creates a card pointing nowhere is the
-    // accident this helps avoid, so the consequence is stated on the form.
-    expect(html).toContain("field-help");
-    expect(html).toContain("later");
-  });
-
-  it("omits original_url entirely when the field is blank", async () => {
-    const script = await clientScript();
-
-    // Sending "" would rely on a server-side coercion the reader has to go and
-    // find. Omitting states the intent at the boundary.
-    expect(script).toContain("...(urlValue ? { original_url: urlValue } : {})");
-  });
-
-  it("trims the destination before sending it", async () => {
-    const script = await clientScript();
-
-    expect(script).toContain('getElementById("url").value.trim()');
-  });
-
-  it("distinguishes a card from a link in the confirmation", async () => {
-    const script = await clientScript();
-
-    // "Link created!" for a link with no destination is a small lie the owner
-    // discovers later, when a customer scans the sticker.
-    expect(script).toContain("Card created!");
-    expect(script).toContain("data.original_url");
-  });
-
-  it("still clears the destination field after creating", async () => {
-    const script = await clientScript();
-
-    expect(script).toContain('document.getElementById("url").value = ""');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Bulk card creation
-//
-// An owner making a hundred stickers does not want a hundred form submissions.
-// This creates them in one call with no destination and hands back a print sheet
-// the designer can use directly.
-//
-// The generated ids live in module scope rather than in a data-* attribute,
-// because the download button needs them and a second copy in the DOM could
-// drift out of sync with the list the handler actually holds.
-// ---------------------------------------------------------------------------
-
-describe("the dashboard can manufacture cards in bulk", () => {
-  it("offers a bulk entry point", async () => {
-    const html = await serve();
-    expect(html).toContain('id="open-bulk"');
-    expect(html).toContain('id="bulk-modal"');
-  });
-
-  it("asks for a count and nothing else", async () => {
-    const html = await serve();
-
-    // Every other field on a link is per-card by nature. Inventing a bulk
-    // meaning for each would be inventing vocabulary the product does not have.
-    const modal = html.slice(html.indexOf('id="bulk-modal"'));
-    const card = modal.slice(0, modal.indexOf("</div>"));
-    expect(card).toContain('id="bulk-count"');
-    expect(card).not.toContain('id="url"');
-  });
-
-  it("caps the count at the server's own limit", async () => {
-    const html = await serve();
-    // The server is what makes it safe; this stops a 900-card request spending
-    // ten seconds before it is refused.
-    expect(html).toContain('max="200"');
-  });
-
-  it("says what an unconfigured card does when scanned", async () => {
-    const html = await serve();
-    // The owner has to know the QR is not broken — it is waiting.
-    expect(html).toContain("not configured");
-  });
-
-  it("creates the cards WITHOUT a destination", async () => {
-    const script = await clientScript();
-
-    // The item literal itself is the claim: a card is `is_gated` and nothing
-    // else. Asserting on the whole script for "no original_url" would also
-    // catch the single-create form above, which legitimately has one.
-    // The item literal IS the claim: a card is gated, and it carries a
-    // destination only if the owner typed a label. `...(label ? ...)` is what
-    // makes "no destination" the default rather than a special case.
-    expect(script).toContain("Array.from({ length: count }, () => ({");
-    expect(script).toContain("is_gated: gated");
-    // Scoped to the BULK BLOCK, not the whole script.
-    //
-    // The dashboard has two creation paths and only one of them must omit the
-    // destination. The single-create form legitimately sets `original_url` — it
-    // is how an owner shortens a URL they already have. Asserting on the whole
-    // script conflates the two and is wrong, not merely imprecise.
-    const start = script.indexOf(">>> BULK BLOCK");
-    const end = script.indexOf("<<< BULK BLOCK", start);
-    expect(codeOnly(script.slice(start, end))).not.toContain("original_url:");
-  });
-
-  it("lets the owner choose the review screen for the batch, OFF by default", async () => {
-    const html = await serve();
-    const script = await clientScript();
-
-    // The owner decides now (odd/tasks/review-screen-refresh.md, S1). Unchecked
-    // means the card goes straight to Google; the help text says that such
-    // cards do not feed the satisfaction panel, which is the trade being made.
-    const box = html.match(/<input[^>]*id="bulk-gated"[^>]*>/)?.[0] ?? "";
-    expect(box).toContain('type="checkbox"');
-    expect(box).not.toContain("checked");
-    expect(script).toContain('document.getElementById("bulk-gated").checked');
-  });
-
-  it("posts to the batch endpoint that already exists", async () => {
-    const script = await clientScript();
-    expect(script).toContain('"/api/links/batch"');
-  });
-
-  it("reports a PARTIAL batch rather than calling it a success", async () => {
-    const script = await clientScript();
-
-    // Nine of ten cards is a shortfall the owner discovers at the printer.
-    expect(script).toContain("failed — try those again");
-    expect(script).toMatch(/created\.length/);
-  });
-
-  it("keeps only the ids that were actually created", async () => {
-    const script = await clientScript();
-
-    // A failed item has no link to export, so its id must not enter the sheet.
-    expect(script).toContain('filter((r) => r.status === 201)');
-  });
-
-  it("downloads the sheet as a ZIP", async () => {
-    const script = await clientScript();
-    expect(script).toContain('"/api/links/qr-sheet.zip"');
-    expect(script).toContain('a.download = "cards.zip"');
-  });
-
-  it("fetches the sheet as a blob rather than navigating to it", async () => {
-    const script = await clientScript();
-
-    // The claim is "not a navigation", and it holds for a reason that is now
-    // structural rather than incidental: the request goes through __api, whose
-    // signature is (method, path, body) — it cannot become a navigation, and it
-    // returns the response so a blob can be read off it.
-    expect(script).toContain('window.__api("POST", "/api/links/qr-sheet.zip", {');
-    expect(script).toContain("URL.createObjectURL");
-    expect(script).toContain("await res.blob()");
-  });
-
-  it("revokes the object URL, so the ZIP is not pinned in memory", async () => {
-    const script = await clientScript();
-    expect(script).toContain("URL.revokeObjectURL");
-  });
-
-  it("surfaces the server's own refusal instead of a generic failure", async () => {
-    const script = await clientScript();
-
-    // The server refuses a batch containing an unconfigured card and says so.
-    // That sentence IS the answer.
-    expect(script).toContain("body.error");
-  });
-
-  it("downloads through the dashboard's OWN api helper, not a hand-rolled fetch", async () => {
-    const script = await clientScript();
-
-    // THE REGRESSION THAT MATTERS.
-    //
-    // This handler originally did its own `fetch` with its own headers, reading
-    // the token from `localStorage.getItem("access_token")`. The dashboard keeps
-    // it in `window.__token`. So the create succeeded — it goes through __api —
-    // and the download 401'd with `Bearer null`, leaving the modal claiming ten
-    // cards existed and the sheet unreachable.
-    //
-    // Reusing __api is the fix: one auth contract, one place to change it, and
-    // the 401-to-login and 409-tenant-picker behaviour comes along for free
-    // instead of being reimplemented slightly wrong.
-    expect(script).toContain('window.__api("POST", "/api/links/qr-sheet.zip"');
-  });
-
-  it("never rebuilds auth headers inside the bulk block", async () => {
-    const script = await clientScript();
-    const start = script.indexOf(">>> BULK BLOCK");
-    const end = script.indexOf("<<< BULK BLOCK", start);
-    const wired = script.slice(start, end);
-
-    // A duplicated auth contract is a contract that will drift. The token lives
-    // in one place and this block does not get a second opinion on where.
-    expect(wired).not.toMatch(/Authorization:/);
-    expect(wired).not.toMatch(/X-Tenant-Slug/);
-  });
-
-  it("inherits the full auth contract instead of approximating it", async () => {
-    // Asserted against the WHOLE served page, not clientScript().
-    //
-    // The dashboard serves __api and the bulk client as two separate <script>
-    // blocks, so clientScript() — which returns the one holding the client —
-    // cannot see the helper at all. Scoping this assertion to it produced a
-    // failure that looked like missing auth but was really the wrong slice.
-    const html = await serve();
-
-    // The download carries whatever __api carries — JWT, tenant, and the 409
-    // picker — by going through it at all. This asserts the helper still does
-    // its own job, so the download inherits a working contract rather than a
-    // broken one.
     expect(html).toContain("Bearer " + '" + window.__token');
     expect(html).toContain('headers["X-Tenant-Slug"] = q');
   });
-
-  it("refuses to download before anything was created", async () => {
-    const script = await clientScript();
-    expect(script).toContain("Create the cards first.");
-  });
-
-  it("validates the count before spending a request on it", async () => {
-    const script = await clientScript();
-
-    // A button that does nothing for ten seconds because the count was 0
-    // teaches the owner the button is broken.
-    expect(script).toMatch(/count < 1 \|\| count > 200/);
-  });
-
-  it("adds no inline handler and no new data-action", async () => {
-    const script = await clientScript();
-
-    // The delegated switch handles record actions and a test pins its exact
-    // membership. Bulk acts on NO record, so it must not join that switch — it
-    // is a static button with a static listener, like the create form.
-    //
-    // Scoped to the bulk BLOCK, delimited by the two function names that bracket
-    // it in the source. Slicing to the end of the script would sweep in the
-    // delegated switch below, which legitimately contains data-action and would
-    // make the assertion meaningless.
-    // Delimited by markers the source plants, not by guessing where a
-    // function happens to end — a slice bounded by a function name breaks the
-    // moment the block is reordered.
-    const start = script.indexOf(">>> BULK BLOCK");
-    const end = script.indexOf("<<< BULK BLOCK", start);
-    const wired = script.slice(start, end);
-    expect(wired.length).toBeGreaterThan(0);
-    // Matched on the ATTRIBUTE, not the substring: an earlier version asserted
-    // on "data-action" and this very comment contained the word, so the test
-    // detected itself and failed for a reason that had nothing to do with the
-    // code under test.
-    expect(wired).not.toMatch(/data-action=/);
-
-    // And the switch carries exactly ten record actions, no more. Pinned
-    // because this is the list that decides what a row may do: an action added
-    // here reaches the handler with a row's own id, so an unlisted one silently
-    // does nothing while looking wired.
-    //
-    // load-destination joined the six on purpose — it IS a record action, and it
-    // is the second half of the flow this PR completes. toggle-gate joined for
-    // the review-screen checkbox (odd/tasks/review-screen-refresh.md, S1).
-    // load-destination became save-destination (any link's URL is editable
-    // now) and save-branch joined (odd/tasks/business-branches.md, S4). edit
-    // joined because the panel was only reachable through the clicks count,
-    // and the operator could not find it. queue-print and unqueue-print joined
-    // for the print queue (odd/tasks/print-queue-cards.md, S2-S3).
-    const actions = [...script.matchAll(/case "([a-z-]+)":/g)].map((m) => m[1]);
-    expect(new Set(actions)).toEqual(
-      new Set([
-        "copy",
-        "qr",
-        "metrics",
-        "edit",
-        "save-client-ref",
-        "save-destination",
-        "save-branch",
-        "toggle",
-        "toggle-gate",
-        "delete",
-        "queue-print",
-        "unqueue-print",
-      ]),
-    );
-  });
 });
 
-// ---------------------------------------------------------------------------
-// Loading a destination onto a card
-//
-// A card is manufactured before anyone knows where it points. The API has always
-// accepted the destination and invalidated the redirect cache; what was missing
-// was the door — so "load them before exporting" was an instruction with nowhere
-// to go, and the owner's only way to fill ten cards was the API.
-// ---------------------------------------------------------------------------
-describe("the dashboard can edit any link's destination", () => {
-  // It used to offer "Load destination..." only on card stock, through a
-  // prompt. A configured link could not be corrected at all from the
-  // dashboard (odd/tasks/business-branches.md, S4).
-  it("shows the current destination in an editable field on every row", async () => {
-    const row = await renderRow({ original_url: "https://g.page/r/abc/review" });
-    const input = row.match(/<input[^>]*id="dest-link-uuid"[^>]*>/)?.[0] ?? "";
-    expect(input).toContain('value="https://g.page/r/abc/review"');
-    expect(row).toMatch(/data-action="save-destination"[^>]*data-id="link-uuid"/);
-  });
-
-  it("offers the same field on card stock, empty", async () => {
-    const row = await renderRow({ original_url: null });
-    const input = row.match(/<input[^>]*id="dest-link-uuid"[^>]*>/)?.[0] ?? "";
-    expect(input).toContain('value=""');
-    expect(row).toContain('data-action="save-destination"');
-  });
-
-  it("says what an unconfigured card does when scanned, and that no reprint is needed", async () => {
-    const row = await renderRow({ original_url: null });
-    // The owner has to know the QR is not broken — it is waiting.
-    expect(row).toContain("not configured");
-    expect(row).toContain("does not need reprinting");
-    expect(await renderRow()).not.toContain("not configured");
-  });
-
-  it("escapes the destination it puts in the field", async () => {
-    const row = await renderRow({ original_url: XSS_ATTR });
-    expect(row).not.toContain(XSS_ATTR);
-    expect(row).toContain(ESCAPED_ATTR);
-  });
-
-  it("PATCHes the existing link, and an emptied field clears it back to card stock", async () => {
-    const fn = extractFunction(await clientScript(), "saveDestination");
-    // The card exists and is already printed: never create a second one.
-    expect(fn).toContain('window.__api("PATCH", "/api/links/" + id');
-    expect(fn).toContain('original_url: value === "" ? null : value');
-  });
-
-  it("does NOT re-validate the URL in the browser", async () => {
-    // The server owns URL validation for create and update alike.
-    const fn = codeOnly(extractFunction(await clientScript(), "saveDestination"));
-    expect(fn).not.toMatch(/https?:\/\//);
-  });
-
-  it("repaints its own row after saving, with no table reload", async () => {
-    const fn = codeOnly(extractFunction(await clientScript(), "saveDestination"));
-    expect(fn).toContain("repaintLink(id,");
-    expect(fn).not.toContain("loadLinks()");
-  });
-});
-
-describe("links table shows how each link opens and where it belongs", () => {
-  it("labels a gated link as opening the review screen", async () => {
-    const row = await renderRow({ is_gated: true });
-    expect(row).toContain("Review screen");
-  });
-
-  it("labels an ungated link as going straight to its destination", async () => {
-    const row = await renderRow({ is_gated: false });
-    expect(row).toContain("Direct");
-    expect(row).not.toContain("Review screen</span>");
-  });
-
-  it("shows the business and branch of a link", async () => {
-    const row = await renderRow({ business_name: "Café Central", location_name: "Providencia" });
-    expect(row).toContain("Café Central");
-    expect(row).toContain("Providencia");
-  });
-
-  it("escapes the business and branch names", async () => {
-    const row = await renderRow({ business_name: XSS_URL, location_name: XSS_URL });
-    expect(row).not.toContain("<img");
-  });
-
-  it("says 'Unassigned' for a link with no branch", async () => {
-    const row = await renderRow({ business_name: null, location_name: null });
-    expect(row).toContain("Unassigned");
-  });
-
-  it("offers a branch picker in the row panel, filled after render", async () => {
-    const row = await renderRow({ location_id: "loc-1" });
-    const select = row.match(/<select[^>]*id="branch-link-uuid"[^>]*>/)?.[0] ?? "";
-    expect(select).toContain('data-current="loc-1"');
-    expect(row).toMatch(/data-action="save-branch"[^>]*data-id="link-uuid"/);
-    // The row template stays a pure function of the link; the options come
-    // from the branches list once the table is in the DOM.
-    expect(await clientScript()).toContain("fillBranchSelects()");
-  });
-
-  it("never shows an assigned link as Unassigned when the branches list is missing", async () => {
-    // One Save on a picker that wrongly reads "Unassigned" would detach the
-    // link. Runs the shipped function against a minimal DOM stand-in.
-    const script = await clientScript();
-    const fn = extractFunction(script, "fillBranchSelects") + "\n" + extractFunction(script, "pickableBranches");
-    const options: { value: string; selected: boolean }[] = [];
-    const select = {
-      dataset: { current: "loc-1" },
-      set textContent(_v: string) { options.length = 0; },
-      add: (o: { value: string; selected: boolean }) => options.push(o),
-    };
-    const run = new Function(
-      "window", "document", "Option",
-      `${fn}\nfillBranchSelects();`,
-    );
-    run(
-      { __branches: [] },
-      { querySelectorAll: () => [select] },
-      function (this: any, _l: string, value: string, _d?: boolean, selected = false) {
-        return { value, selected };
-      },
-    );
-    expect(options.find((o) => o.selected)?.value).toBe("loc-1");
-  });
-
+describe("the branches load feeds the Links island's pickers", () => {
   it("loads the branches at boot, beside the links", async () => {
     const html = await serve();
     expect(html).toContain('if (typeof loadBranches === "function") loadBranches();');
     expect(extractFunction(await clientScript(), "loadBranches")).toContain('"/api/locations"');
   });
 
-  it("assigns the branch through PATCH, null for none", async () => {
-    const fn = extractFunction(await clientScript(), "saveBranch");
-    expect(fn).toContain('window.__api("PATCH", "/api/links/" + id');
-    expect(fn).toContain('location_id: value === "" ? null : value');
-    expect(codeOnly(fn)).toContain("repaintLink(id,");
-    expect(codeOnly(fn)).not.toContain("loadLinks()");
+  it("announces every branches load, success or not, so the island rebuilds its pickers", async () => {
+    const fn = codeOnly(extractFunction(await clientScript(), "loadBranches"));
+    const tail = fn.slice(fn.lastIndexOf("}", fn.lastIndexOf("}") - 1));
+    expect(fn).toContain("window.__branches = ");
+    expect(fn).toContain("window.__businesses = ");
+    // After the try/catch, so a failed load still lets the pickers fall back.
+    expect(tail).toContain('window.dispatchEvent(new Event("brancheschange"))');
   });
 });
+
 
 describe("the served client script parses", () => {
   /**
@@ -1863,7 +777,7 @@ describe("the served client script parses", () => {
   it("is valid JavaScript", async () => {
     const html = await serve();
     const blocks = inlineScripts(html);
-    const client = blocks.find((b) => b.includes("links-body"));
+    const client = blocks.find((b) => b.includes(CLIENT_SCRIPT_MARKER));
     expect(client).toBeDefined();
 
     let error: unknown = null;
@@ -1895,46 +809,9 @@ describe("the served client script parses", () => {
     // one pins that no window.prompt with multi-line text came back.
     const html = await serve();
     const blocks = inlineScripts(html);
-    const client = blocks.find((b) => b.includes("links-body"))!;
+    const client = blocks.find((b) => b.includes(CLIENT_SCRIPT_MARKER))!;
 
     expect(client).not.toMatch(/window\.prompt\("[^"]*\n/);
-  });
-});
-
-describe("a bulk batch can carry one label", () => {
-  it("asks for a label beside the count", async () => {
-    const html = await serve();
-
-    expect(html).toContain('id="bulk-label"');
-    expect(html).toContain("Label for this batch");
-  });
-
-  it("says the label reaches the card AND the CSV", async () => {
-    const html = await serve();
-
-    // The CSV is what the designer reads while laying out the sheet. A label
-    // that reaches only the card would still leave ten identical stickers and
-    // a blank column.
-    expect(html).toMatch(/CSV/);
-    expect(html).toMatch(/designer/i);
-  });
-
-  it("applies ONE label to every card in the batch", async () => {
-    const script = await clientScript();
-
-    // Ten stickers for the main room is one decision, not ten. Asking for a
-    // label per card would make a batch a form again.
-    expect(script).toContain("client_ref: label");
-    expect(script).toContain("Array.from({ length: count }");
-  });
-
-  it("treats an empty label as no label at all", async () => {
-    const script = await clientScript();
-
-    // A blank input must not produce ten cards carrying a blank identifier —
-    // that is a value that looks like data and is not.
-    expect(script).toContain("...(label ? { client_ref: label } : {})");
-    expect(script).toContain(".value.trim()");
   });
 });
 
@@ -1979,19 +856,19 @@ describe("the feedback email section", () => {
 
     expect(script).toContain('window.__api("GET", "/api/tenant/feedback-email"');
 
-    // loadLinks runs on every toggle, delete and create. Re-reading a
+    // The links table reloads on every toggle, delete and create. Re-reading a
     // tenant-level setting on each one is a request per keystroke of somebody
-    // else's workflow.
+    // else's workflow, so it is read once, by the auth bootstrap, after the
+    // gate opens (the Links island fetches only its own three endpoints:
+    // web/test/links/loading.test.tsx).
     //
     // Asserted against the whole served page because the boot call lives in the
-    // OTHER inline <script> — the auth bootstrap, not the links client. Reading
-    // it from clientScript() looks for a string that is not there and returns
-    // -1, which is how this first failed.
+    // OTHER inline <script> — the auth bootstrap, not the dashboard client.
     const html = await serve();
-    const at = html.indexOf("loadFeedbackEmail();");
-    const linksAt = html.indexOf("loadLinks();", at);
-    expect(at).toBeGreaterThan(-1);
-    expect(linksAt).toBeGreaterThan(at);
+    const at = html.indexOf('if (typeof loadFeedbackEmail === "function") loadFeedbackEmail();');
+    expect(at).toBeGreaterThan(html.indexOf("window.__apiReadyResolve?.()"));
+    // The only call: none inside a links load or any other handler.
+    expect(html.split("loadFeedbackEmail();")).toHaveLength(2);
   });
 
   it("only claims success when the server agreed", async () => {
@@ -2027,7 +904,7 @@ describe("the feedback email section", () => {
 //
 // The renderer itself is covered in `feedback-inbox.test.ts`. These pin the
 // wiring in the served page: that the renderer actually ships, that it loads
-// once at boot outside loadLinks' all-or-nothing fetch, and that the export
+// once at boot outside the links load's all-or-nothing fetch, and that the export
 // carries the same auth as every other call instead of being a bare link.
 // ---------------------------------------------------------------------------
 
@@ -2040,16 +917,13 @@ describe("the feedback inbox", () => {
     expect(binding).toBeGreaterThan(shim);
   });
 
-  it("loads the inbox once at boot, not inside loadLinks", async () => {
+  it("loads the inbox once at boot, not with the links", async () => {
     const script = await clientScript();
     expect(script).toContain('window.__api("GET", "/api/review-gate/feedback" + feedbackQuery())');
-    expect(extractFunction(script, "loadLinks")).not.toContain("/api/review-gate/feedback");
 
     const html = await serve();
-    const at = html.indexOf("loadFeedbackInbox();");
-    const linksAt = html.indexOf("loadLinks();", at);
-    expect(at).toBeGreaterThan(-1);
-    expect(linksAt).toBeGreaterThan(at);
+    const at = html.indexOf('if (typeof loadFeedbackInbox === "function") loadFeedbackInbox();');
+    expect(at).toBeGreaterThan(html.indexOf("window.__apiReadyResolve?.()"));
   });
 
   it("downloads the export through window.__api, never through a bare link", async () => {
@@ -2186,105 +1060,6 @@ describe("the feedback inbox, when the server refuses", () => {
 // to the destination. Unchecked is the default everywhere.
 // ---------------------------------------------------------------------------
 
-describe("review screen checkbox", () => {
-  it("is on the create form, unchecked by default", async () => {
-    const html = await serve();
-    const box = html.match(/<input[^>]*id="gated"[^>]*>/)?.[0] ?? "";
-    expect(box).toContain('type="checkbox"');
-    expect(box).not.toContain("checked");
-  });
-
-  it("sends the choice with the create request", async () => {
-    const script = await clientScript();
-    expect(script).toContain('is_gated: document.getElementById("gated").checked');
-  });
-
-  it("shows a checked box on a row whose link shows the review screen", async () => {
-    const row = await renderRow({ is_gated: true });
-    const box = row.match(/<input[^>]*data-action="toggle-gate"[^>]*>/)?.[0] ?? "";
-    expect(box).toContain('type="checkbox"');
-    expect(box).toContain('data-id="link-uuid"');
-    expect(box).toMatch(/\schecked/);
-  });
-
-  it("shows an unchecked box on a row that goes straight to the destination", async () => {
-    const row = await renderRow({ is_gated: false });
-    const box = row.match(/<input[^>]*data-action="toggle-gate"[^>]*>/)?.[0] ?? "";
-    expect(box).toContain('type="checkbox"');
-    expect(box).not.toMatch(/\schecked/);
-  });
-
-  it("updates the link through PATCH when the box changes", async () => {
-    const script = await clientScript();
-    expect(script).toContain('case "toggle-gate":');
-    const fn = extractFunction(script, "setGated");
-    expect(fn).toContain('window.__api("PATCH", "/api/links/" + id, { is_gated: gated })');
-  });
-
-  it("renders both notes and shows only the one matching the state", async () => {
-    const on = await renderRow({ is_gated: true });
-    expect(on).toMatch(/<p class="field-note" data-gate-note="on">/);
-    expect(on).toMatch(/<p class="field-note" data-gate-note="off" hidden>/);
-
-    const off = await renderRow({ is_gated: false });
-    expect(off).toMatch(/<p class="field-note" data-gate-note="on" hidden>/);
-    expect(off).toMatch(/<p class="field-note" data-gate-note="off">/);
-  });
-});
-
-describe("setGated updates its field in place", () => {
-  /** Compiles the served setGated against a stub checkbox and its two notes. */
-  async function mountGate(ok: boolean) {
-    const notes = [
-      { dataset: { gateNote: "on" }, hidden: true },
-      { dataset: { gateNote: "off" }, hidden: false },
-    ];
-    // The click already flipped the box to checked: the owner asked for ON.
-    const box = {
-      checked: true,
-      disabled: false,
-      closest: () => ({ querySelectorAll: () => notes }),
-    };
-    const calls = { requests: [] as string[], loadLinks: 0, alerts: [] as string[] };
-    const win = {
-      __api: async (method: string, path: string) => {
-        calls.requests.push(`${method} ${path}`);
-        return { ok };
-      },
-    };
-    const setGated = new Function(
-      "window",
-      "loadLinks",
-      "alert",
-      `return async ${extractFunction(await clientScript(), "setGated")}`,
-    )(win, () => calls.loadLinks++, (m: string) => calls.alerts.push(m));
-    return { setGated, box, notes, calls };
-  }
-
-  it("flips the note with one request and no table reload", async () => {
-    const g = await mountGate(true);
-    await g.setGated("link-uuid", true, g.box);
-
-    expect(g.calls.requests).toEqual(["PATCH /api/links/link-uuid"]);
-    expect(g.calls.loadLinks).toBe(0);
-    expect(g.notes.map((n) => n.hidden)).toEqual([false, true]);
-    expect(g.box.checked).toBe(true);
-    expect(g.box.disabled).toBe(false);
-    expect(g.calls.alerts).toEqual([]);
-  });
-
-  it("puts the box and the note back when the server refuses", async () => {
-    const g = await mountGate(false);
-    await g.setGated("link-uuid", true, g.box);
-
-    expect(g.box.checked).toBe(false);
-    expect(g.notes.map((n) => n.hidden)).toEqual([true, false]);
-    expect(g.box.disabled).toBe(false);
-    expect(g.calls.loadLinks).toBe(0);
-    expect(g.calls.alerts).toHaveLength(1);
-  });
-});
-
 // ---------------------------------------------------------------------------
 // Full-width layout (odd/tasks/review-screen-refresh.md, S5)
 //
@@ -2335,8 +1110,10 @@ describe("sidebar sections (odd/tasks/print-queue-cards.md S1)", () => {
     expect(overview).toContain('id="traffic-card"');
     expect(overview).toContain('id="clients-card"');
     const links = section(html, "links");
-    expect(links).toContain('id="create-form"');
-    expect(links).toContain('id="links-table"');
+    // The whole section's content is the Links island's (create form, bulk
+    // cards, table, QR modal); the server paints the table card first.
+    expect(links).toContain('<div id="links-root" data-island="links"');
+    expect(links).toContain('id="links-card"');
     expect(section(html, "cards")).toContain('id="cards-root"');
     expect(section(html, "businesses")).toContain('id="businesses-card"');
     expect(section(html, "comments")).toContain('id="feedback-card"');
@@ -2437,7 +1214,7 @@ describe("businesses and branches card", () => {
     expect(move).toContain('window.__api("PATCH", "/api/locations/" + locationId');
     expect(move).toContain('business_id: value === "none" ? null : value');
     // A moved branch changes the business shown on every link row.
-    expect(extractFunction(script, "refreshOwnership")).toContain("loadLinks()");
+    expect(extractFunction(script, "refreshOwnership")).toContain("if (window.__loadLinks) window.__loadLinks();");
   });
 
   it("loads businesses with the branches", async () => {
@@ -2498,56 +1275,6 @@ describe("comments can be filtered by business or branch", () => {
 });
 
 // ---------------------------------------------------------------------------
-// An explicit Edit button
-//
-// The editing panel (destination, branch, review screen) only opened from the
-// clicks count. Reported from production: "aun no veo el boton de editar".
-// ---------------------------------------------------------------------------
-
-describe("each row has an Edit button", () => {
-  it("renders a visible Edit button beside Del, carrying the row's id", async () => {
-    const row = await renderRow();
-    const actions = row.slice(row.indexOf('class="row-actions"'));
-    const edit = actions.match(/<button[^>]*data-action="edit"[^>]*>([^<]*)<\/button>/);
-    expect(edit?.[1]).toBe("Edit");
-    expect(edit?.[0]).toContain('data-id="link-uuid"');
-    expect(edit?.[0]).toContain('data-code="abc1234"');
-    expect(actions.indexOf('data-action="edit"')).toBeLessThan(actions.indexOf('data-action="delete"'));
-  });
-
-  it("opens a closed panel, never closes an open one, and always focuses the destination", async () => {
-    const fn = extractFunction(await clientScript(), "openEditor");
-    const run = (display: string) => {
-      const showMetrics = vi.fn();
-      const focus = vi.fn();
-      const els: Record<string, unknown> = { "metrics-l1": { style: { display } }, "dest-l1": { focus } };
-      new Function("document", "showMetrics", `${fn}\nopenEditor("l1", "abc", { preventDefault() {} });`)(
-        { getElementById: (id: string) => els[id] },
-        showMetrics,
-      );
-      return { showMetrics, focus };
-    };
-    const closed = run("none");
-    expect(closed.showMetrics).toHaveBeenCalledTimes(1);
-    expect(closed.focus).toHaveBeenCalledTimes(1);
-    const open = run("");
-    expect(open.showMetrics).not.toHaveBeenCalled();
-    expect(open.focus).toHaveBeenCalledTimes(1);
-  });
-
-  it("opens the same panel as the clicks count and focuses the destination", async () => {
-    const script = await clientScript();
-    const sw = extractFunction(script, "onLinksTableClick");
-    const edit = sw.slice(sw.indexOf('case "edit":'), sw.indexOf("break;", sw.indexOf('case "edit":')));
-    expect(edit).toContain("openEditor(el.dataset.id, el.dataset.code, e)");
-    const fn = extractFunction(script, "openEditor");
-    expect(fn).toContain("showMetrics(id, code, e)");
-    expect(fn).toContain('document.getElementById("dest-" + id)');
-    expect(fn).toContain(".focus()");
-  });
-});
-
-// ---------------------------------------------------------------------------
 // Moving grouped branches, and switching businesses and branches off
 //
 // Requested after PR #83: "Poder pasar a otro local una sucursal que ya tiene
@@ -2589,34 +1316,6 @@ describe("grouped branches can move, and inactive ones leave the pickers", () =>
     expect(html).toMatch(/<button[^>]*data-biz-action="toggle-business"[^>]*data-business-id="biz-3"[^>]*data-active="true"[^>]*>Activate<\/button>/);
     expect(html).toMatch(/<button[^>]*data-biz-action="toggle-branch"[^>]*data-location-id="loc-1"[^>]*data-active="false"[^>]*>Deactivate<\/button>/);
     expect(html).toMatch(/<button[^>]*data-biz-action="toggle-branch"[^>]*data-location-id="loc-2"[^>]*data-active="true"[^>]*>Activate<\/button>/);
-  });
-
-  it("keeps inactive branches and businesses out of a link's branch picker, except its current one", async () => {
-    const script = await clientScript();
-    const fn = extractFunction(script, "fillBranchSelects") + "\n" + extractFunction(script, "pickableBranches");
-    const options: { label: string; value: string; selected: boolean }[] = [];
-    const select = {
-      dataset: { current: "loc-old" },
-      set textContent(_v: string) { options.length = 0; },
-      add: (o: { label: string; value: string; selected: boolean }) => options.push(o),
-    };
-    new Function("window", "document", "Option", `${fn}\nfillBranchSelects();`)(
-      {
-        __businesses: businesses,
-        __branches: [
-          { id: "loc-1", name: "Providencia", business_id: "biz-1", business_name: "Café Central", is_active: true },
-          { id: "loc-old", name: "Vieja", business_id: "biz-1", business_name: "Café Central", is_active: false },
-          { id: "loc-3", name: "Centro", business_id: "biz-3", business_name: "Cerrado", is_active: true },
-        ],
-      },
-      { querySelectorAll: () => [select] },
-      function (label: string, value: string, _d?: boolean, selected = false) {
-        return { label, value, selected };
-      },
-    );
-    expect(options.map((o) => o.value)).toEqual(["", "loc-1", "loc-old"]);
-    // The link's own branch stays, named, so one Save does not detach it.
-    expect(options.find((o) => o.selected)).toEqual({ label: "Café Central — Vieja (inactive)", value: "loc-old", selected: true });
   });
 
   it("keeps inactive businesses and branches out of the comments filter", async () => {
@@ -2674,150 +1373,9 @@ describe("grouped branches can move, and inactive ones leave the pickers", () =>
 });
 
 // ---------------------------------------------------------------------------
-// Print queue in the links table and the Cards section
-// (odd/tasks/print-queue-cards.md S2-S6)
+// The Cards section (odd/tasks/print-queue-cards.md S4-S6); the print queue
+// itself is pinned in web/test/print-queue.test.ts.
 // ---------------------------------------------------------------------------
-
-describe("print queue in the links table", () => {
-  it("offers Send to print on an unconfigured link, outside the two-button actions cell", async () => {
-    const row = await renderRow({ original_url: null, print_queued: false });
-    const main = row.slice(0, row.indexOf("</tr>"));
-
-    expect(main).toContain('data-action="queue-print" data-id="link-uuid"');
-    expect(main).toContain(">Send to print<");
-    const actions = main.slice(main.indexOf('<div class="row-actions">'));
-    expect([...actions.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((m) => m[1])).toEqual(["Edit", "Del"]);
-  });
-
-  it("shows a To print badge and Remove from queue on a queued link", async () => {
-    const row = await renderRow({ original_url: null, print_queued: true });
-    const main = row.slice(0, row.indexOf("</tr>"));
-
-    expect(main).toContain('<span class="badge badge-queued" data-print-badge="link-uuid">To print</span>');
-    expect(main).toContain('data-action="unqueue-print" data-id="link-uuid"');
-    expect(main).not.toContain('data-action="queue-print"');
-  });
-
-  it("offers no print control on a configured link", async () => {
-    const row = await renderRow({ original_url: "https://g.page/r/x", print_queued: false });
-
-    expect(row).not.toContain("queue-print");
-    expect(row).not.toContain("To print");
-  });
-
-  it("repeats the control in the editing panel, which every screen size reaches", async () => {
-    const row = await renderRow({ original_url: null, print_queued: false });
-    const panel = row.slice(row.indexOf("</tr>"));
-
-    expect(panel).toContain('data-action="queue-print" data-id="link-uuid"');
-  });
-
-  it("keeps the To print badge in the row, hidden, so a click can reveal it in place", async () => {
-    const row = await renderRow({ original_url: null, print_queued: false });
-    const main = row.slice(0, row.indexOf("</tr>"));
-
-    expect(main).toContain('<span class="badge badge-queued" data-print-badge="link-uuid" hidden>To print</span>');
-  });
-
-  it("routes both actions to one local helper that sends no request and reloads nothing", async () => {
-    const script = codeOnly(await clientScript());
-    const helper = extractFunction(script, "setPrintQueued");
-
-    expect(script).toContain('case "queue-print":');
-    expect(script).toContain('case "unqueue-print":');
-    expect(helper).not.toContain("__api");
-    expect(helper).not.toContain("loadLinks");
-    expect(helper).not.toMatch(/\bawait\b|\basync\b/);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// The print queue is page state (odd/tasks/print-queue-cards.md S2-S3, L3)
-// ---------------------------------------------------------------------------
-
-describe("print queue as page state", () => {
-  type Item = { id: string; short_code: string };
-  type Win = { __printQueue: Item[] };
-
-  async function harness(names: string[]) {
-    const script = codeOnly(await clientScript());
-    const shown: Array<[string, boolean]> = [];
-    let renders = 0;
-    const win: Win = { __printQueue: [] };
-    const src = names.map((n) => extractFunction(script, n)).join("\n");
-    const fns = new Function(
-      "window",
-      "showQueuedState",
-      "renderPrintQueue",
-      `${src}\nreturn { ${names.join(", ")} };`,
-    )(win, (id: string, q: boolean) => shown.push([id, q]), () => renders++);
-    return { fns, win, shown, renders: () => renders };
-  }
-
-  it("queues a link on the click itself, keeping its code and the click order", async () => {
-    const { fns, win, shown, renders } = await harness(["setPrintQueued"]);
-
-    fns.setPrintQueued("a", true, "AAA");
-    fns.setPrintQueued("b", true, "BBB");
-    fns.setPrintQueued("a", true, "AAA");
-
-    expect(win.__printQueue).toEqual([{ id: "a", short_code: "AAA" }, { id: "b", short_code: "BBB" }]);
-    expect(shown).toEqual([["a", true], ["b", true], ["a", true]]);
-    expect(renders()).toBe(3);
-  });
-
-  it("takes a link out of the queue", async () => {
-    const { fns, win, shown } = await harness(["setPrintQueued"]);
-    win.__printQueue = [{ id: "a", short_code: "AAA" }, { id: "b", short_code: "BBB" }];
-
-    fns.setPrintQueued("a", false);
-
-    expect(win.__printQueue).toEqual([{ id: "b", short_code: "BBB" }]);
-    expect(shown).toEqual([["a", false]]);
-  });
-
-  it("drops links that got a destination or were deleted when the table reloads, and marks the rest", async () => {
-    const { fns, win, renders } = await harness(["syncPrintQueue"]);
-    win.__printQueue = [
-      { id: "kept", short_code: "K" },
-      { id: "configured", short_code: "C" },
-      { id: "deleted", short_code: "D" },
-    ];
-    const links: Array<Record<string, unknown>> = [
-      { id: "kept", original_url: null },
-      { id: "configured", original_url: "https://g.page/r/x" },
-      { id: "other", original_url: null },
-    ];
-
-    fns.syncPrintQueue(links);
-
-    expect(win.__printQueue).toEqual([{ id: "kept", short_code: "K" }]);
-    expect(links.map((l) => l.print_queued)).toEqual([true, false, false]);
-    expect(renders()).toBe(1);
-  });
-
-  it("empties the batch after a print run, resetting each row, with no request", async () => {
-    const { fns, win, shown, renders } = await harness(["clearPrintQueue"]);
-    win.__printQueue = [{ id: "a", short_code: "AAA" }, { id: "b", short_code: "BBB" }];
-
-    fns.clearPrintQueue();
-
-    expect(win.__printQueue).toEqual([]);
-    expect(shown).toEqual([["a", false], ["b", false]]);
-    expect(renders()).toBe(1);
-    expect(extractFunction(codeOnly(await clientScript()), "clearPrintQueue")).not.toContain("__api");
-  });
-
-  it("tells the Cards island about every change and lends it the queue helpers", async () => {
-    const script = codeOnly(await clientScript());
-    const render = extractFunction(script, "renderPrintQueue");
-
-    expect(render).toContain('window.dispatchEvent(new Event("printqueuechange"))');
-    expect(render).toContain('document.getElementById("cards-count")');
-    expect(script).toContain("window.__setPrintQueued = setPrintQueued;");
-    expect(script).toContain("window.__clearPrintQueue = clearPrintQueue;");
-  });
-});
 
 describe("cards section", () => {
   function cardsSection(html: string): string {
@@ -2888,267 +1446,145 @@ describe("cards section", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Field saves repaint their own row (no table reload)
-// ---------------------------------------------------------------------------
-
-describe("field saves repaint only their own link", () => {
-  type Call = { method: string; path: string; body: unknown };
-
-  /**
-   * Compiles one served save function against stubs: a recording
-   * window.__api, a field with `value`, and spies for the repaint and the
-   * full reload, so a test sees exactly which path the save took.
-   */
-  async function mountSave(
-    name: string,
-    opts: { value: string; ok?: boolean; response?: unknown; win?: Record<string, unknown> },
-  ) {
-    const calls: Call[] = [];
-    const field = { value: opts.value, dataset: { current: "loc-old" } };
-    const spy = { repaint: [] as unknown[][], loadLinks: 0, alerts: 0, clients: 0 };
-    const win = {
-      ...opts.win,
-      __api: async (method: string, path: string, body: unknown) => {
-        calls.push({ method, path, body });
-        return { ok: opts.ok ?? true, json: async () => opts.response ?? { ok: true } };
-      },
-    };
-    const fn = new Function(
-      "window",
-      "document",
-      "repaintLink",
-      "loadLinks",
-      "alert",
-      "refreshClientsCard",
-      `return async ${extractFunction(await clientScript(), name)}`,
-    )(
-      win,
-      { getElementById: () => field },
-      (...args: unknown[]) => spy.repaint.push(args),
-      () => spy.loadLinks++,
-      () => spy.alerts++,
-      () => spy.clients++,
-    ) as (...args: unknown[]) => Promise<void>;
-    return { fn, calls, spy, field };
-  }
-
-  it("destination: one PATCH, repaints with the normalized URL the server stored", async () => {
-    const m = await mountSave("saveDestination", {
-      value: " example.com/menu ",
-      response: { ok: true, original_url: "https://example.com/menu" },
-    });
-    await m.fn("link-uuid");
-
-    expect(m.calls).toEqual([
-      { method: "PATCH", path: "/api/links/link-uuid", body: { original_url: "example.com/menu" } },
-    ]);
-    expect(m.spy.repaint).toEqual([
-      ["link-uuid", { original_url: "https://example.com/menu" }, "dest-link-uuid"],
-    ]);
-    expect(m.spy.loadLinks).toBe(0);
-  });
-
-  it("destination: a refused URL repaints nothing and keeps what was typed", async () => {
-    const m = await mountSave("saveDestination", {
-      value: "not a url",
-      ok: false,
-      response: { error: "Invalid URL" },
-    });
-    await m.fn("link-uuid");
-
-    expect(m.spy.repaint).toEqual([]);
-    expect(m.spy.loadLinks).toBe(0);
-    expect(m.spy.alerts).toBe(1);
-    expect(m.field.value).toBe("not a url");
-  });
-
-  it("branch: repaints with the branch and business names from the branches list", async () => {
-    const m = await mountSave("saveBranch", {
-      value: "loc-1",
-      win: { __branches: [{ id: "loc-1", name: "Centro", business_name: "Cafe Uno" }] },
-    });
-    await m.fn("link-uuid");
-
-    expect(m.calls).toHaveLength(1);
-    expect(m.spy.repaint).toEqual([
-      [
-        "link-uuid",
-        { location_id: "loc-1", location_name: "Centro", business_name: "Cafe Uno" },
-        "branch-link-uuid",
-      ],
-    ]);
-    expect(m.spy.loadLinks).toBe(0);
-  });
-
-  it("branch: unassigning clears the names", async () => {
-    const m = await mountSave("saveBranch", { value: "" });
-    await m.fn("link-uuid");
-
-    expect(m.calls[0]!.body).toEqual({ location_id: null });
-    expect(m.spy.repaint[0]![1]).toEqual({ location_id: null, location_name: null, business_name: null });
-  });
-
-  it("branch: on failure the picker goes back to the stored branch", async () => {
-    const m = await mountSave("saveBranch", { value: "loc-1", ok: false });
-    await m.fn("link-uuid");
-
-    expect(m.field.value).toBe("loc-old");
-    expect(m.spy.repaint).toEqual([]);
-    expect(m.spy.loadLinks).toBe(0);
-    expect(m.spy.alerts).toBe(1);
-  });
-
-  it("client ref: repaints the row and refreshes only the rollup", async () => {
-    const m = await mountSave("saveClientRef", { value: " CRM-7 " });
-    await m.fn("link-uuid");
-
-    expect(m.calls).toEqual([
-      { method: "PATCH", path: "/api/links/link-uuid", body: { client_ref: "CRM-7" } },
-    ]);
-    expect(m.spy.repaint).toEqual([["link-uuid", { client_ref: "CRM-7" }, "client-ref-link-uuid"]]);
-    expect(m.spy.clients).toBe(1);
-    expect(m.spy.loadLinks).toBe(0);
-  });
-
-  it("client ref: an emptied field is stored as null", async () => {
-    const m = await mountSave("saveClientRef", { value: "  " });
-    await m.fn("link-uuid");
-
-    expect(m.calls[0]!.body).toEqual({ client_ref: null });
-    expect(m.spy.repaint[0]![1]).toEqual({ client_ref: null });
-  });
-
-  it("disable/enable: repaints with the new state", async () => {
-    const m = await mountSave("toggleLink", { value: "" });
-    await m.fn("link-uuid", false);
-
-    expect(m.calls).toEqual([
-      { method: "PATCH", path: "/api/links/link-uuid", body: { is_active: false } },
-    ]);
-    expect(m.spy.repaint).toEqual([["link-uuid", { is_active: false }]]);
-    expect(m.spy.loadLinks).toBe(0);
-  });
-
-  it("disable/enable: a refused change repaints nothing", async () => {
-    const m = await mountSave("toggleLink", { value: "", ok: false });
-    await m.fn("link-uuid", false);
-
-    expect(m.spy.repaint).toEqual([]);
-    expect(m.spy.alerts).toBe(1);
-  });
-});
-
-describe("repaintLink", () => {
-  /** A stub element: children found by id, and replaceWith recorded. */
-  function node(name: string, extra: Record<string, unknown> = {}) {
-    const n: Record<string, any> = {
-      name,
-      replacedBy: null,
-      replaceWith(other: unknown) { n.replacedBy = other; },
-      ...extra,
-    };
-    return n;
-  }
-
-  async function mountRepaint(opts: { links?: unknown[]; panelOnScreen?: boolean } = {}) {
-    const loaded = node("loaded-country");
-    const typed = { id: "client-ref-abc", type: "text", value: "typed, not saved" };
-    const saved = { id: "dest-abc", type: "text", value: "example.com" };
-    const box = { id: "gate-box", type: "checkbox", value: "on" };
-    const oldRow = node("old-row");
-    const panel = node("old-panel", {
-      style: { display: "" },
-      previousElementSibling: oldRow,
-      querySelector: (sel: string) => (sel === "#country-abc" ? loaded : null),
-      querySelectorAll: () => [typed, saved, box],
-    });
-
-    const freshCountry = node("fresh-country");
-    const freshFields: Record<string, { value: string }> = {
-      "client-ref-abc": { value: "" },
-      "dest-abc": { value: "https://example.com" },
-      "gate-box": { value: "" },
-    };
-    const nextPanel = node("new-panel", {
-      style: { display: "none" },
-      querySelector: (sel: string) =>
-        sel === "#country-abc" ? freshCountry : freshFields[sel.slice(1)] ?? null,
-    });
-    const newRow = node("new-row");
-    let rendered: unknown = null;
-
-    const win: Record<string, any> = {
-      __links: opts.links ?? [{ id: "abc", original_url: null, is_active: true }],
-      __syncPrintQueue: (links: unknown[]) => { win.synced = links; },
-    };
-    const spy = { loadLinks: 0, filled: [] as unknown[] };
-    const repaint = new Function(
-      "window",
-      "document",
-      "renderLinkRow",
-      "fillBranchSelects",
-      "loadLinks",
-      "CSS",
-      `return ${extractFunction(await clientScript(), "repaintLink")}`,
-    )(
-      win,
-      {
-        getElementById: (id: string) => (opts.panelOnScreen === false ? null : id === "metrics-abc" ? panel : null),
-        createElement: () => ({
-          set innerHTML(html: string) { rendered = html; },
-          children: [newRow, nextPanel],
-        }),
-      },
-      (l: unknown) => { rendered = l; return "<tr></tr><tr></tr>"; },
-      (root: unknown) => spy.filled.push(root),
-      () => spy.loadLinks++,
-      { escape: (v: string) => v },
-    ) as (id: string, changes: unknown, savedFieldId?: string) => void;
-
-    return { repaint, win, spy, panel, oldRow, newRow, nextPanel, freshCountry, loaded, freshFields, rendered: () => rendered };
-  }
-
-  it("applies the change and replaces only this link's two rows", async () => {
-    const r = await mountRepaint();
-    r.repaint("abc", { original_url: "https://example.com" }, "dest-abc");
-
-    expect(r.win.__links[0]).toEqual({ id: "abc", original_url: "https://example.com", is_active: true });
-    expect(r.win.synced).toBe(r.win.__links);
-    expect(r.oldRow.replacedBy).toBe(r.newRow);
-    expect(r.panel.replacedBy).toBe(r.nextPanel);
-    expect(r.spy.filled).toEqual([r.nextPanel]);
-    expect(r.spy.loadLinks).toBe(0);
-  });
-
-  it("keeps the panel open, its fetched figures, and unsaved typing", async () => {
-    const r = await mountRepaint();
-    r.repaint("abc", { original_url: "https://example.com" }, "dest-abc");
-
-    expect(r.nextPanel.style.display).toBe("");
-    expect(r.freshCountry.replacedBy).toBe(r.loaded);
-    expect(r.freshFields["client-ref-abc"]!.value).toBe("typed, not saved");
-    // The saved field shows what the server stored, not what was typed.
-    expect(r.freshFields["dest-abc"]!.value).toBe("https://example.com");
-    expect(r.freshFields["gate-box"]!.value).toBe("");
-  });
-
-  it("falls back to the full load when the row is not on screen", async () => {
-    const r = await mountRepaint({ panelOnScreen: false });
-    r.repaint("abc", { is_active: false });
-
-    expect(r.spy.loadLinks).toBe(1);
-    expect(r.oldRow.replacedBy).toBeNull();
-  });
-});
-
 describe("React islands bundle", () => {
   it("loads the bundle as a module after the page's own scripts", async () => {
     const html = await serve();
     const tag = '<script type="module" src="/assets/dashboard.js"></script>';
 
     expect(html).toContain(tag);
-    expect(html.indexOf(tag)).toBeGreaterThan(html.lastIndexOf("loadLinks();"));
+    // After the auth bootstrap, the last classic script on the page.
+    expect(html.indexOf(tag)).toBeGreaterThan(html.lastIndexOf("})();"));
     expect(html.indexOf(tag)).toBeLessThan(html.indexOf("</body>"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The Links island handoff (odd/tasks/dashboard-react.md T3a)
+//
+// The table, its row actions and the print queue are React now; their
+// behaviour is pinned in web/test/links and web/test/print-queue.test.ts.
+// These pin the served side of the seam: the legacy code is gone, and the
+// bridges the island calls exist and do what it relies on.
+// ---------------------------------------------------------------------------
+
+/** Extracts a top-level `window.<name> = function (...) {...};` statement. */
+function extractAssignment(src: string, name: string): string {
+  const start = src.indexOf(`window.${name} = function`);
+  if (start < 0) throw new Error(`window.${name} not assigned`);
+  let depth = 0;
+  for (let i = src.indexOf("{", start); i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}" && --depth === 0) return src.slice(start, i + 1) + ";";
+  }
+  throw new Error(`unterminated window.${name}`);
+}
+
+describe("Links island handoff", () => {
+  it("removes every legacy Links function that moved to the island", async () => {
+    const script = codeOnly(await clientScript());
+
+    for (const fn of [
+      "onLinksTableClick", "renderLinkRow", "loadLinks", "renderVisitors", "repaintLink", "toggleLink",
+      "setGated", "saveClientRef", "saveDestination", "saveBranch", "fillBranchSelects", "openEditor",
+      "showMetrics", "deleteLink", "copyUrl", "setPrintQueued", "showQueuedState", "syncPrintQueue",
+      "renderPrintQueue", "clearPrintQueue", "showQR",
+    ]) {
+      expect(script, fn).not.toMatch(new RegExp(`function ${fn}\\(`));
+    }
+    // No record-action switch either: the row actions are the island's own
+    // controls (web/test/links/rows.test.tsx pins which ones a row offers).
+    expect(script).not.toMatch(/case "(copy|qr|metrics|edit|save-client-ref|save-destination|save-branch|toggle|toggle-gate|delete|queue-print|unqueue-print)":/);
+    // The queue is the bundle's (web/src/print-queue.ts) and the page never
+    // sets it, so the two cannot disagree.
+    expect(script).not.toMatch(/window\.__printQueue\s*=/);
+    expect(script).not.toContain("__setPrintQueued =");
+    expect(script).not.toContain("__clearPrintQueue =");
+    expect(script).not.toContain("__syncPrintQueue");
+  });
+
+  it("keeps the queue in the page: neither side ever calls the print-queue endpoints", async () => {
+    const script = codeOnly(await clientScript());
+
+    expect(script).not.toContain("/api/links/print-queue");
+    expect(script).not.toContain("/api/links/printed");
+  });
+
+  it("lends the island the client rollup refresh, and no longer a QR modal", async () => {
+    const script = codeOnly(await clientScript());
+
+    expect(script).toContain("window.__refreshClientsCard = refreshClientsCard;");
+    // The QR modal is the island's (web/test/links/qr.test.tsx).
+    expect(script).not.toContain("__showQR");
+  });
+
+  it("keeps everything the remaining legacy code calls", async () => {
+    const script = codeOnly(await clientScript());
+
+    // refreshOwnership still reloads the table through the island's bridge,
+    // and the bootstrap still finds the boot loaders it calls by name.
+    expect(extractFunction(script, "refreshOwnership")).toContain("if (window.__loadLinks) window.__loadLinks();");
+    for (const fn of ["loadBranches", "loadFeedbackEmail", "loadFeedbackInbox", "loadHourlyTraffic", "refreshClientsCard", "showSection", "esc"]) {
+      expect(script, fn).toMatch(new RegExp(`function ${fn}\\(`));
+    }
+  });
+
+  describe("window.__renderOverviewCards", () => {
+    /** Runs the served bridge against stub cards and stub renderers. */
+    async function bridge() {
+      const els: Record<string, ElementStub> = {};
+      const el = (id: string) => (els[id] ??= { style: { display: "none" }, textContent: "", innerHTML: "", dataset: {}, addEventListener: () => {} });
+      const win: Record<string, any> = {};
+      const errors: unknown[] = [];
+      let gateFails = false;
+      new Function("window", "document", "renderGatePanel", "renderClients", "console", extractAssignment(await clientScript(), "__renderOverviewCards"))(
+        win,
+        { getElementById: el },
+        (gate: unknown) => {
+          if (gateFails) throw new Error("bad gate payload");
+          return `gate:${JSON.stringify(gate)}`;
+        },
+        (clients: unknown[]) => `clients:${clients.length}`,
+        { error: (...args: unknown[]) => errors.push(args) },
+      );
+      return { render: win.__renderOverviewCards as (c: unknown) => void, el, errors, failGate: () => { gateFails = true; } };
+    }
+
+    it("hides both cards when a first load starts", async () => {
+      const b = await bridge();
+      b.el("gate-card").style.display = "";
+      b.el("clients-card").style.display = "";
+
+      b.render({ hide: true });
+
+      expect(b.el("gate-card").style.display).toBe("none");
+      expect(b.el("clients-card").style.display).toBe("none");
+    });
+
+    it("paints the review gate through renderGatePanel and shows its card", async () => {
+      const b = await bridge();
+      b.render({ gate: { rated: 3 } });
+
+      expect(b.el("gate-body").innerHTML).toBe('gate:{"rated":3}');
+      expect(b.el("gate-card").style.display).toBe("");
+    });
+
+    it("keeps the gate card hidden when the panel cannot render", async () => {
+      const b = await bridge();
+      b.failGate();
+      b.render({ gate: { broken: true } });
+
+      expect(b.el("gate-card").style.display).toBe("none");
+      expect(b.errors).toHaveLength(1);
+    });
+
+    it("shows the client rollup only when it has rows", async () => {
+      const b = await bridge();
+      b.render({ clients: [{ client_ref: "a" }] });
+      expect(b.el("clients-body").innerHTML).toBe("clients:1");
+      expect(b.el("clients-card").style.display).toBe("");
+
+      b.render({ clients: [] });
+      expect(b.el("clients-card").style.display).toBe("none");
+    });
   });
 });

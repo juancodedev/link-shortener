@@ -34,6 +34,15 @@ describe("landingHandler", () => {
     expect(text).toContain("width=device-width");
   });
 
+  it("carries the brand, Más Reseñas, in the title, the top bar and the footer", async () => {
+    const text = await page();
+
+    expect(text).toContain("<title>Tarjetas de reseñas con QR para tu local — Más Reseñas</title>");
+    expect(text).toContain('<a class="brand" href="/">Más Reseñas</a>');
+    expect(text).toContain("Más Reseñas. Hecho con Cloudflare Workers y Supabase.");
+    expect(text).not.toContain("Link Shortener");
+  });
+
   it("says what the service is in the first heading", async () => {
     const text = await page();
 

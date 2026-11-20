@@ -29,7 +29,7 @@ export const landingHandler: Handler<{ Bindings: AppEnv }> = (c) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Tarjetas de reseñas con QR para tu local — Link Shortener</title>
+  <title>Tarjetas de reseñas con QR para tu local — Más Reseñas</title>
   <meta name="description" content="Una tarjeta con QR en cada mesa. Tu cliente califica su visita y elige: publicar su reseña en Google o escribirte directo.">
   <style>
     :root {
@@ -191,7 +191,7 @@ export const landingHandler: Handler<{ Bindings: AppEnv }> = (c) => {
   <header class="hero">
     <div class="wrap">
       <div class="topline">
-        <a class="brand" href="/">Link Shortener</a>
+        <a class="brand" href="/">Más Reseñas</a>
         <a class="login" href="/login">Iniciar sesión</a>
       </div>
       <div class="hero-grid">
@@ -315,7 +315,7 @@ export const landingHandler: Handler<{ Bindings: AppEnv }> = (c) => {
   </main>
 
   <footer>
-    <div class="wrap">Link Shortener. Hecho con Cloudflare Workers y Supabase.</div>
+    <div class="wrap">Más Reseñas. Hecho con Cloudflare Workers y Supabase.</div>
   </footer>
 
   ${SUPABASE_JS_SCRIPT}

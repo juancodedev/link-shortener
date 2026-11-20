@@ -1,4 +1,5 @@
-import { PRINT_QUEUE_EVENT, type QueueItem } from "./legacy";
+/** One link waiting to be printed. */
+export type QueueItem = { id: string; short_code: string };
 
 /**
  * THE PRINT QUEUE (odd/tasks/print-queue-cards.md S2-S3, dashboard-react T3a).
@@ -7,12 +8,11 @@ import { PRINT_QUEUE_EVENT, type QueueItem } from "./legacy";
  * It lives in this module, so it is page memory: nothing is fetched or stored,
  * and a reload starts empty (print-queue-cards L3).
  *
- * The queue moved here from the legacy page together with the Links table.
- * The window names it published (`__printQueue`, `__setPrintQueued`,
- * `__clearPrintQueue`, the `printqueuechange` event and the `#cards-count`
- * badge) are kept as the contract, so the Cards island reads it exactly as
- * before. The array is replaced, never edited in place, which is what lets
- * React compare it by identity.
+ * The Links table and the Cards island both import this module; nothing is
+ * published on window (the migration bridge, `window.__printQueue` and its
+ * helpers, is gone). The server-rendered sidebar's `#cards-count` badge is
+ * the one piece of the page it still writes. The array is replaced, never
+ * edited in place, which is what lets React compare it by identity.
  */
 
 let queue: readonly QueueItem[] = [];
@@ -30,17 +30,14 @@ export function subscribePrintQueue(listener: () => void): () => void {
   };
 }
 
-/** Publishes a change: the window copy, the sidebar count, the event, the subscribers. */
+/** Publishes a change: the sidebar count, then the subscribers. */
 function publish(next: readonly QueueItem[]) {
   queue = next;
-  // A copy, so a reader that edits it cannot change the queue behind our back.
-  window.__printQueue = [...next];
   const badge = document.getElementById("cards-count");
   if (badge) {
     badge.textContent = String(next.length);
     badge.hidden = next.length === 0;
   }
-  window.dispatchEvent(new Event(PRINT_QUEUE_EVENT));
   listeners.forEach((listener) => listener());
 }
 
@@ -71,14 +68,3 @@ export function prunePrintQueue(links: ReadonlyArray<{ id: string; original_url?
     }),
   );
 }
-
-/** Lends the queue to the page under its window names. */
-export function installPrintQueue(): void {
-  window.__printQueue = [...queue];
-  window.__setPrintQueued = setPrintQueued;
-  window.__clearPrintQueue = clearPrintQueue;
-}
-
-// On load, so the contract exists before any island mounts: the registry
-// imports this module (through the Links island) ahead of mountIslands().
-installPrintQueue();

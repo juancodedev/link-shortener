@@ -2,25 +2,22 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CardsSection } from "../../src/cards/CardsSection";
 import { CARD_MM, SHEET_PRESETS } from "../../src/cards/sheet";
-import type { QueueItem } from "../../src/legacy";
+import { clearPrintQueue, getPrintQueue, setPrintQueued, type QueueItem } from "../../src/print-queue";
 import { provideLinksLoad } from "../../src/links/reload";
 import { stubApi } from "../api-stub";
 
-type Calls = { api: string[]; requests: Array<{ method: string; path: string; body?: unknown }>; setQueued: Array<[string, boolean]>; cleared: number };
+type Calls = { api: string[]; requests: Array<{ method: string; path: string; body?: unknown }> };
 
-/** Stands in for the server-rendered dashboard: the queue, __api and the two helpers. */
-function legacyWindow(queue: QueueItem[], svg = (path: string) => `<svg data-path="${path}"></svg>`) {
-  const calls: Calls = { api: [], requests: [], setQueued: [], cleared: 0 };
-  window.__printQueue = queue;
+/** Fills the real print queue (web/src/print-queue) and stubs the API. */
+function queueWith(queue: QueueItem[], svg = (path: string) => `<svg data-path="${path}"></svg>`) {
+  const calls: Calls = { api: [], requests: [] };
+  clearPrintQueue();
+  for (const item of queue) setPrintQueued(item.id, true, item.short_code);
   stubApi(vi.fn(async (method: string, path: string, body?: unknown) => {
     calls.api.push(path);
     calls.requests.push({ method, path, body });
     return new Response(svg(path), { status: 200 });
   }));
-  window.__setPrintQueued = (id: string, queued: boolean) => calls.setQueued.push([id, queued]);
-  window.__clearPrintQueue = () => {
-    calls.cleared++;
-  };
   return calls;
 }
 
@@ -47,7 +44,7 @@ describe("Cards section (React)", () => {
   });
 
   it("offers every option of the original generator, with the Chilean Oficio sheet", async () => {
-    legacyWindow([]);
+    queueWith([]);
     await mount();
 
     for (const v of ["hybrid", "qr", "nfc"]) expect(document.querySelector(`input[name="card-variant"][value="${v}"]`)).not.toBeNull();
@@ -73,7 +70,7 @@ describe("Cards section (React)", () => {
   });
 
   it("shows the selected sheet's size in editable fields and keeps the selector in step with typed sizes", async () => {
-    legacyWindow([]);
+    queueWith([]);
     await mount();
 
     expect([field("card-sheet-w").value, field("card-sheet-h").value]).toEqual(["297", "420"]);
@@ -91,7 +88,7 @@ describe("Cards section (React)", () => {
   });
 
   it("says the queue is empty and disables both actions", async () => {
-    legacyWindow([]);
+    queueWith([]);
     await mount();
 
     screen.getByText("No hay tarjetas por imprimir. Envía a imprimir enlaces sin configurar desde la sección Enlaces.");
@@ -100,7 +97,7 @@ describe("Cards section (React)", () => {
   });
 
   it("lays the queued cards out from the top-left of each sheet, drawn by the API", async () => {
-    const calls = legacyWindow([
+    const calls = queueWith([
       { id: "a", short_code: "AAA" },
       { id: "b/2", short_code: "BBB" },
       { id: "c", short_code: "CCC" },
@@ -128,7 +125,7 @@ describe("Cards section (React)", () => {
   });
 
   it("drops the margin and gap on the one-card sheet", async () => {
-    legacyWindow([{ id: "a", short_code: "AAA" }]);
+    queueWith([{ id: "a", short_code: "AAA" }]);
     await mount();
     fireEvent.change(field("card-sheet"), { target: { value: "100x100" } });
     await act(async () => {});
@@ -139,7 +136,7 @@ describe("Cards section (React)", () => {
   });
 
   it("lays A4 landscape out as two cards side by side", async () => {
-    legacyWindow([{ id: "a", short_code: "AAA" }]);
+    queueWith([{ id: "a", short_code: "AAA" }]);
     await mount();
     fireEvent.change(field("card-sheet"), { target: { value: "297x210" } });
     await act(async () => {});
@@ -151,7 +148,7 @@ describe("Cards section (React)", () => {
   });
 
   it("keeps every card at 10×10 cm on every sheet preset", async () => {
-    legacyWindow([{ id: "a", short_code: "AAA" }]);
+    queueWith([{ id: "a", short_code: "AAA" }]);
     await mount();
 
     for (const p of SHEET_PRESETS) {
@@ -168,7 +165,7 @@ describe("Cards section (React)", () => {
   });
 
   it("says when the sheet is too small for a card with that margin", async () => {
-    legacyWindow([{ id: "a", short_code: "AAA" }]);
+    queueWith([{ id: "a", short_code: "AAA" }]);
     await mount();
     fireEvent.change(field("card-sheet"), { target: { value: "custom" } });
     fireEvent.change(field("card-sheet-w"), { target: { value: "150" } });
@@ -181,7 +178,7 @@ describe("Cards section (React)", () => {
   });
 
   it("says when the cards could not be loaded", async () => {
-    legacyWindow([{ id: "never-loaded", short_code: "NOPE" }]);
+    queueWith([{ id: "never-loaded", short_code: "NOPE" }]);
     stubApi(vi.fn(async () => new Response("nope", { status: 500 })));
     vi.spyOn(console, "error").mockImplementation(() => {});
     await mount();
@@ -190,7 +187,7 @@ describe("Cards section (React)", () => {
   });
 
   it("scales only the preview through --card-zoom", async () => {
-    legacyWindow([]);
+    queueWith([]);
     await mount();
     fireEvent.change(field("card-zoom"), { target: { value: "80" } });
 
@@ -198,28 +195,30 @@ describe("Cards section (React)", () => {
   });
 
   it("follows the queue the Links table changes", async () => {
-    legacyWindow([]);
+    queueWith([]);
     await mount();
 
-    window.__printQueue = [{ id: "a", short_code: "AAA" }];
     await act(async () => {
-      window.dispatchEvent(new Event("printqueuechange"));
+      setPrintQueued("a", true, "AAA");
     });
 
     expect(screen.getByRole("listitem").textContent).toContain("AAA");
     expect(document.querySelectorAll(".print-card")).toHaveLength(1);
   });
 
-  it("removes one card through the Links table's own helper", async () => {
-    const calls = legacyWindow([{ id: "a", short_code: "AAA" }]);
+  it("removes one card from the shared queue", async () => {
+    queueWith([{ id: "a", short_code: "AAA" }, { id: "b", short_code: "BBB" }]);
     await mount();
-    fireEvent.click(screen.getByRole("button", { name: "Quitar" }));
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: "Quitar" })[0]!);
+    });
 
-    expect(calls.setQueued).toEqual([["a", false]]);
+    expect(getPrintQueue()).toEqual([{ id: "b", short_code: "BBB" }]);
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
   });
 
   it("records the print run before emptying the batch, then refreshes Links", async () => {
-    const calls = legacyWindow([{ id: "a", short_code: "AAA" }, { id: "b", short_code: "BBB" }]);
+    const calls = queueWith([{ id: "a", short_code: "AAA" }, { id: "b", short_code: "BBB" }]);
     const reload = vi.fn(async () => {});
     const stop = provideLinksLoad(reload);
     await mount();
@@ -227,7 +226,7 @@ describe("Cards section (React)", () => {
 
     vi.mocked(window.confirm).mockReturnValueOnce(false);
     fireEvent.click(screen.getByRole("button", { name: "Marcar como impresas" }));
-    expect(calls.cleared).toBe(0);
+    expect(getPrintQueue()).toHaveLength(2);
     expect(calls.requests.slice(svgCalls)).toEqual([]);
 
     fireEvent.click(screen.getByRole("button", { name: "Marcar como impresas" }));
@@ -239,13 +238,13 @@ describe("Cards section (React)", () => {
     expect(calls.requests.slice(svgCalls)).toEqual([
       { method: "POST", path: "/api/links/printed", body: { ids: ["a", "b"] } },
     ]);
-    expect(calls.cleared).toBe(1);
+    expect(getPrintQueue()).toEqual([]);
     expect(reload).toHaveBeenCalledTimes(1);
     stop();
   });
 
   it("keeps the batch when the print run could not be recorded", async () => {
-    const calls = legacyWindow([{ id: "a", short_code: "AAA" }]);
+    const calls = queueWith([{ id: "a", short_code: "AAA" }]);
     stubApi(vi.fn(async () => {
       throw new Error("network down");
     }));
@@ -254,13 +253,13 @@ describe("Cards section (React)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Marcar como impresas" }));
     await act(async () => {});
 
-    expect(calls.cleared).toBe(0);
+    expect(getPrintQueue()).toEqual([{ id: "a", short_code: "AAA" }]);
     expect(screen.getByRole("listitem").textContent).toContain("AAA");
     expect(window.alert).toHaveBeenCalledWith("Error: network down");
   });
 
   it("prints only the sheets, with the page at the sheet size and no margin", async () => {
-    legacyWindow([{ id: "a", short_code: "AAA" }]);
+    queueWith([{ id: "a", short_code: "AAA" }]);
     await mount();
     fireEvent.change(field("card-sheet"), { target: { value: "216x330" } });
     fireEvent.click(screen.getByRole("button", { name: "Exportar PDF / Imprimir" }));

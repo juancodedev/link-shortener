@@ -1,6 +1,7 @@
 import { act, cleanup } from "@testing-library/react";
 import { VISITOR_ESTIMATE_CAVEAT } from "../../../src/analytics/metrics";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { getPrintQueue, setPrintQueued } from "../../src/print-queue";
 import { installLegacy, link, mountLinks, panel, row, settle, standardApi } from "./harness";
 
 // What one link renders: its row and its editing panel. Ported from the
@@ -188,7 +189,7 @@ describe("Links island — the row", () => {
 
     act(() => reprint.click());
     await settle();
-    expect(window.__printQueue.map((q) => q.id)).toEqual(["link-uuid"]);
+    expect(getPrintQueue().map((q) => q.id)).toEqual(["link-uuid"]);
     expect(text(row("link-uuid"))).toContain("Quitar de la cola");
 
     const remove = [...row("link-uuid").querySelectorAll("button")].find((b) => b.textContent === "Quitar de la cola")!;
@@ -207,7 +208,7 @@ describe("Links island — the row", () => {
   it("lets the queue badge win when a printed card is sent to print again", async () => {
     await show({ original_url: null, printed_at: "2026-11-19T12:00:00Z" });
 
-    act(() => window.__setPrintQueued("link-uuid", true, "abc1234"));
+    act(() => setPrintQueued("link-uuid", true, "abc1234"));
     await settle();
 
     const badge = row("link-uuid").querySelector('[data-print-badge="link-uuid"]') as HTMLElement;
@@ -219,9 +220,9 @@ describe("Links island — the row", () => {
   it("brings the Printed badge back when the card leaves the queue again", async () => {
     await show({ original_url: null, printed_at: "2026-11-19T12:00:00Z" });
 
-    act(() => window.__setPrintQueued("link-uuid", true, "abc1234"));
+    act(() => setPrintQueued("link-uuid", true, "abc1234"));
     await settle();
-    act(() => window.__setPrintQueued("link-uuid", false));
+    act(() => setPrintQueued("link-uuid", false));
     await settle();
 
     const badge = row("link-uuid").querySelector('[data-print-badge="link-uuid"]') as HTMLElement;

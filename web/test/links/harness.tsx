@@ -3,7 +3,7 @@ import { vi } from "vitest";
 import { loadBranches, resetBranches, type Branch, type Business } from "../../src/branches/store";
 import { LinksSection } from "../../src/links/LinksSection";
 import { onOverviewChange, type OverviewChange } from "../../src/overview/changes";
-import { clearPrintQueue, installPrintQueue } from "../../src/print-queue";
+import { clearPrintQueue } from "../../src/print-queue";
 import { stubApi, stubApiReady, stubbedApi, stubbedApiReady } from "../api-stub";
 
 /**
@@ -108,14 +108,13 @@ export type Bridges = {
 
 let stopRecording = () => {};
 
-/** The legacy page's bridges, and the Overview changes, recorded. */
+/** A clean print queue and branches store, and the Overview changes, recorded. */
 export function installLegacy(): Bridges {
   const bridges: Bridges = { overview: [] };
   stubApiReady(Promise.resolve());
   stopRecording();
   stopRecording = onOverviewChange((change) => bridges.overview.push(change));
   resetBranches();
-  installPrintQueue();
   clearPrintQueue();
   return bridges;
 }

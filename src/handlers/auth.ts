@@ -1,5 +1,6 @@
 import type { Handler } from "hono";
 import type { AppEnv, HonoVars } from "../types/env";
+import { SUPABASE_JS_SCRIPT } from "./supabase-cdn";
 
 // ---------------------------------------------------------------------------
 // Shared HTML shell
@@ -143,7 +144,7 @@ function htmlShell(title: string, body: string, supabaseUrl: string, supabaseAno
     <h1>Link Shortener</h1>
     ${body}
   </div>
-  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  ${SUPABASE_JS_SCRIPT}
   <script>
     if (!window.supabase) {
       document.body.innerHTML = '<div style="text-align:center;padding:2rem;font-family:sans-serif;"><h2>Loading...</h2><p>If this persists, check your network connection.</p></div>';
@@ -486,7 +487,7 @@ export const authCallbackHandler: Handler<{ Bindings: AppEnv; Variables: HonoVar
     <a href="/login">Go to Login</a>
     <p id="error" class="error" style="display:none;margin-top:1rem;"></p>
   </div>
-  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  ${SUPABASE_JS_SCRIPT}
   <script>
     var sb = window.supabase.createClient(
       "${c.env.SUPABASE_URL}",

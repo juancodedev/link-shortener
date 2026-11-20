@@ -77,7 +77,7 @@ describe("landingHandler", () => {
     );
 
     expect(externalScripts).toEqual([
-      "https://unpkg.com/@supabase/supabase-js@2",
+      "https://unpkg.com/@supabase/supabase-js@2.119.0/dist/umd/supabase.js",
     ]);
   });
 

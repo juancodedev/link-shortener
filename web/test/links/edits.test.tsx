@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { reloadLinks } from "../../src/links/reload";
 import { clearPrintQueue, getPrintQueue } from "../../src/print-queue";
 import {
   button,
@@ -12,6 +13,7 @@ import {
   link,
   mountLinks,
   panel,
+  provideBranches,
   row,
   settle,
   standardApi,
@@ -131,9 +133,8 @@ describe("branch", () => {
     { id: "loc-old", name: "Vieja", business_id: "biz-1", business_name: "Cafe Uno", is_active: true },
   ];
 
-  beforeEach(() => {
-    window.__branches = branches;
-    window.__businesses = [{ id: "biz-1", name: "Cafe Uno", is_active: true }];
+  beforeEach(async () => {
+    await provideBranches(branches, [{ id: "biz-1", name: "Cafe Uno", is_active: true }]);
   });
 
   it("PATCHes the branch and repaints the owner column with the names from the branches list", async () => {
@@ -189,10 +190,7 @@ describe("branch", () => {
     await mountLinks();
 
     type("branch-link-uuid", "loc-1");
-    act(() => {
-      window.__branches = [{ ...branches[0]!, is_active: false }, branches[1]!];
-      window.dispatchEvent(new Event("brancheschange"));
-    });
+    await provideBranches([{ ...branches[0]!, is_active: false }, branches[1]!], [{ id: "biz-1", name: "Cafe Uno", is_active: true }]);
     expect(field("branch-link-uuid").value).toBe("loc-old");
 
     save("branch-link-uuid");
@@ -612,7 +610,7 @@ describe("print queue in the table", () => {
 
     links = [link({ id: "a", original_url: "https://configured.example" })];
     await act(async () => {
-      await window.__loadLinks!();
+      await reloadLinks();
     });
     await settle();
 

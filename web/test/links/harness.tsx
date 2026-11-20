@@ -1,5 +1,6 @@
 import { act, render } from "@testing-library/react";
 import { vi } from "vitest";
+import { loadBranches, resetBranches, type Branch, type Business } from "../../src/branches/store";
 import { LinksSection } from "../../src/links/LinksSection";
 import { onOverviewChange, type OverviewChange } from "../../src/overview/changes";
 import { clearPrintQueue, installPrintQueue } from "../../src/print-queue";
@@ -8,7 +9,8 @@ import { clearPrintQueue, installPrintQueue } from "../../src/print-queue";
  * Stands in for the server-rendered dashboard around the Links island:
  * window.__api (which, like the real one, THROWS on a non-ok response), the
  * readiness gate, and the bridges the legacy page exposes. The changes the
- * island announces to the Overview island are recorded too.
+ * island announces to the Overview island are recorded too. The in-bundle
+ * stores (branches, print queue) are reset, since they outlive a render.
  */
 
 export type Call = { method: string; path: string; body?: unknown };
@@ -110,11 +112,30 @@ export function installLegacy(): Bridges {
   window.__apiReady = Promise.resolve();
   stopRecording();
   stopRecording = onOverviewChange((change) => bridges.overview.push(change));
-  window.__branches = undefined;
-  window.__businesses = undefined;
+  resetBranches();
   installPrintQueue();
   clearPrintQueue();
   return bridges;
+}
+
+/**
+ * Fills the branches store through its real load, answering only its two
+ * requests, then puts the test's own window.__api back.
+ */
+export async function provideBranches(branches: Branch[], businesses: Business[]): Promise<void> {
+  const previous = window.__api;
+  const ready = window.__apiReady;
+  window.__apiReady = Promise.resolve();
+  installApi((method, path) => {
+    if (method === "GET" && path === "/api/locations") return { locations: branches };
+    if (method === "GET" && path === "/api/businesses") return { businesses };
+    throw new Error(`unexpected ${method} ${path}`);
+  });
+  await act(async () => {
+    await loadBranches();
+  });
+  window.__api = previous;
+  window.__apiReady = ready;
 }
 
 /** Lets every pending request, JSON parse and React update settle. */

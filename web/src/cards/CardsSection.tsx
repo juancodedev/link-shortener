@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import type { QueueItem } from "../legacy";
 import { CARD_MM, computeSheetLayout, presetForSize, SHEET_PRESETS, sheetPresetSize } from "./sheet";
+import { reloadLinks } from "../links/reload";
 import { usePrintQueue } from "./usePrintQueue";
 
 /**
@@ -149,7 +150,7 @@ export function CardsSection() {
         await window.__api("POST", "/api/links/printed", { ids: queue.map((item) => item.id) });
         window.__clearPrintQueue();
         // The rows carry the new printed_at: reload once, not per card.
-        void window.__loadLinks?.();
+        void reloadLinks();
       } catch (err) {
         // Nothing was recorded, so the batch stays where it is.
         window.alert("Error: " + (err instanceof Error ? err.message : ""));

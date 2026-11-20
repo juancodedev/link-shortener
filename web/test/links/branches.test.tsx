@@ -1,12 +1,13 @@
-import { act, cleanup } from "@testing-library/react";
+import { cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { BRANCHES_EVENT } from "../../src/legacy";
-import { branchOptions, pickableBranches } from "../../src/links/branches";
-import { field, installLegacy, link, mountLinks, standardApi } from "./harness";
+import { branchOptions } from "../../src/links/branches";
+import { field, installLegacy, link, mountLinks, provideBranches, standardApi } from "./harness";
 
-// The row's branch picker (odd/tasks/business-branches.md S4) and the rules it
-// shares with the legacy comments filter. Ported from the Worker tests that
-// compiled fillBranchSelects + pickableBranches out of the served HTML.
+// The row's branch picker (odd/tasks/business-branches.md S4); the
+// pickableBranches rule it shares with the Comments filter is pinned in
+// web/test/branches/store.test.ts. Ported from the Worker tests that compiled
+// fillBranchSelects + pickableBranches out of the served HTML; the lists come
+// from the in-bundle branches store (web/src/branches, T5).
 
 const businesses = [
   { id: "biz-1", name: "Café Central", is_active: true },
@@ -22,16 +23,6 @@ const branches = [
 
 const options = (id = "branch-link-uuid") =>
   [...field(id).options].map((o) => ({ label: o.text, value: o.value, selected: o.selected }));
-
-describe("pickableBranches", () => {
-  it("keeps switched-on branches outside switched-off businesses", () => {
-    expect(pickableBranches(branches, businesses).map((b) => b.id)).toEqual(["loc-1", "loc-4"]);
-  });
-
-  it("treats a missing is_active as on", () => {
-    expect(pickableBranches([{ id: "x", name: "X", business_id: "biz-1" }], [{ id: "biz-1", name: "B" }])).toHaveLength(1);
-  });
-});
 
 describe("branchOptions", () => {
   it("offers Unassigned, then each pickable branch named after its business", () => {
@@ -71,8 +62,7 @@ describe("the row's branch picker", () => {
   });
 
   it("keeps inactive branches and businesses out, except the link's current one", async () => {
-    window.__branches = branches;
-    window.__businesses = businesses;
+    await provideBranches(branches, businesses);
     standardApi({ links: [link({ location_id: "loc-old" })] });
     await mountLinks();
 
@@ -80,24 +70,21 @@ describe("the row's branch picker", () => {
     expect(options().find((o) => o.selected)).toEqual({ label: "Café Central — Vieja (inactive)", value: "loc-old", selected: true });
   });
 
-  it("rebuilds every picker when the legacy page announces new branches", async () => {
+  it("rebuilds every picker when the branches store reloads", async () => {
     standardApi({ links: [link({ location_id: "loc-1" })] });
     await mountLinks();
     expect(options().map((o) => o.label)).toEqual(["Unassigned", "Current branch"]);
 
-    act(() => {
-      window.__branches = branches;
-      window.__businesses = businesses;
-      window.dispatchEvent(new Event(BRANCHES_EVENT));
-    });
+    const api = window.__api;
+    await provideBranches(branches, businesses);
+    window.__api = api;
 
     expect(options().map((o) => o.label)).toEqual(["Unassigned", "Café Central — Providencia", "Suelta"]);
     expect(field("branch-link-uuid").value).toBe("loc-1");
   });
 
-  it("reads branches the legacy page loaded before the island mounted", async () => {
-    window.__branches = branches;
-    window.__businesses = businesses;
+  it("reads branches the store loaded before the island mounted", async () => {
+    await provideBranches(branches, businesses);
     standardApi({ links: [link({ location_id: null })] });
     await mountLinks();
 

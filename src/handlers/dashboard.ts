@@ -1,7 +1,6 @@
 import type { Handler } from "hono";
 import type { AppEnv, HonoVars } from "../types/env";
 import { VISITOR_ESTIMATE_CAVEAT } from "../analytics/metrics";
-import { renderFeedbackInbox } from "./feedback-inbox";
 import { resolveMaxActiveLinks } from "../api/links";
 import { icon } from "./icons";
 
@@ -524,8 +523,8 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     .gate-empty-note { border-top: 0; padding-top: 0; margin-top: 0; }
     .rating-of { font-size: 0.875rem; color: var(--ink-soft); }
 
-    /* The feedback inbox. Shared with src/handlers/feedback-inbox.ts, which
-       emits these classes. The comment wraps rather than being cut: the API
+    /* The feedback inbox. Shared with the Comments island (web/src/comments),
+       which emits these classes. The comment wraps rather than being cut: the API
        returns the full text and the owner should be able to read all of it. */
     .feedback-head { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; }
     .feedback-head h3 { margin: 0; }
@@ -855,8 +854,8 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       };
 
       // Open the readiness gate LAST, once the helper it guards actually
-      // exists. Every caller suspended on this promise (the Links island's
-      // load among them, web/src/links) resumes here
+      // exists. Every caller suspended on this promise (each island's load,
+      // web/src) resumes here
       // and finds a callable window.__api, however early it was invoked.
       // Resolving it any earlier — on the session, before the assignment — would
       // hand every waiter straight back the race this gate exists to close.
@@ -865,16 +864,10 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       // is already navigating to /login, and a load started there could only
       // fail. Leaving waiters parked is the honest outcome, not a leak.
       window.__apiReadyResolve?.();
-
-      // Once, at boot, not on every links load: the feedback address belongs
-      // to the tenant and not to any row, so re-reading it whenever a link is
-      // toggled would be a request per keystroke of someone else's workflow.
-      if (typeof loadFeedbackEmail === "function") loadFeedbackEmail();
-      if (typeof loadFeedbackInbox === "function") loadFeedbackInbox();
-      if (typeof loadBranches === "function") loadBranches();
-      // No links or Overview loads here: those islands (a module, so it runs
-      // after this page is parsed) load themselves once this gate opens.
-      // Calling them from here as well would load them twice.
+      // No loads here: every section is a React island (a module, so it runs
+      // after this page is parsed) and loads itself once this gate opens,
+      // the branches store included (web/src/dashboard.tsx). Calling a load
+      // from here as well would run it twice.
     })();
   </script>
   <!-- React islands (web/, odd/tasks/dashboard-react.md S2): a module runs
@@ -979,106 +972,46 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
 
     <section class="dash-section" data-section="businesses" hidden>
     <!--
-      BUSINESSES AND BRANCHES.
+      BUSINESSES AND BRANCHES, drawn by the React island in web/src/businesses
+      (odd/tasks/dashboard-react.md T5).
 
       A business ("local") groups one or more branches ("sucursales"), and each
       link belongs to a branch. Operator-only: the businesses never see this.
       Every comment and rating is then traceable to business, branch and link
-      (odd/tasks/business-branches.md).
+      (odd/tasks/business-branches.md). The lists live in the bundle's
+      branches store (web/src/branches), which the Links pickers and the
+      Comments filter read too.
     -->
-    <div class="card" id="businesses-card">
-      <h3>Businesses and branches</h3>
-      <label for="new-business-name">New business</label>
-      <div class="field-row">
-        <input type="text" id="new-business-name" maxlength="120" placeholder="e.g. Café Central">
-        <button type="button" id="add-business" class="btn-sm btn-primary">Add</button>
-      </div>
-      <div id="businesses-msg" class="message"></div>
-      <div id="businesses-body" class="gap-top"><div class="loading">Loading...</div></div>
-    </div>
+    <div id="businesses-root" data-island="businesses"></div>
     </section>
 
     <section class="dash-section" data-section="comments" hidden>
-    <div class="card" id="feedback-card">
-      <div class="feedback-head">
-        <h3>What customers wrote</h3>
-        <button type="button" id="feedback-export" class="btn-sm">Download CSV</button>
-      </div>
-      <label for="feedback-filter" class="gap-top-sm">Show comments from</label>
-      <select id="feedback-filter">
-        <option value="">All businesses</option>
-      </select>
-      <div id="feedback-export-msg" class="message"></div>
-      <div id="feedback-body"><div class="loading">Loading...</div></div>
-    </div>
+    <!--
+      WHAT CUSTOMERS WROTE, drawn by the React island in web/src/comments
+      (T5): the feedback inbox, its business/branch filter and the CSV export.
+      The island keeps #feedback-card, which the print rules key on.
+    -->
+    <div id="comments-root" data-island="comments"></div>
     </section>
 
     <section class="dash-section" data-section="settings" hidden>
     <!--
-      WHERE FEEDBACK SHOULD GO.
-
-      A card's QR leads to the review gate. A customer can leave a private
-      comment there, and it lands in analytics.tag_feedback and shows up in the
-      satisfaction panel below.
-
-      They can also record here where that should be delivered.
+      WHERE FEEDBACK SHOULD GO, drawn by the React island in web/src/settings
+      (T5).
 
       IT DOES NOT SEND ANYTHING YET. The address is stored, shown and exported
-      into the print sheet's CSV, and nothing is emailed from it. That is the
-      honest state of this field, and the label says so, because a green
-      dashboard implying "reviews are being emailed" is worse than no field at
-      all: an owner would stop checking the panel.
-
-      Wired as static listeners with the other form controls, not through the
-      delegated switch — that switch is for record actions, and this acts on no
-      record.
+      into the print sheet's CSV, and nothing is emailed from it. The island's
+      help text says so, because a green dashboard implying "reviews are being
+      emailed" is worse than no field at all: an owner would stop checking the
+      comments.
     -->
-    <div class="card" id="feedback-email-card">
-      <h3>Feedback email</h3>
-      <p class="field-help">
-        Where you would like private customer comments delivered. Stored now;
-        nothing is emailed yet — comments still arrive in the Comments section.
-      </p>
-      <label for="feedback-email">Email address</label>
-      <input type="email" id="feedback-email" placeholder="you@yourbusiness.com"
-             autocomplete="email" maxlength="254">
-      <div id="feedback-email-msg" class="message"></div>
-      <button type="button" id="feedback-email-save" class="btn-sm btn-primary gap-top-sm">Save</button>
-    </div>
+    <div id="settings-root" data-island="settings"></div>
     </section>
 
     </main>
     </div>
 
     <script>
-      /**
-       * The esbuild runtime shim.
-       *
-       * \`renderFeedbackInbox.toString()\` below serialises the ALREADY-BUNDLED
-       * function, because the Worker this handler ships in was compiled by
-       * esbuild with \`keepNames: true\` — which rewrites every named function
-       * inside the body to a \`__name(fn, "fn")\` statement. Those statements
-       * ride along in the stringified source and then execute HERE.
-       *
-       * \`__name\` is defined at the top of the Worker bundle, in module scope,
-       * so it does not exist in this page. Without this line the very first
-       * call throws \`ReferenceError: __name is not defined\` and the comments
-       * inbox never renders. (The review-gate panel, the first function
-       * injected this way, is a React component now: web/src/overview.)
-       *
-       * This is the same helper, byte for byte, that esbuild's own browser
-       * runtime declares. It is not a no-op shim: function declarations already
-       * carry their own \`.name\`, but an arrow assigned to a variable does not,
-       * so this preserves the names esbuild is preserving for a reason.
-       *
-       * \`var\`, not \`const\`, to match esbuild: the call sites are inside the
-       * panel body and must resolve through the global object.
-       */
-      var __name = (target, value) =>
-        Object.defineProperty(target, "name", { value, configurable: true });
-
-      // Self-contained on purpose, see feedback-inbox.ts.
-      const renderFeedbackInbox = ${renderFeedbackInbox.toString()};
       /**
        * Readiness gate for the auth bootstrap.
        *
@@ -1088,12 +1021,11 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
        * anything that reached for it at parse time died on
        * "window.__api is not a function".
        *
-       * The dependency is real, so it is expressed as a dependency: the Links
-       * island (web/src/links) awaits this promise, and the bootstrap resolves
-       * it once the helper is defined. A bare load call here is gone because it was never
-       * right — this script can only wire things up, the load belongs to the
-       * bootstrap that owns the session. A setTimeout would have hidden the
-       * race rather than closing it, and would flake differently under load.
+       * The dependency is real, so it is expressed as a dependency: every
+       * React island (web/) awaits this promise before its first request, and
+       * the bootstrap resolves it once the helper is defined. A setTimeout
+       * would have hidden the race rather than closing it, and would flake
+       * differently under load.
        *
        * Created HERE, ahead of the bootstrap script, so a caller running at
        * parse time finds the gate rather than undefined.
@@ -1101,86 +1033,14 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       window.__apiReady = new Promise((resolve) => { window.__apiReadyResolve = resolve; });
 
       // ---------------------------------------------------------------------
-      // Feedback email
-      //
-      // Loads whatever is stored so the owner can see it, which is the whole
-      // point of showing it here. Fetches once per load rather than on every
-      // render of the links table, because it belongs to the tenant and not to
-      // any row.
-      // ---------------------------------------------------------------------
-      async function loadFeedbackEmail() {
-        try {
-          const res = await window.__api("GET", "/api/tenant/feedback-email");
-          const body = await res.json();
-          const input = document.getElementById("feedback-email");
-          if (input && typeof body.feedback_email === "string") {
-            input.value = body.feedback_email;
-          }
-        } catch {
-          // A tenant that cannot read its own setting still gets a working
-          // dashboard; the field just stays empty rather than blocking the page.
-        }
-      }
-
-      // ---------------------------------------------------------------------
-      // Feedback inbox
-      //
-      // Once at boot, like the feedback address: the comments belong to the
-      // tenant, not to any link row, so re-reading them on every table refresh
-      // would be a request per toggle for data that did not change.
-      //
-      // Kept out of the links load's all-or-nothing fetch on purpose. A failure here
-      // says so in this card and leaves the rest of the dashboard working;
-      // the links table should not disappear because the inbox could not load.
-      // ---------------------------------------------------------------------
-      /**
-       * The comment filter as the API's query string. "b:<id>" is a business,
-       * "l:<id>" a branch, "" everything. The list and the CSV read the same
-       * value, so the export is always what is on screen.
-       */
-      function feedbackQuery() {
-        const value = document.getElementById("feedback-filter").value;
-        if (value.indexOf("b:") === 0) return "?business_id=" + encodeURIComponent(value.slice(2));
-        if (value.indexOf("l:") === 0) return "?location_id=" + encodeURIComponent(value.slice(2));
-        return "";
-      }
-
-      /**
-       * Rebuilds the filter's options from the loaded businesses and branches,
-       * keeping the current choice. Built with DOM APIs: the names are typed
-       * by a person.
-       */
-      function fillFeedbackFilter() {
-        const select = document.getElementById("feedback-filter");
-        if (!select) return;
-        const current = select.value;
-        const businesses = (window.__businesses || []).filter((b) => b.is_active !== false);
-        const branches = pickableBranches(window.__branches || [], window.__businesses || []);
-        select.textContent = "";
-        select.add(new Option("All businesses", ""));
-        businesses.forEach((b) => {
-          select.add(new Option(b.name, "b:" + b.id));
-          branches
-            .filter((l) => l.business_id === b.id)
-            .forEach((l) => select.add(new Option("— " + l.name, "l:" + l.id)));
-        });
-        branches
-          .filter((l) => !l.business_id)
-          .forEach((l) => select.add(new Option(l.name + " (no business)", "l:" + l.id)));
-        select.value = current;
-        // The chosen business or branch no longer exists: fall back to all,
-        // and reload, or the list would stay filtered under an "All" label.
-        if (select.value !== current) {
-          select.value = "";
-          loadFeedbackInbox();
-        }
-      }
-
-      document.getElementById("feedback-filter").addEventListener("change", () => loadFeedbackInbox());
-
-      // ---------------------------------------------------------------------
       // Sidebar sections (odd/tasks/print-queue-cards.md S1). The hash names
       // the visible section, so a reload or a shared link opens the same one.
+      //
+      // Every section's content is a React island now (web/,
+      // odd/tasks/dashboard-react.md T2-T5), each loading its own data once
+      // the gate above opens. What this page still owns is the shell: the
+      // auth bootstrap, window.__api and its gate, the tenant picker, the
+      // topbar and this sidebar routing (T6 moves them).
       // ---------------------------------------------------------------------
       /** The section a URL hash names, or Links for anything else. */
       function sectionFromHash(hash) {
@@ -1203,331 +1063,6 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
 
       window.addEventListener("hashchange", () => showSection(sectionFromHash(location.hash)));
       showSection(sectionFromHash(location.hash));
-
-      // ---------------------------------------------------------------------
-      // Bridges for the React islands (web/, odd/tasks/dashboard-react.md).
-      //
-      // The Links (T3a/T3b) and Overview (T4) sections and the print queue
-      // are React now, and each loads its own data (L13). What this page
-      // still lends them is window.__api and its readiness gate, and the
-      // branches load (loadBranches, announced with brancheschange). The
-      // print queue and window.__loadLinks are lent the other way, by the
-      // bundle (web/src/print-queue.ts, web/src/links).
-      // ---------------------------------------------------------------------
-
-      async function loadFeedbackInbox() {
-        const body = document.getElementById("feedback-body");
-        if (!body) return;
-        try {
-          const res = await window.__api("GET", "/api/review-gate/feedback" + feedbackQuery());
-          // Checked before the body is read as an inbox: a 401 or 500 is JSON
-          // too, and rendering it would either throw somewhere inside the
-          // renderer or, worse, draw an empty inbox that looks like no one wrote.
-          if (!res.ok) throw new Error("feedback inbox: HTTP " + res.status);
-          body.innerHTML = renderFeedbackInbox(await res.json());
-        } catch (err) {
-          body.innerHTML = '<p class="gate-empty">Could not load comments.</p>';
-          console.error("feedback inbox failed to load", err);
-        }
-      }
-
-      /**
-       * The CSV export, downloaded through window.__api.
-       *
-       * Not a plain link: every tenant-scoped route authenticates with an
-       * Authorization: Bearer header and picks the tenant with X-Tenant-Slug,
-       * and a navigation carries neither — an href here would be a 401. So
-       * the file is fetched with the same headers as every other call and
-       * handed to the browser as a Blob. One auth path, nothing hand-written
-       * to drift out of sync with it.
-       *
-       * The server cannot say "truncated" inside the CSV without corrupting
-       * it, so it says so in X-Truncated, and this says it to the owner.
-       */
-      async function exportFeedbackCsv(btn, msg) {
-        btn.disabled = true;
-        msg.className = "message";
-        msg.textContent = "";
-        try {
-          const res = await window.__api("GET", "/api/review-gate/feedback.csv" + feedbackQuery());
-          // A refused export answers with a JSON error body. Read as a blob it
-          // would download as customer-feedback.csv and look like a file, so
-          // the status is checked first and the owner is told instead.
-          if (!res.ok) {
-            const body = await res.json().catch(() => ({}));
-            msg.className = "message error";
-            msg.textContent = "Could not export: " +
-              (body.detail || body.error || "HTTP " + res.status);
-            return;
-          }
-          const blob = await res.blob();
-          const href = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = href;
-          a.download = "customer-feedback.csv";
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          // Revoked on a delay: some browsers start the download after the
-          // click handler returns, and an already-revoked URL cancels it.
-          setTimeout(() => URL.revokeObjectURL(href), 10000);
-
-          if (res.headers.get("X-Truncated") === "true") {
-            msg.className = "message notice";
-            msg.textContent = "The file holds the newest " +
-              (res.headers.get("X-Feedback-Limit") || "") +
-              " comments; older ones were left out.";
-          }
-        } catch (err) {
-          msg.className = "message error";
-          msg.textContent = err instanceof Error ? err.message : "Could not export";
-        } finally {
-          btn.disabled = false;
-        }
-      }
-
-      document.getElementById("feedback-export").addEventListener("click", (e) =>
-        exportFeedbackCsv(e.currentTarget, document.getElementById("feedback-export-msg")));
-
-      document.getElementById("feedback-email-save").addEventListener("click", async () => {
-        const input = document.getElementById("feedback-email");
-        const msg = document.getElementById("feedback-email-msg");
-        const btn = document.getElementById("feedback-email-save");
-
-        btn.disabled = true;
-        msg.className = "message";
-        msg.textContent = "";
-
-        try {
-          const res = await window.__api("PUT", "/api/tenant/feedback-email", {
-            feedback_email: input.value,
-          });
-
-          // Only say "saved" when the server agreed. A confirmation that lies
-          // is worse than no confirmation: the owner walks away believing an
-          // address is recorded that is not.
-          if (!res.ok) {
-            const body = await res.json().catch(() => ({}));
-            msg.className = "message error";
-            msg.textContent = body.detail || body.error || "Could not save";
-            return;
-          }
-
-          msg.className = "message success";
-          msg.textContent = "Saved.";
-        } catch (err) {
-          msg.className = "message error";
-          msg.textContent = err instanceof Error ? err.message : "Error";
-        } finally {
-          btn.disabled = false;
-        }
-      });
-
-      /**
-       * Escapes a value for interpolation into innerHTML or a double-quoted
-       * attribute value.
-       *
-       * The card this page still renders by string (businesses and branches) is
-       * built by assigning a string to innerHTML, so every interpolated value
-       * is an injection vector. This helper is the only sanctioned way to put
-       * record data into that markup. The links table and the Overview cards
-       * no longer need it: they are React islands and render record data as
-       * text (web/src/links, web/src/overview).
-       *
-       * It is NOT a defence for JavaScript context. An onclick="..." body is
-       * handed to the JS engine, where &quot; and &#39; are ordinary characters
-       * that terminate nothing — so no generated markup carries an inline
-       * handler, and values reach JS through data-* attributes read via \`dataset\`.
-       */
-      function esc(value) {
-        if (value === null || value === undefined) return "";
-        return String(value)
-          .replace(/&/g, "&amp;")
-          .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;")
-          .replace(/"/g, "&quot;")
-          .replace(/'/g, "&#39;");
-      }
-
-      /**
-       * Loads the tenant's branches (locations, with their business) for the
-       * row pickers, then tells the Links island, which rebuilds its pickers
-       * from window.__branches. Separate from the links load: the list changes
-       * when branches are managed, not when a link is toggled.
-       */
-      async function loadBranches() {
-        const card = document.getElementById("businesses-body");
-        try {
-          const [locRes, bizRes] = await Promise.all([
-            window.__api("GET", "/api/locations"),
-            window.__api("GET", "/api/businesses"),
-          ]);
-          if (!locRes.ok) throw new Error("branches: HTTP " + locRes.status);
-          if (!bizRes.ok) throw new Error("businesses: HTTP " + bizRes.status);
-          window.__branches = (await locRes.json()).locations || [];
-          window.__businesses = (await bizRes.json()).businesses || [];
-          if (card) card.innerHTML = renderBusinesses(window.__businesses, window.__branches);
-          fillFeedbackFilter();
-        } catch (err) {
-          console.error("branches failed to load", err);
-          if (card) card.innerHTML = '<p class="gate-empty">Could not load businesses.</p>';
-        }
-        window.dispatchEvent(new Event("brancheschange"));
-      }
-
-      /**
-       * The businesses card: each business with its branches, then the
-       * branches that belong to none, each with a picker to move it into one.
-       * Every name is escaped — they are typed by a person.
-       */
-      /**
-       * Branches that can be chosen in a picker: switched on, and not inside a
-       * switched-off business. The card still lists everything, so an inactive
-       * one can be switched back on.
-       */
-      function pickableBranches(branches, businesses) {
-        const off = new Set(businesses.filter((b) => b.is_active === false).map((b) => b.id));
-        return branches.filter((l) => l.is_active !== false && !off.has(l.business_id));
-      }
-
-      function renderBusinesses(businesses, branches) {
-        const active = businesses.filter((b) => b.is_active !== false);
-        const toggle = (attrs, isActive) =>
-          \`<button type="button" class="btn-sm btn-outline" \${attrs} data-active="\${isActive ? "false" : "true"}">\${isActive ? "Deactivate" : "Activate"}</button>\`;
-        const inactiveNote = '<span class="field-note">Inactive</span>';
-
-        // Every branch can move: to another active business, or out of its own.
-        const branchLine = (l) => {
-          const targets = active
-            .filter((b) => b.id !== l.business_id)
-            .map((b) => \`<option value="\${esc(b.id)}">\${esc(b.name)}</option>\`)
-            .join("") + (l.business_id ? '<option value="none">No business</option>' : "");
-          const isActive = l.is_active !== false;
-          return \`<li class="biz-branch">
-            <span>\${esc(l.name)} <span class="field-note">\${esc(l.link_count)} links</span> \${isActive ? "" : inactiveNote}</span>
-            <span class="field-row">
-              <select id="move-\${esc(l.id)}"><option value="">Move to…</option>\${targets}</select>
-              <button type="button" class="btn-sm btn-outline" data-biz-action="move-branch" data-location-id="\${esc(l.id)}">Move</button>
-              \${toggle(\`data-biz-action="toggle-branch" data-location-id="\${esc(l.id)}"\`, isActive)}
-            </span>
-          </li>\`;
-        };
-
-        const groups = businesses.map((b) => {
-          const own = branches.filter((l) => l.business_id === b.id);
-          const isActive = b.is_active !== false;
-          return \`<div class="biz-group">
-            <div class="biz-name">\${esc(b.name)} \${isActive ? "" : inactiveNote}
-              \${toggle(\`data-biz-action="toggle-business" data-business-id="\${esc(b.id)}"\`, isActive)}</div>
-            <ul class="biz-branches">\${own.length ? own.map(branchLine).join("") : '<li class="field-note">No branches yet.</li>'}</ul>
-            <div class="field-row">
-              <input type="text" id="new-branch-\${esc(b.id)}" maxlength="120" placeholder="New branch, e.g. Providencia">
-              <button type="button" class="btn-sm btn-outline" data-biz-action="add-branch" data-business-id="\${esc(b.id)}">Add</button>
-            </div>
-          </div>\`;
-        });
-
-        const loose = branches.filter((l) => !l.business_id);
-        if (loose.length) {
-          groups.push(\`<div class="biz-group">
-            <div class="biz-name">Not in a business</div>
-            <ul class="biz-branches">\${loose.map(branchLine).join("")}</ul>
-          </div>\`);
-        }
-
-        return groups.length ? groups.join("") : '<p class="field-note">No businesses yet. Add the first one above.</p>';
-      }
-
-      /** Reloads everything that shows a business or branch name. */
-      function refreshOwnership() {
-        loadBranches();
-        if (window.__loadLinks) window.__loadLinks();
-      }
-
-      function showBusinessesMessage(text, kind) {
-        const msg = document.getElementById("businesses-msg");
-        msg.className = "message" + (kind ? " " + kind : "");
-        msg.textContent = text;
-      }
-
-      async function addBusiness() {
-        const input = document.getElementById("new-business-name");
-        const name = input.value.trim();
-        if (!name) return;
-        const res = await window.__api("POST", "/api/businesses", { name });
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          showBusinessesMessage(body.error || "Could not add the business.", "error");
-          return;
-        }
-        input.value = "";
-        showBusinessesMessage("", "");
-        refreshOwnership();
-      }
-
-      async function addBranch(businessId) {
-        const input = document.getElementById("new-branch-" + businessId);
-        if (!input) return;
-        const name = input.value.trim();
-        if (!name) return;
-        const res = await window.__api("POST", "/api/locations", { name, business_id: businessId });
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          showBusinessesMessage(body.error || "Could not add the branch.", "error");
-          return;
-        }
-        showBusinessesMessage("", "");
-        refreshOwnership();
-      }
-
-      async function moveBranch(locationId) {
-        const select = document.getElementById("move-" + locationId);
-        if (!select) return;
-        const value = select.value;
-        if (value === "") return;
-        // "none" takes the branch out of its business.
-        const res = await window.__api("PATCH", "/api/locations/" + locationId, {
-          business_id: value === "none" ? null : value,
-        });
-        if (!res.ok) {
-          showBusinessesMessage("Could not move the branch.", "error");
-          return;
-        }
-        showBusinessesMessage("", "");
-        refreshOwnership();
-      }
-
-      async function setBusinessActive(businessId, isActive) {
-        const res = await window.__api("PATCH", "/api/businesses/" + businessId, { is_active: isActive });
-        if (!res.ok) {
-          showBusinessesMessage("Could not update the business.", "error");
-          return;
-        }
-        showBusinessesMessage("", "");
-        refreshOwnership();
-      }
-
-      async function setBranchActive(locationId, isActive) {
-        const res = await window.__api("PATCH", "/api/locations/" + locationId, { is_active: isActive });
-        if (!res.ok) {
-          showBusinessesMessage("Could not update the branch.", "error");
-          return;
-        }
-        showBusinessesMessage("", "");
-        refreshOwnership();
-      }
-
-      // Static and delegated listeners: these act on businesses and branches,
-      // not on a link row.
-      document.getElementById("add-business").addEventListener("click", addBusiness);
-      document.getElementById("businesses-body").addEventListener("click", (e) => {
-        const el = e.target.closest("[data-biz-action]");
-        if (!el) return;
-        if (el.dataset.bizAction === "add-branch") addBranch(el.dataset.businessId);
-        else if (el.dataset.bizAction === "move-branch") moveBranch(el.dataset.locationId);
-        else if (el.dataset.bizAction === "toggle-business") setBusinessActive(el.dataset.businessId, el.dataset.active === "true");
-        else if (el.dataset.bizAction === "toggle-branch") setBranchActive(el.dataset.locationId, el.dataset.active === "true");
-      });
     </script>
   `;
 

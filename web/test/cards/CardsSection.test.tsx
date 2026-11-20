@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CardsSection } from "../../src/cards/CardsSection";
 import { CARD_MM, SHEET_PRESETS } from "../../src/cards/sheet";
 import type { QueueItem } from "../../src/legacy";
+import { provideLinksLoad } from "../../src/links/reload";
 
 type Calls = { api: string[]; requests: Array<{ method: string; path: string; body?: unknown }>; setQueued: Array<[string, boolean]>; cleared: number };
 
@@ -219,7 +220,7 @@ describe("Cards section (React)", () => {
   it("records the print run before emptying the batch, then refreshes Links", async () => {
     const calls = legacyWindow([{ id: "a", short_code: "AAA" }, { id: "b", short_code: "BBB" }]);
     const reload = vi.fn(async () => {});
-    window.__loadLinks = reload;
+    const stop = provideLinksLoad(reload);
     await mount();
     const svgCalls = calls.api.length;
 
@@ -239,6 +240,7 @@ describe("Cards section (React)", () => {
     ]);
     expect(calls.cleared).toBe(1);
     expect(reload).toHaveBeenCalledTimes(1);
+    stop();
   });
 
   it("keeps the batch when the print run could not be recorded", async () => {

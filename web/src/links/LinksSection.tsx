@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
 import { VISITOR_ESTIMATE_CAVEAT } from "../../../src/analytics/metrics";
+import { useBranches } from "../branches/store";
 import { announceOverviewChange } from "../overview/changes";
 import { getPrintQueue, prunePrintQueue, subscribePrintQueue } from "../print-queue";
-import { useBranches } from "./branches";
+import type { BranchList } from "./branches";
 import { CreateCard } from "./CreateCard";
 import { LinkRow, type MetricsState } from "./LinkRow";
 import { fetchLinks, type ClickMetrics, type Link } from "./load";
 import { QrModal } from "./QrModal";
+import { provideLinksLoad } from "./reload";
 
 /**
  * THE LINKS SECTION (dashboard-react T3a/T3b, S2/S5).
@@ -22,9 +24,10 @@ import { QrModal } from "./QrModal";
  * showSection toggles its `hidden`.
  *
  * It loads itself once the auth bootstrap opens window.__apiReady. Creating
- * here reloads through the same load directly; `window.__loadLinks` is lent
- * only to the legacy caller that changes what the table shows from outside
- * (businesses and branches, through refreshOwnership).
+ * here reloads through the same load directly; the sections that change what
+ * the table shows from outside (Cards after a print run, Businesses after a
+ * rename, move or switch) reach the same load through ./reload. The branch
+ * pickers read the in-bundle branches store (../branches).
  *
  * The Overview's gate and clients cards load themselves (L13). They summarise
  * the links, so every reload after the first one announces "links" to the
@@ -48,9 +51,13 @@ export function LinksSection({ limit }: { limit: number }) {
   /** The short URL whose QR is on show, or null while the modal is closed. */
   const [qrUrl, setQrUrl] = useState<string | null>(null);
   const queue = useSyncExternalStore(subscribePrintQueue, getPrintQueue);
-  const branches = useBranches();
+  const store = useBranches();
+  const branches: BranchList = useMemo(
+    () => ({ all: store.branches, businesses: store.businesses }),
+    [store.branches, store.businesses],
+  );
 
-  // Read by callbacks that must stay stable for window.__loadLinks.
+  // Read by callbacks that must stay stable across loads.
   /** The links of a table on screen, or null while loading or after an error. */
   const shown = useRef<Link[] | null>(null);
   const openRef = useRef(open);
@@ -143,10 +150,10 @@ export function LinksSection({ limit }: { limit: number }) {
   }, [fetchMetrics]);
 
   useEffect(() => {
-    window.__loadLinks = load;
+    const unprovide = provideLinksLoad(load);
     void load();
     return () => {
-      if (window.__loadLinks === load) delete window.__loadLinks;
+      unprovide();
       // Results that land after unmounting are dropped.
       loadSeq.current++;
     };

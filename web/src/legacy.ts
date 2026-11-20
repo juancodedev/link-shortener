@@ -8,18 +8,6 @@
  */
 export type QueueItem = { id: string; short_code: string };
 
-/** A branch ("sucursal") as GET /api/locations returns it. */
-export type Branch = {
-  id: string;
-  name: string;
-  business_id?: string | null;
-  business_name?: string | null;
-  is_active?: boolean;
-};
-
-/** A business ("local") as GET /api/businesses returns it. */
-export type Business = { id: string; name: string; is_active?: boolean };
-
 declare global {
   interface Window {
     /** Authenticated fetch: Bearer token, tenant header, 401 → /login. Throws on any non-ok response. */
@@ -32,16 +20,8 @@ declare global {
     __setPrintQueued: (id: string, queued: boolean, code?: string) => void;
     /** Empties the queue after a print run. */
     __clearPrintQueue: () => void;
-    /** Reloads the Links table; set by the Links island while it is mounted, for the legacy refreshOwnership. */
-    __loadLinks?: () => Promise<void>;
-    /** Legacy: the tenant's branches and businesses, set by loadBranches. */
-    __branches?: Branch[];
-    __businesses?: Business[];
   }
 }
 
 /** Fired on window whenever the print queue changes. */
 export const PRINT_QUEUE_EVENT = "printqueuechange";
-
-/** Fired on window by the legacy loadBranches once __branches/__businesses are set. */
-export const BRANCHES_EVENT = "brancheschange";

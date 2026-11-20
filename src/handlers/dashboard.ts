@@ -8,6 +8,18 @@ import { icon } from "./icons";
 // Shared shell
 // ---------------------------------------------------------------------------
 
+/**
+ * The config block's JSON, safe inside a <script> element: `<` is escaped so
+ * no value can close the element or open a comment, and U+2028/U+2029 so the
+ * text stays valid if anyone ever evaluates it.
+ */
+function configJson(config: { supabaseUrl: string; supabaseAnonKey: string }): string {
+  return JSON.stringify(config)
+    .replace(/</g, "\\u003c")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+}
+
 function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -756,122 +768,15 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
   <div class="container">
     ${body}
   </div>
-  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
-  <script>
-    (async () => {
-      if (!window.supabase) return;
-      var sb = window.supabase.createClient("${supabaseUrl}", "${supabaseAnonKey}");
-
-      const { data: { session } } = await sb.auth.getSession();
-      if (!session) { window.location.href = "/login"; return; }
-
-      document.getElementById("nav-email").textContent = session.user.email;
-      document.getElementById("logout-nav").addEventListener("click", async () => {
-        await sb.auth.signOut();
-        window.location.href = "/";
-      });
-
-      window.__sb = sb;
-      window.__token = session.access_token;
-
-      // Defined before __api can reach it: __api calls this synchronously on a
-      // 409, and the boot loads run at the end of this IIFE.
-      window.__showTenantPicker = function (available) {
-        var host = document.getElementById("tenant-picker");
-        if (!host) {
-          host = document.createElement("div");
-          host.id = "tenant-picker";
-          document.body.insertBefore(host, document.body.firstChild);
-        }
-        var current = null;
-        try { current = window.localStorage.getItem("tenant"); } catch (e) {}
-
-        var opts = available.map(function (t) {
-          var sel = t.slug === current ? " selected" : "";
-          return '<option value="' + String(t.slug).replace(/"/g, "&quot;") + '"' + sel + ">" +
-                 String(t.displayName || t.slug).replace(/[<>&]/g, "") + " (" + String(t.role) + ")</option>";
-        }).join("");
-
-        host.innerHTML =
-          '<div class="tenant-bar"><label for="tenant-select">Ubicaci&oacute;n</label>' +
-          '<select id="tenant-select">' + opts + "</select></div>";
-
-        // The bar used to be styled from here with an inline cssText blob
-        // carrying its own hardcoded colours, which put two of them outside the
-        // reach of the token layer. It is a real rule now (see .tenant-bar), so
-        // the markup above is the only thing this function needs to produce.
-        var sel = document.getElementById("tenant-select");
-        sel.onchange = function () {
-          try { window.localStorage.setItem("tenant", sel.value); } catch (e) {}
-          window.location.reload();
-        };
-        window.scrollTo(0, 0);
-      };
-      window.__api = async function(method, path, body) {
-        const headers = { "Content-Type": "application/json", "Authorization": "Bearer " + window.__token };
-
-        // Which location this call is about. Resolved from the URL first so a
-        // shared dashboard link opens the right store, then from the last
-        // choice. Absent for a single-location user, who never sees it.
-        var q = new URLSearchParams(window.location.search).get("tenant");
-        if (!q) { try { q = window.localStorage.getItem("tenant"); } catch (e) { q = null; } }
-        if (q) headers["X-Tenant-Slug"] = q;
-
-        // no-store, because the server already sends it, and because deleting a
-        // link has to visibly remove its row.
-        //
-        // The header is the contract; this is the belt to its braces. A GET that
-        // follows a mutation must never be answered from a cache holding the
-        // list as it was BEFORE the mutation — which is exactly what happened,
-        // and exactly why a hard refresh was the only thing that worked: a hard
-        // refresh is the browser's own way of saying no-cache.
-        const res = await fetch(path, {
-          method,
-          headers,
-          body: body ? JSON.stringify(body) : undefined,
-          cache: "no-store",
-        });
-        if (res.status === 401) { window.location.href = "/login"; throw new Error("Unauthorized"); }
-
-        // Several locations and none chosen. The API refuses rather than
-        // guessing — guessing was the bug Phase 4 removed — so the client has
-        // to choose. This is the only way a multi-store user ever sees 409.
-        if (res.status === 409) {
-          let payload = null;
-          try { payload = await res.json(); } catch (e) {}
-          if (payload && payload.error === "tenant_required" && Array.isArray(payload.available)) {
-            window.__showTenantPicker(payload.available);
-            throw new Error("tenant_required");
-          }
-        }
-
-        if (!res.ok) {
-          let msg = "Server error";
-          try { const e = await res.json(); msg = e.error || msg; } catch {}
-          throw new Error(msg);
-        }
-        return res;
-      };
-
-      // Open the readiness gate LAST, once the helper it guards actually
-      // exists. Every caller suspended on this promise (each island's load,
-      // web/src) resumes here
-      // and finds a callable window.__api, however early it was invoked.
-      // Resolving it any earlier — on the session, before the assignment — would
-      // hand every waiter straight back the race this gate exists to close.
-      //
-      // The unauthenticated branch above returns WITHOUT resolving: the browser
-      // is already navigating to /login, and a load started there could only
-      // fail. Leaving waiters parked is the honest outcome, not a leak.
-      window.__apiReadyResolve?.();
-      // No loads here: every section is a React island (a module, so it runs
-      // after this page is parsed) and loads itself once this gate opens,
-      // the branches store included (web/src/dashboard.tsx). Calling a load
-      // from here as well would run it twice.
-    })();
-  </script>
-  <!-- React islands (web/, odd/tasks/dashboard-react.md S2): a module runs
-       after the scripts above, so window.__api already exists. -->
+  <!--
+    Deployment config for the bundle's auth bootstrap (web/src/shell/auth.ts),
+    as data rather than code: the Worker stays the source of these values and
+    the page carries no inline executable script. The anon key is public by
+    design; nothing else goes here.
+  -->
+  <script type="application/json" id="dashboard-config">${configJson({ supabaseUrl, supabaseAnonKey })}</script>
+  <!-- The shell (auth, API helper, tenant picker, sidebar routing) and every
+       section are the React bundle (web/, odd/tasks/dashboard-react.md). -->
   <script type="module" src="/assets/dashboard.js"></script>
 </body>
 </html>`;
@@ -895,7 +800,9 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       One section is visible at a time; the sidebar link and the URL hash pick
       it, so a reload stays where the owner was. Links is the default: it is
       where cards are created, and a phone has always opened there. Every
-      section's data still loads at boot, so switching is instant.
+      section's data still loads at boot, so switching is instant. The
+      bundle's router (web/src/shell/routing.ts) toggles [hidden] on these
+      sections and the active link; the print rules key on [hidden].
     -->
     <div class="app">
     <aside class="sidebar no-print">
@@ -1010,60 +917,6 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
 
     </main>
     </div>
-
-    <script>
-      /**
-       * Readiness gate for the auth bootstrap.
-       *
-       * This script is parsed BEFORE the shell's Supabase bootstrap, and that
-       * bootstrap suspends on \`await sb.auth.getSession()\` — a network round
-       * trip. So window.__api does not exist yet while this script runs, and
-       * anything that reached for it at parse time died on
-       * "window.__api is not a function".
-       *
-       * The dependency is real, so it is expressed as a dependency: every
-       * React island (web/) awaits this promise before its first request, and
-       * the bootstrap resolves it once the helper is defined. A setTimeout
-       * would have hidden the race rather than closing it, and would flake
-       * differently under load.
-       *
-       * Created HERE, ahead of the bootstrap script, so a caller running at
-       * parse time finds the gate rather than undefined.
-       */
-      window.__apiReady = new Promise((resolve) => { window.__apiReadyResolve = resolve; });
-
-      // ---------------------------------------------------------------------
-      // Sidebar sections (odd/tasks/print-queue-cards.md S1). The hash names
-      // the visible section, so a reload or a shared link opens the same one.
-      //
-      // Every section's content is a React island now (web/,
-      // odd/tasks/dashboard-react.md T2-T5), each loading its own data once
-      // the gate above opens. What this page still owns is the shell: the
-      // auth bootstrap, window.__api and its gate, the tenant picker, the
-      // topbar and this sidebar routing (T6 moves them).
-      // ---------------------------------------------------------------------
-      /** The section a URL hash names, or Links for anything else. */
-      function sectionFromHash(hash) {
-        const sections = ["overview", "links", "cards", "businesses", "comments", "settings"];
-        const name = String(hash || "").replace(/^#/, "");
-        return sections.indexOf(name) > -1 ? name : "links";
-      }
-
-      function showSection(name) {
-        document.querySelectorAll(".dash-section").forEach((el) => {
-          el.hidden = el.getAttribute("data-section") !== name;
-        });
-        document.querySelectorAll("[data-section-link]").forEach((a) => {
-          const on = a.getAttribute("data-section-link") === name;
-          a.classList.toggle("is-active", on);
-          if (on) a.setAttribute("aria-current", "page");
-          else a.removeAttribute("aria-current");
-        });
-      }
-
-      window.addEventListener("hashchange", () => showSection(sectionFromHash(location.hash)));
-      showSection(sectionFromHash(location.hash));
-    </script>
   `;
 
   return c.html(shell("Dashboard", body, c.env.SUPABASE_URL, c.env.SUPABASE_ANON_KEY));

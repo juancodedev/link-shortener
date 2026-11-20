@@ -5,6 +5,7 @@ import { MIN_RATED_SAMPLE } from "../../../src/analytics/review-gate";
 import { announceOverviewChange } from "../../src/overview/changes";
 import { ClientRows, OverviewSection } from "../../src/overview/OverviewSection";
 import { count, gate, installApi, settle, type Call, type Handler } from "../links/harness";
+import { stubApi, stubApiReady } from "../api-stub";
 
 // The Overview section (dashboard-react T4, S5, L13). Ported from the Worker
 // tests of the legacy cards (renderClients, the hourly traffic card, the
@@ -59,7 +60,7 @@ async function mountOverview() {
 let errors: { mock: { calls: unknown[][] }; mockRestore: () => void };
 
 beforeEach(() => {
-  window.__apiReady = Promise.resolve();
+  stubApiReady(Promise.resolve());
   errors = vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -72,7 +73,7 @@ afterEach(() => {
 describe("Overview island — loading", () => {
   it("sends no request until the auth gate opens, then loads its three cards once each", async () => {
     const auth = gate();
-    window.__apiReady = auth.wait;
+    stubApiReady(auth.wait);
     const calls = overviewApi();
 
     render(<OverviewSection />);
@@ -91,10 +92,10 @@ describe("Overview island — loading", () => {
     ]);
   });
 
-  it("uses the window.__api bound when the gate opens, not the one at mount", async () => {
+  it("uses the API answering when the gate opens, not the one at mount", async () => {
     const auth = gate();
-    window.__apiReady = auth.wait;
-    (window as { __api?: unknown }).__api = undefined;
+    stubApiReady(auth.wait);
+    stubApi(undefined);
 
     render(<OverviewSection />);
     await settle();

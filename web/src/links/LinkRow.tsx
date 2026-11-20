@@ -4,6 +4,7 @@ import { announceOverviewChange } from "../overview/changes";
 import { setPrintQueued } from "../print-queue";
 import { branchOptions, type BranchList } from "./branches";
 import { errorText, type ClickMetrics, type Link } from "./load";
+import { api } from "../api";
 
 /**
  * One link as its two table rows: the row itself and its editing panel.
@@ -42,7 +43,7 @@ export type LinkRowProps = {
 };
 
 const PATCH = (id: string, body: Record<string, unknown>) =>
-  window.__api("PATCH", `/api/links/${encodeURIComponent(id)}`, body);
+  api("PATCH", `/api/links/${encodeURIComponent(id)}`, body);
 
 function linkStatus(l: Link): "inactive" | "expired" | "active" {
   if (!l.is_active) return "inactive";
@@ -184,7 +185,7 @@ export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePane
   async function remove() {
     if (!confirm("Delete this link permanently?")) return;
     try {
-      const res = await window.__api("DELETE", `/api/links/${encodeURIComponent(l.id)}`);
+      const res = await api("DELETE", `/api/links/${encodeURIComponent(l.id)}`);
       if (!res.ok) throw new Error("Failed");
       onReload();
     } catch (err) {

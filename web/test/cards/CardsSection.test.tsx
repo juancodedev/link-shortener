@@ -4,6 +4,7 @@ import { CardsSection } from "../../src/cards/CardsSection";
 import { CARD_MM, SHEET_PRESETS } from "../../src/cards/sheet";
 import type { QueueItem } from "../../src/legacy";
 import { provideLinksLoad } from "../../src/links/reload";
+import { stubApi } from "../api-stub";
 
 type Calls = { api: string[]; requests: Array<{ method: string; path: string; body?: unknown }>; setQueued: Array<[string, boolean]>; cleared: number };
 
@@ -11,11 +12,11 @@ type Calls = { api: string[]; requests: Array<{ method: string; path: string; bo
 function legacyWindow(queue: QueueItem[], svg = (path: string) => `<svg data-path="${path}"></svg>`) {
   const calls: Calls = { api: [], requests: [], setQueued: [], cleared: 0 };
   window.__printQueue = queue;
-  window.__api = vi.fn(async (method: string, path: string, body?: unknown) => {
+  stubApi(vi.fn(async (method: string, path: string, body?: unknown) => {
     calls.api.push(path);
     calls.requests.push({ method, path, body });
     return new Response(svg(path), { status: 200 });
-  });
+  }));
   window.__setPrintQueued = (id: string, queued: boolean) => calls.setQueued.push([id, queued]);
   window.__clearPrintQueue = () => {
     calls.cleared++;
@@ -181,7 +182,7 @@ describe("Cards section (React)", () => {
 
   it("says when the cards could not be loaded", async () => {
     legacyWindow([{ id: "never-loaded", short_code: "NOPE" }]);
-    window.__api = vi.fn(async () => new Response("nope", { status: 500 }));
+    stubApi(vi.fn(async () => new Response("nope", { status: 500 })));
     vi.spyOn(console, "error").mockImplementation(() => {});
     await mount();
 
@@ -245,9 +246,9 @@ describe("Cards section (React)", () => {
 
   it("keeps the batch when the print run could not be recorded", async () => {
     const calls = legacyWindow([{ id: "a", short_code: "AAA" }]);
-    window.__api = vi.fn(async () => {
+    stubApi(vi.fn(async () => {
       throw new Error("network down");
-    });
+    }));
     await mount();
 
     fireEvent.click(screen.getByRole("button", { name: "Mark as printed" }));

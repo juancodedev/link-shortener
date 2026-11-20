@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { BulkModal } from "./BulkModal";
 import { errorText } from "./load";
+import { api } from "../api";
 
 /**
  * THE CREATE CARD (dashboard-react T3b): the single-link form and the entry
@@ -41,7 +42,7 @@ export function CreateCard({ onCreated }: { onCreated: () => void }) {
       // leaning on a server-side coercion.
       const urlValue = url.trim();
 
-      const res = await window.__api("POST", "/api/links", {
+      const res = await api("POST", "/api/links", {
         ...(urlValue ? { original_url: urlValue } : {}),
         title: title || undefined,
         slug: slugValue || undefined,

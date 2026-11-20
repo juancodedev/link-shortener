@@ -1,3 +1,5 @@
+import { api } from "../api";
+
 /** A link as GET /api/links returns it (the fields the table reads). */
 export type Link = {
   id: string;
@@ -37,7 +39,7 @@ export type ClickMetrics = {
  * no longer takes the table down with it.
  */
 export async function fetchLinks(): Promise<Link[]> {
-  const res = await window.__api("GET", "/api/links");
+  const res = await api("GET", "/api/links");
   if (!res || !res.ok) throw new Error("Failed to load links");
 
   const links: unknown = await res.json();

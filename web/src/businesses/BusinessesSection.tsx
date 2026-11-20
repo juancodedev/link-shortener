@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { loadBranches, useBranches, type Branch, type Business } from "../branches/store";
 import { reloadLinks } from "../links/reload";
+import { api } from "../api";
 
 /**
  * THE BUSINESSES SECTION (dashboard-react T5): businesses and branches.
@@ -30,7 +31,7 @@ function refreshOwnership() {
 
 /**
  * The server's message from a refused write: a non-ok answer's `error`, or
- * the message the real window.__api throws with (it throws on any non-ok
+ * the message the real API helper (../api) throws with (it throws on any non-ok
  * status, carrying that same `error`).
  */
 async function refusal(res: Response | null, err: unknown): Promise<string> {
@@ -59,7 +60,7 @@ export function BusinessesSection() {
   async function write(method: string, path: string, body: unknown, onRefused: (server: string) => void): Promise<boolean> {
     let res: Response;
     try {
-      res = await window.__api(method, path, body);
+      res = await api(method, path, body);
     } catch (err) {
       onRefused(await refusal(null, err));
       return false;

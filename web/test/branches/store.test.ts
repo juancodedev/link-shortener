@@ -2,6 +2,7 @@ import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getBranches, loadBranches, pickableBranches, resetBranches, subscribeBranches } from "../../src/branches/store";
 import { gate, installApi, settle } from "../links/harness";
+import { stubApiReady } from "../api-stub";
 
 // The in-bundle branches store (dashboard-react T5). Ported from the Worker
 // tests of the legacy loadBranches ("the branches load feeds the Links
@@ -23,7 +24,7 @@ let errors: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   resetBranches();
-  window.__apiReady = Promise.resolve();
+  stubApiReady(Promise.resolve());
   errors = vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -34,7 +35,7 @@ afterEach(() => {
 describe("loadBranches", () => {
   it("sends nothing until the auth gate opens, then loads branches and businesses together", async () => {
     const auth = gate();
-    window.__apiReady = auth.wait;
+    stubApiReady(auth.wait);
     const calls = branchesApi();
 
     const done = loadBranches();

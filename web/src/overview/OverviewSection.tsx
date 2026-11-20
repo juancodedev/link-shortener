@@ -3,6 +3,7 @@ import { VISITOR_ESTIMATE_CAVEAT } from "../../../src/analytics/metrics";
 import { onOverviewChange } from "./changes";
 import { GatePanel, type GatePanelPayload } from "./GatePanel";
 import { HourlyTraffic, type HourlyPayload } from "./HourlyTraffic";
+import { api, whenApiReady } from "../api";
 
 /**
  * THE OVERVIEW SECTION (dashboard-react T4, S5).
@@ -16,7 +17,7 @@ import { HourlyTraffic, type HourlyPayload } from "./HourlyTraffic";
  * and the print stylesheet keys the report on it.
  *
  * Split loading (L13): each card fetches its own data once the auth bootstrap
- * opens window.__apiReady, and degrades on its own. A card that cannot load
+ * opens the API gate (../api), and degrades on its own. A card that cannot load
  * stays hidden on the first load and keeps what it shows on a later one; no
  * card's failure touches another, or the Links table.
  *
@@ -104,9 +105,9 @@ class GateBoundary extends Component<{ children: ReactNode }, { failed: boolean 
 /** GETs one Overview endpoint once the auth gate is open; throws on any failure. */
 async function fetchJson(path: string): Promise<unknown> {
   // Safe at any point in the page lifecycle: a call made while getSession()
-  // is still in flight parks here, and runs once window.__api exists.
-  if (window.__apiReady) await window.__apiReady;
-  const res = await window.__api("GET", path);
+  // is still in flight parks here, and runs once the helper can authenticate.
+  await whenApiReady();
+  const res = await api("GET", path);
   if (!res || !res.ok) throw new Error(`${path}: HTTP ${res ? res.status : "no response"}`);
   return res.json();
 }

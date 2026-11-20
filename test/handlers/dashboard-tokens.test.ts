@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { dashboardHandler } from "../../src/handlers/dashboard";
+import { DASHBOARD_CSS } from "./dashboard-stylesheet";
 
 // ---------------------------------------------------------------------------
 // The token layer — regression guard.
@@ -23,9 +24,9 @@ import { dashboardHandler } from "../../src/handlers/dashboard";
 //      this product; `--gray-700` reads as a default, and the analysis document
 //      rejects defaults explicitly.
 //
-// These assert against the SERVED output, for the same reason the XSS tests in
-// dashboard.test.ts do: asserting against the source would pass while the
-// shipped page stayed un-tokenised.
+// The stylesheet assertions read web/src/dashboard.css, which Vite ships
+// as /assets/dashboard.css (T6b); the markup assertions still read the served
+// document, for the same reason the XSS tests in dashboard.test.ts do.
 // ---------------------------------------------------------------------------
 
 /** A hex colour literal: `#abc`, `#abcd`, `#aabbcc`, `#aabbccdd`. */
@@ -49,17 +50,14 @@ async function serve(): Promise<string> {
   return (await dashboardHandler(mockContext())).text();
 }
 
+/** The stylesheet the page links (web/src/dashboard.css, since T6b). */
 async function styleBlock(): Promise<string> {
-  const html = await serve();
-  const css = html.match(/<style>([\s\S]*?)<\/style>/)?.[1];
-  if (!css) throw new Error("no <style> block in served HTML");
-  return css;
+  return DASHBOARD_CSS;
 }
 
-/** The served HTML with the <style> block removed — i.e. the markup and scripts. */
+/** The served HTML: markup and scripts only, since the stylesheet is a linked file (T6b). */
 async function htmlWithoutStyle(): Promise<string> {
-  const html = await serve();
-  return html.replace(/<style>[\s\S]*?<\/style>/, "");
+  return serve();
 }
 
 function rootBlock(css: string): string {

@@ -92,16 +92,27 @@ describe("GET /api/links/print-queue", () => {
 describe("POST /api/links/printed", () => {
   beforeEach(() => vi.resetAllMocks());
 
-  it("takes the given links out of the queue and says how many left it", async () => {
+  it("records the print run on the given links and says how many it marked", async () => {
     const calls = mockRecordingDb([{ id: ID_A }, { id: ID_B }]);
     const { c, jsonFn } = mockContext({ ids: [ID_A, ID_B] });
 
     await markPrinted(c as any, vi.fn());
 
-    expect(calls[0]!.sql).toMatch(/UPDATE "tenant_a7f3"\."links"\s+SET print_queued_at = NULL/);
-    expect(calls[0]!.sql).toMatch(/WHERE id = ANY\(\$1::uuid\[\]\)\s+AND print_queued_at IS NOT NULL/);
+    // The queue itself is page state now, so the column may be NULL for every
+    // id: the WHERE must not depend on print_queued_at being set.
+    expect(calls[0]!.sql).toMatch(/UPDATE "tenant_a7f3"\."links"\s+SET printed_at = NOW\(\), print_queued_at = NULL/);
+    expect(calls[0]!.sql).toMatch(/WHERE id = ANY\(\$1::uuid\[\]\)\s+RETURNING id/);
+    expect(calls[0]!.sql).not.toMatch(/print_queued_at IS NOT NULL/);
     expect(calls[0]!.params).toEqual([[ID_A, ID_B]]);
-    expect(jsonFn).toHaveBeenCalledWith({ cleared: 2 });
+    expect(jsonFn).toHaveBeenCalledWith({ printed: 2 });
+  });
+
+  it("accepts the full batch of 200 ids", async () => {
+    mockRecordingDb([]);
+    const ids = Array.from({ length: 200 }, () => ID_A);
+    const { c } = mockContext({ ids });
+
+    await expect(markPrinted(c as any, vi.fn())).resolves.toBeDefined();
   });
 
   it.each([

@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS {schema}.links (
   location_id UUID,
   is_gated BOOLEAN DEFAULT false NOT NULL,
   print_queued_at TIMESTAMPTZ,
+  printed_at TIMESTAMPTZ,
   clicks_count INTEGER DEFAULT 0 NOT NULL,
   is_active BOOLEAN DEFAULT true NOT NULL,
   expires_at TIMESTAMPTZ,

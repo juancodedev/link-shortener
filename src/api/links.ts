@@ -854,11 +854,11 @@ export const listLinks: Handler<{
   const table = qualifyTable(tenant.schemaName, "links");
 
   const rows = await withClient(c.env, async (client) => {
-    const res = await client.query<LinkRow & { clicks_count: number; is_active: boolean; expires_at: string | null; updated_at: string; location_id: string | null; location_name: string | null; business_name: string | null; is_gated: boolean | null; print_queued_at?: string | null }>(
+    const res = await client.query<LinkRow & { clicks_count: number; is_active: boolean; expires_at: string | null; updated_at: string; location_id: string | null; location_name: string | null; business_name: string | null; is_gated: boolean | null; print_queued_at?: string | null; printed_at?: string | null }>(
       `SELECT l.id, l.short_code, l.original_url, l.title, l.client_ref, l.clicks_count,
               l.is_active, l.is_gated, l.expires_at, l.created_at, l.updated_at,
               l.location_id, loc.name AS location_name, b.name AS business_name,
-              l.print_queued_at
+              l.print_queued_at, l.printed_at
        FROM ${table} l
        LEFT JOIN public.locations loc ON loc.id = l.location_id
        LEFT JOIN public.businesses b ON b.id = loc.business_id
@@ -892,6 +892,9 @@ export const listLinks: Handler<{
       is_gated: r.is_gated === true,
       // Waiting in the print queue (the Cards section of the dashboard).
       print_queued: r.print_queued_at != null,
+      // The last print run that produced this card, or null if it never was.
+      // Survives the queue clearing, so Links can say "Printed".
+      printed_at: r.printed_at ?? null,
       expires_at: r.expires_at,
       created_at: r.created_at,
       updated_at: r.updated_at,

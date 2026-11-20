@@ -9,6 +9,7 @@ import locationIdAlterMigration from "../../supabase/migrations/00007_add_locati
 import isGatedAlterMigration from "../../supabase/migrations/00008_add_is_gated_to_tenant_links.sql?raw";
 import reviewGateMigration from "../../supabase/migrations/00009_review_gate_schema.sql?raw";
 import originalUrlNullableMigration from "../../supabase/migrations/00015_original_url_nullable.sql?raw";
+import printedAtMigration from "../../supabase/migrations/00020_printed_at.sql?raw";
 import { TENANT_DDL } from "../../src/tenants/provision";
 
 // ---------------------------------------------------------------------------
@@ -389,6 +390,45 @@ describe("provision.ts template / tenant 001_create_links parity", () => {
         /CREATE\s+INDEX\s+IF\s+NOT\s+EXISTS\s+idx_links_location[\s\S]*?links\s*\(\s*location_id\s*\)/i,
       );
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 00020_printed_at — a print run leaves a date (odd/tasks/printed-cards-state.md S5)
+// ---------------------------------------------------------------------------
+
+describe("printed_at in the tenant DDL", () => {
+  it("is declared nullable in both copies, so no existing row needs a backfill", () => {
+    for (const ddl of [TENANT_DDL, tenantLinksMigration]) {
+      expect(ddl).toMatch(/printed_at\s+TIMESTAMPTZ/i);
+      const line = ddl.split("\n").find((l) => /^\s*printed_at\b/i.test(l))!;
+      expect(line).toBeTruthy();
+      expect(line).not.toMatch(/NOT\s+NULL/i);
+      expect(line).not.toMatch(/DEFAULT/i);
+    }
+  });
+});
+
+describe("00020_printed_at migration", () => {
+  it("adds printed_at to already-deployed tenants", () => {
+    expect(printedAtMigration).toMatch(/ALTER\s+TABLE/i);
+    expect(printedAtMigration).toMatch(/ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+printed_at\s+TIMESTAMPTZ/i);
+  });
+
+  it("leaves every existing link unprinted instead of backfilling", () => {
+    expect(printedAtMigration).not.toMatch(/UPDATE\s+%I\.links/i);
+    expect(printedAtMigration).not.toMatch(/SET\s+printed_at/i);
+  });
+
+  it("is idempotent and skips tenants with no links table", () => {
+    expect(printedAtMigration).toMatch(/public\.tenants/i);
+    expect(printedAtMigration).toMatch(/CONTINUE\s+WHEN/i);
+    expect(printedAtMigration).toMatch(/to_regclass/i);
+  });
+
+  it("records tenant version 6 and public version 20", () => {
+    expect(printedAtMigration).toMatch(/VALUES\s*\(6,\s*''00020_printed_at''\)/i);
+    expect(printedAtMigration).toMatch(/VALUES\s*\(20,\s*'00020_printed_at'\)/i);
   });
 });
 

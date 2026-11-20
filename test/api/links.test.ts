@@ -2807,8 +2807,8 @@ describe("print queue in listLinks", () => {
     };
     const calls = mockRecordingDb([
       [
-        { ...base, id: "a", print_queued_at: "2026-11-01T10:00:00Z" },
-        { ...base, id: "b", print_queued_at: null },
+        { ...base, id: "a", print_queued_at: "2026-11-01T10:00:00Z", printed_at: "2026-10-20T09:00:00Z" },
+        { ...base, id: "b", print_queued_at: null, printed_at: null },
       ],
     ]);
     const { c, jsonFn } = mockContext();
@@ -2816,10 +2816,17 @@ describe("print queue in listLinks", () => {
     await listLinks(c as any);
 
     expect(calls[0]!.sql).toContain("l.print_queued_at");
-    const body = jsonFn.mock.calls[0]![0] as Array<{ id: string; print_queued: boolean }>;
+    expect(calls[0]!.sql).toContain("l.printed_at");
+    const body = jsonFn.mock.calls[0]![0] as Array<{ id: string; print_queued: boolean; printed_at: string | null }>;
     expect(body.map((l) => [l.id, l.print_queued])).toEqual([
       ["a", true],
       ["b", false],
+    ]);
+    // The print run's date survives the queue clearing, so Links can say
+    // "Printed" on a link that is no longer waiting.
+    expect(body.map((l) => [l.id, l.printed_at])).toEqual([
+      ["a", "2026-10-20T09:00:00Z"],
+      ["b", null],
     ]);
   });
 });

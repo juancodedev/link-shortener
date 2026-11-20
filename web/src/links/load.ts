@@ -12,6 +12,8 @@ export type Link = {
   location_id?: string | null;
   location_name?: string | null;
   business_name?: string | null;
+  /** The last print run that produced this card, or null if it never was. */
+  printed_at?: string | null;
 };
 
 /** GET /api/links/:id/clicks. */

@@ -3,6 +3,7 @@ import type { AppEnv, HonoVars } from "../types/env";
 import { VISITOR_ESTIMATE_CAVEAT } from "../analytics/metrics";
 import { resolveMaxActiveLinks } from "../api/links";
 import { icon } from "./icons";
+import { BRAND_ICONS } from "./brand-head";
 
 // ---------------------------------------------------------------------------
 // Shared shell
@@ -26,6 +27,7 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  ${BRAND_ICONS}
   <title>${title} — Más Reseñas</title>
   <!-- The review cards (Cards section) are drawn with these faces. Loaded by
        the page so the inline card SVGs use them on screen AND the browser

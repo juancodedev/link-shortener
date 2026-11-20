@@ -5,6 +5,7 @@ import {
   count,
   gate,
   installApi,
+  installClipboard,
   installLegacy,
   isOpen,
   link,
@@ -19,7 +20,9 @@ import {
 // How the Links island loads (dashboard-react T3a, S2/S5, L9). Ported from the
 // Worker tests that compiled the legacy loadLinks out of the served HTML:
 // "loadLinks ordering against the auth bootstrap", "loadLinks refresh after an
-// edit" and the bootstrap's guarded load.
+// edit" and the bootstrap's guarded load. Since T4 (L13) the load is the
+// links alone; the Overview cards load themselves and only hear, through
+// web/src/overview/changes.ts, that the table reloaded.
 
 const el = (id: string) => document.getElementById(id) as HTMLElement;
 
@@ -93,15 +96,11 @@ describe("Links island — loading", () => {
     expect(row().querySelector(".code")!.textContent).toContain("fresh");
   });
 
-  it("fetches the links, the client rollup and the review gate together, once on mount", async () => {
+  it("fetches only the links, once on mount: the Overview cards load themselves (L13)", async () => {
     const calls = standardApi();
     await mountLinks();
 
-    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
-      "GET /api/links",
-      "GET /api/clients/metrics",
-      "GET /api/review-gate/metrics",
-    ]);
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /api/links"]);
   });
 
   it("shows the loading state on the first load, then the table", async () => {
@@ -204,17 +203,19 @@ describe("Links island — loading", () => {
     expect(el("links-loading").style.display).toBe("none");
   });
 
-  it("fails the whole load when the client rollup cannot be read: a half-rendered dashboard is harder to trust", async () => {
-    installApi((_m, path) => {
-      if (path === "/api/clients/metrics") throw new Error("rollup down");
+  it("renders the table even when the client rollup is down: it no longer shares the load", async () => {
+    const calls = installApi((_m, path) => {
+      if (path === "/api/clients/metrics" || path === "/api/review-gate/metrics") throw new Error("overview down");
       if (path === "/api/links") return [link()];
-      return {};
+      throw new Error(`unexpected ${path}`);
     });
     await mountLinks();
 
-    expect(el("links-table").style.display).toBe("none");
-    expect(el("links-empty").textContent).toBe("Could not load links. rollup down");
-    expect(bridges.overview.some((c) => "clients" in c)).toBe(false);
+    expect(el("links-table").style.display).toBe("");
+    expect(el("links-empty").style.display).toBe("none");
+    expect(el("link-count").textContent).toBe("1");
+    expect(count(calls, "GET", "/api/clients/metrics")).toBe(0);
+    expect(count(calls, "GET", "/api/review-gate/metrics")).toBe(0);
   });
 
   it("treats a /api/links answer that is not an array as an error, not as no links", async () => {
@@ -224,54 +225,50 @@ describe("Links island — loading", () => {
     expect(el("links-empty").textContent).toBe("Could not load links. Unexpected /api/links response shape");
   });
 
-  it("degrades the review gate panel to hidden instead of failing the table", async () => {
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    installApi((_m, path) => {
-      if (path === "/api/review-gate/metrics") throw new Error("gate down");
-      if (path === "/api/links") return [link()];
-      return [];
-    });
-    await mountLinks();
-
-    expect(el("links-table").style.display).toBe("");
-    expect(bridges.overview.some((c) => "gate" in c)).toBe(false);
-    errors.mockRestore();
-  });
-
-  it("hands the Overview payloads to the legacy page: hidden on the first load, gate, then clients", async () => {
-    const clients = [{ client_ref: "CRM-1", unique_visitors: 3, sessions: 4 }];
-    const gatePayload = { rated: 12 };
-    standardApi({ clients, gate: gatePayload });
-    await mountLinks();
-
-    expect(bridges.overview).toEqual([{ hide: true }, { gate: gatePayload }, { clients }]);
-  });
-
-  it("does not hide the Overview cards on a refresh", async () => {
+  it("tells the Overview after every refresh, so its gate and rollup cards follow the table", async () => {
     standardApi();
     await mountLinks();
-    bridges.overview.length = 0;
+    // The first load says nothing: the Overview loads its own cards at boot,
+    // and a signal here would fetch them twice.
+    expect(bridges.overview).toEqual([]);
 
     await act(async () => {
       await window.__loadLinks!();
     });
     await settle();
-
-    expect(bridges.overview.some((c) => "hide" in c)).toBe(false);
+    expect(bridges.overview).toEqual(["links"]);
   });
 
-  it("leaves the client rollup alone when there are no links", async () => {
-    standardApi({ links: [], clients: [{ client_ref: "x", unique_visitors: 1, sessions: 1 }] });
+  it("tells the Overview after a create reloads the table", async () => {
+    installClipboard();
+    standardApi();
     await mountLinks();
 
-    expect(bridges.overview.some((c) => "clients" in c)).toBe(false);
+    fireEvent.change(document.getElementById("url") as HTMLInputElement, { target: { value: "https://example.com/x" } });
+    await act(async () => {
+      fireEvent.submit(document.getElementById("create-form")!);
+    });
+    await settle();
+
+    expect(bridges.overview).toEqual(["links"]);
   });
 
-  it("passes an empty rollup on when the payload is not a list", async () => {
-    standardApi({ clients: { nope: true } });
+  it("says nothing to the Overview when a refresh fails", async () => {
+    let fail = false;
+    standardApi({
+      links: () => {
+        if (fail) throw new Error("Server error");
+        return [link()];
+      },
+    });
     await mountLinks();
 
-    expect(bridges.overview).toContainEqual({ clients: [] });
+    fail = true;
+    await act(async () => {
+      await window.__loadLinks!();
+    });
+    await settle();
+    expect(bridges.overview).toEqual([]);
   });
 
   it("starts with every panel closed", async () => {

@@ -1,6 +1,7 @@
 import { CardsSection } from "./cards/CardsSection";
 import type { Island } from "./islands";
 import { LinksSection } from "./links/LinksSection";
+import { OverviewSection } from "./overview/OverviewSection";
 
 /** The plan's active-link limit, which only the server knows: it rides on the placeholder. */
 function linkLimit(): number {
@@ -13,4 +14,5 @@ function linkLimit(): number {
 export const ISLANDS: Record<string, Island> = {
   cards: () => <CardsSection />,
   links: () => <LinksSection limit={linkLimit()} />,
+  overview: () => <OverviewSection />,
 };

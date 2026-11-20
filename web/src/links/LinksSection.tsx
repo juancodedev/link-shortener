@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
 import { VISITOR_ESTIMATE_CAVEAT } from "../../../src/analytics/metrics";
+import { announceOverviewChange } from "../overview/changes";
 import { getPrintQueue, prunePrintQueue, subscribePrintQueue } from "../print-queue";
 import { useBranches } from "./branches";
 import { CreateCard } from "./CreateCard";
@@ -23,9 +24,12 @@ import { QrModal } from "./QrModal";
  * It loads itself once the auth bootstrap opens window.__apiReady. Creating
  * here reloads through the same load directly; `window.__loadLinks` is lent
  * only to the legacy caller that changes what the table shows from outside
- * (businesses and branches, through refreshOwnership). The Overview's gate and
- * clients cards still come from this load (L9) and are painted by the legacy
- * page through `window.__renderOverviewCards`.
+ * (businesses and branches, through refreshOwnership).
+ *
+ * The Overview's gate and clients cards load themselves (L13). They summarise
+ * the links, so every reload after the first one announces "links" to the
+ * Overview island (../overview/changes), which refetches them: they stay in
+ * step with the table as they did when this load painted them.
  */
 
 type View =
@@ -52,6 +56,8 @@ export function LinksSection({ limit }: { limit: number }) {
   const openRef = useRef(open);
   const metricsRef = useRef(metrics);
   const loadSeq = useRef(0);
+  /** Whether a load has landed: the first one has nothing to tell the Overview, which loads at boot too. */
+  const loadedOnce = useRef(false);
   const inflight = useRef(new Map<string, object>());
 
   const setOpen = (next: ReadonlySet<string>) => {
@@ -106,15 +112,10 @@ export function LinksSection({ limit }: { limit: number }) {
     // panels that were open.
     const refreshing = shown.current !== null && shown.current.length > 0;
     const reopen = refreshing ? [...openRef.current] : [];
-    if (!refreshing) {
-      setView({ status: "loading" });
-      window.__renderOverviewCards?.({ hide: true });
-    }
+    if (!refreshing) setView({ status: "loading" });
 
     try {
-      const { links, clients } = await fetchLinks((gate) => {
-        if (seq === loadSeq.current) window.__renderOverviewCards?.({ gate });
-      });
+      const links = await fetchLinks();
       if (seq !== loadSeq.current) return;
 
       // The print queue lives in this page; a load only prunes it.
@@ -122,7 +123,8 @@ export function LinksSection({ limit }: { limit: number }) {
       shown.current = links;
       setCount(links.length);
       setView({ status: "ready", links });
-      if (links.length > 0) window.__renderOverviewCards?.({ clients });
+      if (loadedOnce.current) announceOverviewChange("links");
+      loadedOnce.current = true;
 
       // The re-render drops the figures with the old rows; the panels that
       // stay open fetch theirs again.

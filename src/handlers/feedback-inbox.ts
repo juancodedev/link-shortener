@@ -25,7 +25,7 @@ import type { FeedbackRow } from "../api/review-gate";
 // nothing cuts it. An owner who sees "the soup was cold and the waiter..." has
 // been told less than the customer said.
 //
-// SELF-CONTAINED, LIKE `renderGatePanel`
+// SELF-CONTAINED
 //
 // `dashboard.ts` ships this function to the browser with
 // `Function.prototype.toString()`. Everything it calls is nested inside it; a

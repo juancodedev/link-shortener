@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { VISITOR_ESTIMATE_CAVEAT } from "../../../src/analytics/metrics";
+import { announceOverviewChange } from "../overview/changes";
 import { setPrintQueued } from "../print-queue";
 import { branchOptions, type BranchList } from "./branches";
 import { errorText, type ClickMetrics, type Link } from "./load";
@@ -125,8 +126,9 @@ export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePane
       if (!res.ok) throw new Error("Failed");
       setClientRef(stored ?? "");
       onRepaint(l.id, { client_ref: stored });
-      // The rollup regroups by client_ref; nothing else depends on it.
-      window.__refreshClientsCard?.();
+      // The rollup regroups by client_ref; nothing else depends on it, so
+      // the Overview refetches that card alone.
+      announceOverviewChange("client-ref");
     } catch (err) {
       alert("Error: " + errorText(err));
     }

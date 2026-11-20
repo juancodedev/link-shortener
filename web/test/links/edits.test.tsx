@@ -202,7 +202,7 @@ describe("branch", () => {
 });
 
 describe("client ref", () => {
-  it("PATCHes the trimmed value, repaints the row and refreshes only the rollup", async () => {
+  it("PATCHes the trimmed value, repaints the row and tells the Overview to refresh only the rollup", async () => {
     const calls = standardApi();
     await mountLinks();
 
@@ -214,7 +214,7 @@ describe("client ref", () => {
       { method: "PATCH", path: "/api/links/link-uuid", body: { client_ref: "CRM-7" } },
     ]);
     expect(field("client-ref-link-uuid").value).toBe("CRM-7");
-    expect(bridges.clientsRefreshed).toBe(1);
+    expect(bridges.overview).toEqual(["client-ref"]);
     expect(count(calls, "GET", "/api/links")).toBe(1);
   });
 
@@ -243,7 +243,7 @@ describe("client ref", () => {
     await settle();
 
     expect(alerts).toEqual(["Error: nope"]);
-    expect(bridges.clientsRefreshed).toBe(0);
+    expect(bridges.overview).toEqual([]);
   });
 });
 

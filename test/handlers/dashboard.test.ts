@@ -13,13 +13,13 @@ import { inlineScripts } from "../helpers/inline-scripts";
 // Sections that moved to React islands (odd/tasks/dashboard-react.md) are
 // tested as components in web/test instead: the Links section (table, create
 // form, bulk cards, QR modal) and the print queue in web/test/links and
-// web/test/print-queue.test.ts (T3a/T3b). What stays here for them is the
-// served shell: the mount point, the first paint, and the bridges this page
-// lends the island.
+// web/test/print-queue.test.ts (T3a/T3b); the Overview section (print
+// button, satisfaction panel, busy hours, client rollup) in web/test/overview
+// (T4). What stays here for them is the served shell: the mount point, the
+// first paint, and the bridges this page lends the islands.
 // ---------------------------------------------------------------------------
 
 const XSS_URL = '<img src=x onerror=alert(1)>';
-const XSS_ATTR = '"><img src=x onerror=alert(1)>';
 
 // ---------------------------------------------------------------------------
 // Helpers: mock Hono context
@@ -80,6 +80,17 @@ function codeOnly(script: string): string {
   return script
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/^\s*\/\/.*$/gm, "");
+}
+
+/** Markup with its HTML comments removed, so a test reads only the elements. */
+function codeOnlyHtml(html: string): string {
+  let previous: string;
+  let current = html;
+  do {
+    previous = current;
+    current = current.replace(/<!--[\s\S]*?-->/g, "");
+  } while (current !== previous);
+  return current;
 }
 
 /** Extracts a named `function foo(...) {...}` by brace matching. */
@@ -278,98 +289,16 @@ describe("visitor figures — the caveat is in the rendered markup", () => {
   });
 
 
-  it("shows the store-level rollup behind the same caveat", async () => {
+  it("leaves the store-level rollup and its caveat to the Overview island", async () => {
     const region = await staticRegion();
 
-    expect(region).toContain('id="clients-card"');
-    expect(region).toContain('id="clients-body"');
-    // Bounded by the static region, so this cannot be satisfied by the copy
-    // that lives inside the inline script.
-    const card = region.slice(region.indexOf('id="clients-card"'));
-    expect(card).toContain(VISITOR_ESTIMATE_CAVEAT);
-  });
-});
-
-describe("renderClients", () => {
-  type Render = (clients: unknown) => string;
-
-  it("renders one row per client with both figures", async () => {
-    const render = await loadClientFunction<Render>("renderClients");
-
-    const html = render([
-      { client_ref: "ACME-0042", unique_visitors: 30, sessions: 42 },
-    ]);
-
-    expect(html).toContain("ACME-0042");
-    expect(html).toContain("30");
-    expect(html).toContain("42");
-    expect([...html.matchAll(/<tr>/g)]).toHaveLength(1);
-  });
-
-  it("escapes client_ref, which is user-supplied free text", async () => {
-    const render = await loadClientFunction<Render>("renderClients");
-
-    const html = render([
-      { client_ref: XSS_ATTR, unique_visitors: 1, sessions: 1 },
-    ]);
-
-    expect(html).not.toContain('"><img');
-    expect(html).toContain("&quot;&gt;&lt;img");
-  });
-
-  it("explains the empty state instead of rendering a bare table", async () => {
-    const render = await loadClientFunction<Render>("renderClients");
-
-    const html = render([]);
-
-    expect(html).toContain("No client identifiers");
-  });
-});
-
-describe("renderHourlyTraffic", () => {
-  type Render = (payload: unknown) => string;
-
-  const payload = (scansByHour: Record<number, number>) => ({
-    time_zone: "America/Santiago",
-    window: "30 days",
-    hours: Array.from({ length: 24 }, (_, hour) => ({ hour, scans: scansByHour[hour] ?? 0 })),
-  });
-
-  it("draws one bar per hour, sized against the busiest hour", async () => {
-    const render = await loadClientFunction<Render>("renderHourlyTraffic");
-
-    const html = render(payload({ 13: 40, 20: 10 }));
-
-    expect([...html.matchAll(/class="hour-bar"/g)]).toHaveLength(24);
-    expect(html).toContain('style="height:100%;"');
-    expect(html).toContain('style="height:25%;"');
-    expect(html).toContain('title="13:00 · 40 scans"');
-  });
-
-  it("names the busiest hour and says whose clock and which period", async () => {
-    const render = await loadClientFunction<Render>("renderHourlyTraffic");
-
-    const html = render(payload({ 13: 40, 20: 10 }));
-
-    expect(html).toContain("Busiest hour: 13:00–14:00 (40 scans)");
-    expect(html).toContain("Last 30 days · America/Santiago time");
-  });
-
-  it("explains the empty state instead of drawing 24 flat bars", async () => {
-    const render = await loadClientFunction<Render>("renderHourlyTraffic");
-
-    const html = render(payload({}));
-
-    expect(html).toContain("No scans in the last 30 days yet.");
-    expect(html).not.toContain("hour-bar");
-  });
-
-  it("escapes the time zone and window it prints", async () => {
-    const render = await loadClientFunction<Render>("renderHourlyTraffic");
-
-    const html = render({ ...payload({ 1: 1 }), time_zone: XSS_ATTR });
-
-    expect(html).not.toContain('"><img');
+    // The rollup card, with the same caveat beside it, is drawn by the island
+    // (web/test/overview/overview.test.tsx pins the caveat there). The server
+    // serves only the mount point inside the overview section.
+    expect(region).not.toContain('id="clients-card"');
+    expect(region).toMatch(
+      /<section class="dash-section" data-section="overview" hidden>[\s\S]*?<div id="overview-root" data-island="overview"><\/div>\s*<\/section>/,
+    );
   });
 });
 
@@ -401,23 +330,20 @@ describe("printable report", () => {
     expect(css).toContain("print-color-adjust: exact;");
   });
 
-  it("marks the links table as not part of the report and offers a print button", async () => {
+  it("marks the links table as not part of the report", async () => {
     const html = await serve();
 
+    // The print button is the Overview island's (web/test/overview).
     expect(html).toMatch(/<div class="card no-print" id="links-card"[^>]*>/);
-    expect(html).toContain('id="print-report"');
-    expect(codeOnly(await clientScript())).toContain("window.print()");
   });
-});
 
-describe("hourly traffic card", () => {
-  it("ships a hidden card and loads it from /api/traffic/hourly", async () => {
+  it("keeps the report keyed on the server-rendered overview section the island mounts inside", async () => {
     const html = await serve();
-    const script = codeOnly(await clientScript());
+    const css = await printCss();
 
-    expect(html).toContain('id="traffic-card"');
-    expect(script).toContain('"/api/traffic/hourly"');
-    expect(script).toContain("loadHourlyTraffic()");
+    expect(css).toContain('.dash-section[data-section="overview"] { display: block !important; }');
+    expect(css).toContain('body.printing-cards .dash-section[data-section="overview"] { display: none !important; }');
+    expect(html).toMatch(/data-section="overview" hidden>[\s\S]*?<div id="overview-root" data-island="overview">/);
   });
 });
 
@@ -647,7 +573,7 @@ describe("dashboard — tenant switcher", () => {
 // ---------------------------------------------------------------------------
 // The esbuild runtime guard.
 //
-// `dashboard.ts` ships `renderGatePanel` to the browser by inlining its source
+// `dashboard.ts` ships `renderFeedbackInbox` to the browser by inlining its source
 // with `Function.prototype.toString()`. That source is NOT the source in this
 // repository: the Worker is compiled by esbuild with `keepNames: true` before
 // `.toString()` ever runs, and esbuild rewrites every named function inside a
@@ -656,21 +582,22 @@ describe("dashboard — tenant switcher", () => {
 //
 // `__name` is defined at the top of the Worker bundle — module scope — so it
 // never reaches the page, and the first call throws
-// `ReferenceError: __name is not defined`. The gate panel silently fails to
-// render.
+// `ReferenceError: __name is not defined`. The inbox silently fails to
+// render. (The review-gate panel was the first function shipped this way; it
+// is a React component now, web/src/overview, so it needs none of this.)
 //
-// The rehydration test in `gate-panel.test.ts` cannot catch this: Vitest runs
+// The rehydration test in `feedback-inbox.test.ts` cannot catch this: Vitest runs
 // the module unbundled, so `.toString()` there returns clean source and every
 // helper looks self-contained. These tests reproduce the shipped, bundled
 // shape instead.
 // ---------------------------------------------------------------------------
 
-describe("the dashboard declares the esbuild runtime its injected panel calls", () => {
-  /** Everything the page declares before the panel binding — its whole scope. */
+describe("the dashboard declares the esbuild runtime its injected renderer calls", () => {
+  /** Everything the page declares before the renderer binding — its whole scope. */
   async function panelPreamble(): Promise<string> {
     const script = await clientScript();
-    const anchor = script.indexOf("const renderGatePanel =");
-    if (anchor < 0) throw new Error("renderGatePanel binding not found");
+    const anchor = script.indexOf("const renderFeedbackInbox =");
+    if (anchor < 0) throw new Error("renderFeedbackInbox binding not found");
     return script.slice(0, anchor);
   }
 
@@ -684,11 +611,11 @@ describe("the dashboard declares the esbuild runtime its injected panel calls", 
     return (await panelPreamble()).replace(/\/\*[\s\S]*?\*\//g, "");
   }
 
-  it("declares __name before the panel that calls it", async () => {
+  it("declares __name before the renderer that calls it", async () => {
     expect(await panelPreambleCode()).toMatch(/\bvar __name\b/);
   });
 
-  it("runs a panel body carrying keepNames output", async () => {
+  it("runs a renderer body carrying keepNames output", async () => {
     const preamble = await panelPreambleCode();
 
     // A body in the exact shape esbuild emits: a function declaration followed
@@ -702,12 +629,12 @@ describe("the dashboard declares the esbuild runtime its injected panel calls", 
     // ship this pattern at all.
     // eslint-disable-next-line no-new-func
     const build = new Function(`${preamble}
-      const renderGatePanel = function (payload) {
+      const renderFeedbackInbox = function (payload) {
         function escapeHtml(raw) { return raw; }
         __name(escapeHtml, "escapeHtml");
         return typeof escapeHtml;
       };
-      return renderGatePanel;
+      return renderFeedbackInbox;
     `);
 
     const panel = build() as (p: unknown) => string;
@@ -716,7 +643,7 @@ describe("the dashboard declares the esbuild runtime its injected panel calls", 
 
   it("declares the helper as a var, so the body resolves it as a global", async () => {
     // A `const` at the top of a classic script does NOT become a global
-    // property, and the panel body is a different function. `var` is what makes
+    // property, and the renderer body is a different function. `var` is what makes
     // the lookup work; this pins that choice so it is not "cleaned up" later.
     const code = await panelPreambleCode();
     expect(code).toMatch(/\bvar __name\b/);
@@ -1104,11 +1031,9 @@ describe("sidebar sections (odd/tasks/print-queue-cards.md S1)", () => {
 
   it("groups the existing cards into their sections", async () => {
     const html = await serve();
-    const overview = section(html, "overview");
-    expect(overview).toContain('id="print-report"');
-    expect(overview).toContain('id="gate-card"');
-    expect(overview).toContain('id="traffic-card"');
-    expect(overview).toContain('id="clients-card"');
+    // The Overview's print button and report cards are its island's
+    // (web/test/overview); the server serves the mount point.
+    expect(section(html, "overview")).toContain('<div id="overview-root" data-island="overview">');
     const links = section(html, "links");
     // The whole section's content is the Links island's (create form, bulk
     // cards, table, QR modal); the server paints the table card first.
@@ -1467,18 +1392,6 @@ describe("React islands bundle", () => {
 // bridges the island calls exist and do what it relies on.
 // ---------------------------------------------------------------------------
 
-/** Extracts a top-level `window.<name> = function (...) {...};` statement. */
-function extractAssignment(src: string, name: string): string {
-  const start = src.indexOf(`window.${name} = function`);
-  if (start < 0) throw new Error(`window.${name} not assigned`);
-  let depth = 0;
-  for (let i = src.indexOf("{", start); i < src.length; i++) {
-    if (src[i] === "{") depth++;
-    else if (src[i] === "}" && --depth === 0) return src.slice(start, i + 1) + ";";
-  }
-  throw new Error(`unterminated window.${name}`);
-}
-
 describe("Links island handoff", () => {
   it("removes every legacy Links function that moved to the island", async () => {
     const script = codeOnly(await clientScript());
@@ -1509,12 +1422,9 @@ describe("Links island handoff", () => {
     expect(script).not.toContain("/api/links/printed");
   });
 
-  it("lends the island the client rollup refresh, and no longer a QR modal", async () => {
-    const script = codeOnly(await clientScript());
-
-    expect(script).toContain("window.__refreshClientsCard = refreshClientsCard;");
+  it("no longer lends a QR modal", async () => {
     // The QR modal is the island's (web/test/links/qr.test.tsx).
-    expect(script).not.toContain("__showQR");
+    expect(codeOnly(await clientScript())).not.toContain("__showQR");
   });
 
   it("keeps everything the remaining legacy code calls", async () => {
@@ -1523,68 +1433,55 @@ describe("Links island handoff", () => {
     // refreshOwnership still reloads the table through the island's bridge,
     // and the bootstrap still finds the boot loaders it calls by name.
     expect(extractFunction(script, "refreshOwnership")).toContain("if (window.__loadLinks) window.__loadLinks();");
-    for (const fn of ["loadBranches", "loadFeedbackEmail", "loadFeedbackInbox", "loadHourlyTraffic", "refreshClientsCard", "showSection", "esc"]) {
+    for (const fn of ["loadBranches", "loadFeedbackEmail", "loadFeedbackInbox", "showSection", "esc"]) {
       expect(script, fn).toMatch(new RegExp(`function ${fn}\\(`));
     }
   });
+});
 
-  describe("window.__renderOverviewCards", () => {
-    /** Runs the served bridge against stub cards and stub renderers. */
-    async function bridge() {
-      const els: Record<string, ElementStub> = {};
-      const el = (id: string) => (els[id] ??= { style: { display: "none" }, textContent: "", innerHTML: "", dataset: {}, addEventListener: () => {} });
-      const win: Record<string, any> = {};
-      const errors: unknown[] = [];
-      let gateFails = false;
-      new Function("window", "document", "renderGatePanel", "renderClients", "console", extractAssignment(await clientScript(), "__renderOverviewCards"))(
-        win,
-        { getElementById: el },
-        (gate: unknown) => {
-          if (gateFails) throw new Error("bad gate payload");
-          return `gate:${JSON.stringify(gate)}`;
-        },
-        (clients: unknown[]) => `clients:${clients.length}`,
-        { error: (...args: unknown[]) => errors.push(args) },
-      );
-      return { render: win.__renderOverviewCards as (c: unknown) => void, el, errors, failGate: () => { gateFails = true; } };
+// ---------------------------------------------------------------------------
+// The Overview island handoff (odd/tasks/dashboard-react.md T4, L13)
+//
+// The print button and the three report cards are React now, each loading its
+// own data; their behaviour is pinned in web/test/overview. These pin the
+// served side: the mount point, and that nothing of the legacy cards is left.
+// ---------------------------------------------------------------------------
+
+describe("Overview island handoff", () => {
+  it("serves the overview section as the island's empty mount point", async () => {
+    const html = await serve();
+    const section = html.slice(
+      html.indexOf('<section class="dash-section" data-section="overview" hidden>'),
+      html.indexOf('<section class="dash-section" data-section="links">'),
+    );
+
+    expect(codeOnlyHtml(section)).toMatch(/^<section[^>]*>\s*<div id="overview-root" data-island="overview"><\/div>\s*<\/section>\s*$/);
+    for (const id of ["print-report", "gate-card", "gate-body", "traffic-card", "traffic-body", "clients-card", "clients-body"]) {
+      expect(html, id).not.toContain(`id="${id}"`);
     }
+  });
 
-    it("hides both cards when a first load starts", async () => {
-      const b = await bridge();
-      b.el("gate-card").style.display = "";
-      b.el("clients-card").style.display = "";
+  it("removes every legacy Overview function and bridge", async () => {
+    const script = codeOnly(await clientScript());
 
-      b.render({ hide: true });
+    for (const fn of ["renderClients", "renderHourlyTraffic", "loadHourlyTraffic", "refreshClientsCard"]) {
+      expect(script, fn).not.toMatch(new RegExp(`function ${fn}\\(`));
+    }
+    expect(script).not.toContain("renderGatePanel");
+    expect(script).not.toContain("__renderOverviewCards");
+    expect(script).not.toContain("__refreshClientsCard");
+    expect(script).not.toContain("print-report");
+    // The island fetches these itself (web/test/overview/overview.test.tsx).
+    expect(script).not.toContain("/api/traffic/hourly");
+    expect(script).not.toContain("/api/clients/metrics");
+    expect(script).not.toContain('"/api/review-gate/metrics"');
+  });
 
-      expect(b.el("gate-card").style.display).toBe("none");
-      expect(b.el("clients-card").style.display).toBe("none");
-    });
+  it("leaves the Overview loads out of the auth bootstrap: the island loads itself once the gate opens", async () => {
+    const html = await serve();
+    const auth = html.slice(html.indexOf("<script src="));
+    const iife = auth.slice(0, auth.indexOf("})();"));
 
-    it("paints the review gate through renderGatePanel and shows its card", async () => {
-      const b = await bridge();
-      b.render({ gate: { rated: 3 } });
-
-      expect(b.el("gate-body").innerHTML).toBe('gate:{"rated":3}');
-      expect(b.el("gate-card").style.display).toBe("");
-    });
-
-    it("keeps the gate card hidden when the panel cannot render", async () => {
-      const b = await bridge();
-      b.failGate();
-      b.render({ gate: { broken: true } });
-
-      expect(b.el("gate-card").style.display).toBe("none");
-      expect(b.errors).toHaveLength(1);
-    });
-
-    it("shows the client rollup only when it has rows", async () => {
-      const b = await bridge();
-      b.render({ clients: [{ client_ref: "a" }] });
-      expect(b.el("clients-body").innerHTML).toBe("clients:1");
-      expect(b.el("clients-card").style.display).toBe("");
-
-      b.render({ clients: [] });
-      expect(b.el("clients-card").style.display).toBe("none");
-    });
+    expect(codeOnly(iife)).not.toContain("loadHourlyTraffic");
   });
 });

@@ -26,53 +26,24 @@ export type ClickMetrics = {
   error?: string;
 };
 
-export type LinksLoad = { links: Link[]; clients: unknown[] };
-
 /**
- * One load of the Links section: the links, the client_ref rollup and the
- * review-gate panel, fetched together so the table and the Overview cards
- * arrive in one paint (dashboard-react L9: kept all-or-nothing on purpose).
+ * One load of the Links section: the links, and only the links.
  *
- * A failure of the links OR the rollup fails the load, because a
- * half-rendered dashboard is harder to trust than an error message.
- *
- * The gate panel is the exception: a tenant who has never activated a gated
- * link has no rows, and failing the whole dashboard over an empty panel would
- * be wrong, so it degrades to hidden. window.__api throws on any non-ok
- * status, so its request is caught on its own: inside Promise.all an
- * uncaught gate error would have failed the links too. `onGate` gets the
- * payload only when it could be read.
+ * The client_ref rollup and the review-gate panel used to ride on this load,
+ * all-or-nothing, so the table and the Overview cards arrived in one paint
+ * (L9). They are the Overview island's own loads now (L13): a failing rollup
+ * no longer takes the table down with it.
  */
-export async function fetchLinks(onGate: (gate: unknown) => void): Promise<LinksLoad> {
-  const [linksRes, clientsRes, gateRes] = await Promise.all([
-    window.__api("GET", "/api/links"),
-    window.__api("GET", "/api/clients/metrics"),
-    window.__api("GET", "/api/review-gate/metrics").catch((err: unknown) => {
-      console.error("gate panel failed to load", err);
-      return null;
-    }),
-  ]);
-  if (!linksRes || !linksRes.ok) throw new Error("Failed to load links");
-  if (!clientsRes || !clientsRes.ok) throw new Error("Failed to load client metrics");
+export async function fetchLinks(): Promise<Link[]> {
+  const res = await window.__api("GET", "/api/links");
+  if (!res || !res.ok) throw new Error("Failed to load links");
 
-  if (gateRes && gateRes.ok) {
-    try {
-      onGate(await gateRes.json());
-    } catch (err) {
-      console.error("gate panel failed to render", err);
-    }
-  }
-
-  const links: unknown = await linksRes.json();
+  const links: unknown = await res.json();
   // An array is the documented contract for /api/links. If that ever changes
   // again the dashboard says so rather than rendering an empty table that
   // looks like "you have no links".
   if (!Array.isArray(links)) throw new Error("Unexpected /api/links response shape");
-
-  // The rollup degrades to nothing rather than failing: an empty list is its
-  // own honest meaning ("no store has recorded traffic").
-  const clients: unknown = await clientsRes.json();
-  return { links: links as Link[], clients: Array.isArray(clients) ? clients : [] };
+  return links as Link[];
 }
 
 /** The message a refused request carries, as the legacy alerts showed it. */

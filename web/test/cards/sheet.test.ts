@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeSheetLayout, presetForSize, SHEET_PRESETS, sheetPresetSize } from "../../src/cards/sheet";
+import { CARD_MM, computeSheetLayout, presetForSize, SHEET_PRESETS, sheetPresetSize } from "../../src/cards/sheet";
 
 describe("cards sheet layout", () => {
   it("fits 1×2 cards on A4, 2×3 on A3 and 3×2 on landscape A3 with a 10 mm margin and a 6 mm gap", () => {
@@ -17,6 +17,7 @@ describe("cards sheet layout", () => {
     expect(sheetPresetSize("297x420", 0, 0)).toEqual({ w: 297, h: 420, single: false });
     expect(sheetPresetSize("420x297", 0, 0)).toEqual({ w: 420, h: 297, single: false });
     expect(sheetPresetSize("210x297", 0, 0)).toEqual({ w: 210, h: 297, single: false });
+    expect(sheetPresetSize("297x210", 0, 0)).toEqual({ w: 297, h: 210, single: false });
     expect(sheetPresetSize("216x279", 0, 0)).toEqual({ w: 216, h: 279, single: false });
     expect(sheetPresetSize("216x330", 0, 0)).toEqual({ w: 216, h: 330, single: false });
     expect(sheetPresetSize("100x100", 0, 0)).toEqual({ w: 100, h: 100, single: true });
@@ -28,6 +29,14 @@ describe("cards sheet layout", () => {
 
     expect(presetForSize(216, 330, presets)).toBe("216x330");
     expect(presetForSize(210, 297, presets)).toBe("210x297");
+    expect(presetForSize(297, 210, presets)).toBe("297x210");
     expect(presetForSize(250, 350, presets)).toBe("custom");
+  });
+
+  it("keeps the card at 10×10 cm, never larger", () => {
+    expect(CARD_MM).toBe(100);
+    // The layout is computed around that same edge, so a bigger sheet buys
+    // more cards, never bigger cards.
+    expect(computeSheetLayout(297, 210, 10, 6, 2)).toEqual({ cols: 2, rows: 1, cap: 2, pages: 1, fits: true });
   });
 });

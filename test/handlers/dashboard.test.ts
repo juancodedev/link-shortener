@@ -1336,6 +1336,26 @@ describe("cards section", () => {
     expect(html).toMatch(/body\.printing-cards \.card-sheet\s*\{[^}]*zoom:\s*1 !important;/);
   });
 
+  it("draws the cut guides above the card, so a mirrored card cannot hide them", async () => {
+    const html = await serve();
+
+    // An outline on the card sits under the SVG's own composited layer once
+    // the mirror transform promotes it; the guides are an overlay instead.
+    expect(html).toMatch(/\.print-card\s*\{[^}]*position:\s*relative;/);
+    expect(html).toMatch(/\.print-card\.is-crop::after\s*\{[^}]*position:\s*absolute;/);
+    expect(html).toMatch(/\.print-card\.is-crop::after\s*\{[^}]*z-index:\s*2;/);
+    expect(html).toMatch(/\.print-card\.is-crop::after\s*\{[^}]*border:\s*0\.25mm dashed var\(--ink-faint\);/);
+    expect(html).not.toMatch(/\.print-card\.is-crop\s*\{[^}]*outline:/);
+  });
+
+  it("takes the card size from the layout, so no sheet can grow a card past 10×10 cm", async () => {
+    const html = await serve();
+
+    expect(html).toMatch(/\.print-card\s*\{[^}]*width:\s*var\(--card-size\);/);
+    expect(html).toMatch(/\.print-card\s*\{[^}]*height:\s*var\(--card-size\);/);
+    expect(html).toMatch(/:root\s*\{[^}]*--card-size:\s*100mm;/);
+  });
+
   it("lines radio options up like the checkboxes", async () => {
     const html = await serve();
 

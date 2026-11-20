@@ -1,6 +1,6 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import type { QueueItem } from "../legacy";
-import { computeSheetLayout, presetForSize, SHEET_PRESETS, sheetPresetSize } from "./sheet";
+import { CARD_MM, computeSheetLayout, presetForSize, SHEET_PRESETS, sheetPresetSize } from "./sheet";
 import { usePrintQueue } from "./usePrintQueue";
 
 /**
@@ -148,9 +148,9 @@ export function CardsSection() {
   if (queue.length === 0) {
     sheets = <p className="gate-empty">No cards waiting to be printed. Send unconfigured links to print from the Links section.</p>;
   } else if (!layout.fits) {
-    info = "The sheet is too small for a 100×100 mm card with that margin.";
+    info = `The sheet is too small for a ${CARD_MM}×${CARD_MM} mm card with that margin.`;
   } else {
-    info = `${layout.cols}×${layout.rows} = ${layout.cap} cards per sheet · ${queue.length} card(s) · ${layout.pages} sheet(s)`;
+    info = `${layout.cols}×${layout.rows} = ${layout.cap} cards per sheet · ${CARD_MM}×${CARD_MM} mm cards · ${queue.length} card(s) · ${layout.pages} sheet(s)`;
     if (cards.status === "error") {
       sheets = <p className="gate-empty">Could not load the cards.</p>;
     } else if (cards.status === "ready" && cards.svgs.length === queue.length) {
@@ -169,8 +169,8 @@ export function CardsSection() {
             height: `${size.h}mm`,
             padding: `${sheetMargin}mm`,
             gap: `${sheetGap}mm`,
-            gridTemplateColumns: `repeat(${layout.cols}, 100mm)`,
-            gridAutoRows: "100mm",
+            gridTemplateColumns: `repeat(${layout.cols}, ${CARD_MM}mm)`,
+            gridAutoRows: `${CARD_MM}mm`,
           }}
         >
           {page.map((svg, i) => (
@@ -278,7 +278,10 @@ export function CardsSection() {
           {info}
         </span>
       </div>
-      <div id="card-sheets" style={{ "--card-zoom": String(Number(zoom) / 100) } as CSSProperties}>
+      <div
+        id="card-sheets"
+        style={{ "--card-zoom": String(Number(zoom) / 100), "--card-size": `${CARD_MM}mm` } as CSSProperties}
+      >
         {sheets}
       </div>
     </>

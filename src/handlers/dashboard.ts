@@ -49,6 +49,7 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       --edge-strong: #c4bba9;  /* form fields, outlined buttons */
       --paper: #ffffff;        /* a printing sheet: the cards are drawn on white */
       --card-zoom: 0.45;       /* Cards preview scale; the print is always 1 */
+      --card-size: 100mm;      /* Printed card edge: never more than 10×10 cm */
 
       /* Ink — five steps, from a heading down to a placeholder */
       --ink: #2b2622;          /* espresso */
@@ -701,8 +702,14 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
       outline: 1px solid var(--edge);
       margin: 0 0 1rem;
     }
-    .print-card { width: 100mm; height: 100mm; overflow: hidden; border-radius: 5mm; background: var(--paper); }
-    .print-card.is-crop { outline: 0.25mm dashed var(--edge-strong); outline-offset: -0.25mm; }
+    .print-card { position: relative; width: var(--card-size); height: var(--card-size); overflow: hidden; border-radius: 5mm; background: var(--paper); }
+    /* Cut guides are an overlay, not an outline: a mirrored SVG is composited
+       on its own layer and paints over its parent's outline, which hid the
+       guides exactly when Modo Espejo was on. */
+    .print-card.is-crop::after {
+      content: ""; position: absolute; inset: 0; z-index: 2; pointer-events: none;
+      border: 0.25mm dashed var(--ink-faint); border-radius: 5mm;
+    }
     .print-card.is-mirror svg { transform: scaleX(-1); }
     /* The printed report: only the metric cards, one card never split across
        two pages, and the chart colours kept (browsers drop backgrounds by

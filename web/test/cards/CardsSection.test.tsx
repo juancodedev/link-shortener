@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CardsSection } from "../../src/cards/CardsSection";
+import { CARD_MM, SHEET_PRESETS } from "../../src/cards/sheet";
 import type { QueueItem } from "../../src/legacy";
 
 type Calls = { api: string[]; setQueued: Array<[string, boolean]>; cleared: number };
@@ -54,6 +55,7 @@ describe("Cards section (React)", () => {
       ["297x420", "A3 vertical (297×420 mm)"],
       ["420x297", "A3 horizontal (420×297 mm)"],
       ["210x297", "A4 vertical (210×297 mm)"],
+      ["297x210", "A4 horizontal (297×210 mm)"],
       ["216x279", "Carta (216×279 mm)"],
       ["216x330", "Oficio (216×330 mm)"],
       ["100x100", "1 tarjeta por hoja (100×100 mm)"],
@@ -107,7 +109,7 @@ describe("Cards section (React)", () => {
     await act(async () => {});
 
     expect(calls.api).toContain("/api/links/b%2F2/card.svg?design=minimal&variant=qr");
-    screen.getByText("1×2 = 2 cards per sheet · 3 card(s) · 2 sheet(s)");
+    screen.getByText("1×2 = 2 cards per sheet · 100×100 mm cards · 3 card(s) · 2 sheet(s)");
     const sheets = [...document.querySelectorAll<HTMLElement>("#card-sheets > .card-sheet")];
     expect(sheets).toHaveLength(2);
     expect(sheets[0]!.style.width).toBe("210mm");
@@ -129,7 +131,36 @@ describe("Cards section (React)", () => {
 
     const sheet = document.querySelector<HTMLElement>(".card-sheet")!;
     expect(sheet.style.padding).toBe("0mm");
-    screen.getByText("1×1 = 1 cards per sheet · 1 card(s) · 1 sheet(s)");
+    screen.getByText("1×1 = 1 cards per sheet · 100×100 mm cards · 1 card(s) · 1 sheet(s)");
+  });
+
+  it("lays A4 landscape out as two cards side by side", async () => {
+    legacyWindow([{ id: "a", short_code: "AAA" }]);
+    await mount();
+    fireEvent.change(field("card-sheet"), { target: { value: "297x210" } });
+    await act(async () => {});
+
+    const sheet = document.querySelector<HTMLElement>(".card-sheet")!;
+    expect([sheet.style.width, sheet.style.height]).toEqual(["297mm", "210mm"]);
+    expect(sheet.style.gridTemplateColumns).toBe("repeat(2, 100mm)");
+    screen.getByText("2×1 = 2 cards per sheet · 100×100 mm cards · 1 card(s) · 1 sheet(s)");
+  });
+
+  it("keeps every card at 10×10 cm on every sheet preset", async () => {
+    legacyWindow([{ id: "a", short_code: "AAA" }]);
+    await mount();
+
+    for (const p of SHEET_PRESETS) {
+      fireEvent.change(field("card-sheet"), { target: { value: p.value } });
+      if (p.value === "custom") {
+        fireEvent.change(field("card-sheet-w"), { target: { value: "200" } });
+        fireEvent.change(field("card-sheet-h"), { target: { value: "200" } });
+      }
+      await act(async () => {});
+      const sheet = document.querySelector<HTMLElement>(".card-sheet")!;
+      expect(sheet.style.gridTemplateColumns, p.value).toMatch(new RegExp(`, ${CARD_MM}mm\\)$`));
+      expect(sheet.style.gridAutoRows, p.value).toBe(`${CARD_MM}mm`);
+    }
   });
 
   it("says when the sheet is too small for a card with that margin", async () => {

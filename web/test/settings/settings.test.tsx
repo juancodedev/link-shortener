@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SettingsSection } from "../../src/settings/SettingsSection";
 import { gate, installApi, settle, type Call } from "../links/harness";
+import { stubApiReady } from "../api-stub";
 
 // The feedback email card (dashboard-react T5). Ported from the Worker tests
 // of the legacy loadFeedbackEmail and its save listener ("the feedback email
@@ -38,7 +39,7 @@ async function clickSave() {
 }
 
 beforeEach(() => {
-  window.__apiReady = Promise.resolve();
+  stubApiReady(Promise.resolve());
 });
 
 afterEach(cleanup);
@@ -63,7 +64,7 @@ describe("Settings island — the feedback email card", () => {
 
   it("sends nothing until the auth gate opens, then shows the stored address, read once", async () => {
     const auth = gate();
-    window.__apiReady = auth.wait;
+    stubApiReady(auth.wait);
     const calls = settingsApi();
     render(<SettingsSection />);
     await settle();

@@ -4,12 +4,14 @@ import { loadBranches, resetBranches, type Branch, type Business } from "../../s
 import { LinksSection } from "../../src/links/LinksSection";
 import { onOverviewChange, type OverviewChange } from "../../src/overview/changes";
 import { clearPrintQueue, installPrintQueue } from "../../src/print-queue";
+import { stubApi, stubApiReady, stubbedApi, stubbedApiReady } from "../api-stub";
 
 /**
  * Stands in for the server-rendered dashboard around the Links island:
- * window.__api (which, like the real one, THROWS on a non-ok response), the
- * readiness gate, and the bridges the legacy page exposes. The changes the
- * island announces to the Overview island are recorded too. The in-bundle
+ * the API helper (stubbed through ../api-stub; like the real one it THROWS
+ * on a non-ok response), its readiness gate, and the bridges the page
+ * exposes. The changes the island announces to the Overview island are
+ * recorded too. The in-bundle
  * stores (branches, print queue) are reset, since they outlive a render.
  */
 
@@ -46,15 +48,15 @@ export const CLICKS = {
   by_source: {},
 };
 
-/** Answers through `handler`; a thrown error is what the real __api throws on a non-ok status. */
+/** Answers through `handler`; a thrown error is what the real api() throws on a non-ok status. */
 export function installApi(handler: Handler): Call[] {
   const calls: Call[] = [];
-  window.__api = vi.fn(async (method: string, path: string, body?: unknown) => {
+  stubApi(vi.fn(async (method: string, path: string, body?: unknown) => {
     calls.push(body === undefined ? { method, path } : { method, path, body });
     const out = await handler(method, path, body);
     if (out instanceof Response) return out;
     return new Response(JSON.stringify(out ?? {}), { status: 200 });
-  });
+  }));
   return calls;
 }
 
@@ -109,7 +111,7 @@ let stopRecording = () => {};
 /** The legacy page's bridges, and the Overview changes, recorded. */
 export function installLegacy(): Bridges {
   const bridges: Bridges = { overview: [] };
-  window.__apiReady = Promise.resolve();
+  stubApiReady(Promise.resolve());
   stopRecording();
   stopRecording = onOverviewChange((change) => bridges.overview.push(change));
   resetBranches();
@@ -120,12 +122,12 @@ export function installLegacy(): Bridges {
 
 /**
  * Fills the branches store through its real load, answering only its two
- * requests, then puts the test's own window.__api back.
+ * requests, then puts the test's own API stub back.
  */
 export async function provideBranches(branches: Branch[], businesses: Business[]): Promise<void> {
-  const previous = window.__api;
-  const ready = window.__apiReady;
-  window.__apiReady = Promise.resolve();
+  const previous = stubbedApi();
+  const ready = stubbedApiReady();
+  stubApiReady(Promise.resolve());
   installApi((method, path) => {
     if (method === "GET" && path === "/api/locations") return { locations: branches };
     if (method === "GET" && path === "/api/businesses") return { businesses };
@@ -134,8 +136,8 @@ export async function provideBranches(branches: Branch[], businesses: Business[]
   await act(async () => {
     await loadBranches();
   });
-  window.__api = previous;
-  window.__apiReady = ready;
+  stubApi(previous);
+  stubApiReady(ready);
 }
 
 /** Lets every pending request, JSON parse and React update settle. */

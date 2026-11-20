@@ -4,6 +4,7 @@ import { getBranches, loadBranches, resetBranches } from "../../src/branches/sto
 import { BusinessesSection } from "../../src/businesses/BusinessesSection";
 import { provideLinksLoad } from "../../src/links/reload";
 import { count, installApi, settle, type Call } from "../links/harness";
+import { stubApiReady } from "../api-stub";
 
 // The Businesses and branches card (odd/tasks/business-branches.md S3, and the
 // moves and switches requested after PR #83), as the island draws it
@@ -73,7 +74,7 @@ async function click(button: HTMLButtonElement) {
 
 beforeEach(() => {
   resetBranches();
-  window.__apiReady = Promise.resolve();
+  stubApiReady(Promise.resolve());
   reloads = vi.fn(async () => {});
   stopLinks = provideLinksLoad(reloads);
   errors = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -229,7 +230,7 @@ describe("Businesses island — actions", () => {
   });
 
   it("shows the thrown error when the real api helper rejects the add", async () => {
-    // The real window.__api throws on any non-ok answer, with the server's error.
+    // The real API helper (web/src/api.ts) throws on any non-ok answer, with the server's error.
     businessesApi(undefined, () => {
       throw new Error("Name taken");
     });

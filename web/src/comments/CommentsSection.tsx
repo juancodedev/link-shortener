@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { pickableBranches, useBranches, type Branch, type Business } from "../branches/store";
 import { FeedbackInbox, type FeedbackInboxPayload } from "./FeedbackInbox";
+import { api, whenApiReady } from "../api";
 
 /**
  * THE COMMENTS SECTION (dashboard-react T5): what customers wrote, filtered
  * by business or branch, and the same list as a CSV.
  *
- * The inbox loads once the auth bootstrap opens window.__apiReady, and again
+ * The inbox loads once the auth bootstrap opens the API gate (../api), and again
  * only when the filter changes: the comments belong to the tenant, not to any
  * link row, so a table refresh does not touch them. It is its own load on
  * purpose: a failure here says so in this card and leaves the rest of the
@@ -68,9 +69,9 @@ export function CommentsSection() {
 
   const load = useCallback(async (value: string) => {
     const mine = ++seq.current;
-    if (window.__apiReady) await window.__apiReady;
+    await whenApiReady();
     try {
-      const res = await window.__api("GET", "/api/review-gate/feedback" + feedbackQuery(value));
+      const res = await api("GET", "/api/review-gate/feedback" + feedbackQuery(value));
       // Checked before the body is read as an inbox: a 401 or 500 is JSON
       // too, and rendering it would draw an empty inbox that looks like no
       // one wrote.
@@ -97,7 +98,7 @@ export function CommentsSection() {
   );
 
   /**
-   * The CSV export, downloaded through window.__api.
+   * The CSV export, downloaded through the API helper (../api).
    *
    * Not a plain link: every tenant-scoped route authenticates with an
    * Authorization: Bearer header and picks the tenant with X-Tenant-Slug, and
@@ -112,7 +113,7 @@ export function CommentsSection() {
     setExporting(true);
     setMsg({ kind: "", text: "" });
     try {
-      const res = await window.__api("GET", "/api/review-gate/feedback.csv" + feedbackQuery(filter));
+      const res = await api("GET", "/api/review-gate/feedback.csv" + feedbackQuery(filter));
       // A refused export answers with a JSON error body. Read as a blob it
       // would download as customer-feedback.csv and look like a file, so the
       // status is checked first and the owner is told instead.

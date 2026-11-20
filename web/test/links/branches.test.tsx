@@ -2,6 +2,7 @@ import { cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { branchOptions } from "../../src/links/branches";
 import { field, installLegacy, link, mountLinks, provideBranches, standardApi } from "./harness";
+import { stubApi, stubbedApi } from "../api-stub";
 
 // The row's branch picker (odd/tasks/business-branches.md S4); the
 // pickableBranches rule it shares with the Comments filter is pinned in
@@ -75,9 +76,9 @@ describe("the row's branch picker", () => {
     await mountLinks();
     expect(options().map((o) => o.label)).toEqual(["Unassigned", "Current branch"]);
 
-    const api = window.__api;
+    const api = stubbedApi();
     await provideBranches(branches, businesses);
-    window.__api = api;
+    stubApi(api);
 
     expect(options().map((o) => o.label)).toEqual(["Unassigned", "Café Central — Providencia", "Suelta"]);
     expect(field("branch-link-uuid").value).toBe("loc-1");

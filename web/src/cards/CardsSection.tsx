@@ -3,6 +3,7 @@ import type { QueueItem } from "../legacy";
 import { CARD_MM, computeSheetLayout, presetForSize, SHEET_PRESETS, sheetPresetSize } from "./sheet";
 import { reloadLinks } from "../links/reload";
 import { usePrintQueue } from "./usePrintQueue";
+import { api } from "../api";
 
 /**
  * THE PRINT QUEUE (odd/tasks/print-queue-cards.md S4-S6, dashboard-react T2).
@@ -42,7 +43,7 @@ async function cardSvg(item: QueueItem, design: string, variant: string): Promis
   const key = `${item.id}|${design}|${variant}`;
   const hit = svgCache.get(key);
   if (hit !== undefined) return hit;
-  const res = await window.__api(
+  const res = await api(
     "GET",
     `/api/links/${encodeURIComponent(item.id)}/card.svg?design=${design}&variant=${variant}`,
   );
@@ -147,7 +148,7 @@ export function CardsSection() {
       try {
         // One request per print run, never one per card: the queue itself is
         // page state, and this is what survives a reload.
-        await window.__api("POST", "/api/links/printed", { ids: queue.map((item) => item.id) });
+        await api("POST", "/api/links/printed", { ids: queue.map((item) => item.id) });
         window.__clearPrintQueue();
         // The rows carry the new printed_at: reload once, not per card.
         void reloadLinks();

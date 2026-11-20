@@ -17,6 +17,7 @@ import {
   standardApi,
   type Bridges,
 } from "./harness";
+import { stubApi, stubApiReady } from "../api-stub";
 
 // How the Links island loads (dashboard-react T3a, S2/S5, L9). Ported from the
 // Worker tests that compiled the legacy loadLinks out of the served HTML:
@@ -39,16 +40,16 @@ describe("Links island — loading", () => {
     vi.unstubAllGlobals();
   });
 
-  it("waits for the auth gate and uses the window.__api bound when it opens", async () => {
+  it("waits for the auth gate and uses the API answering when it opens", async () => {
     const auth = gate();
-    window.__apiReady = auth.wait;
+    stubApiReady(auth.wait);
     // The state the page is in while getSession() is still in flight.
-    (window as { __api?: unknown }).__api = undefined;
+    stubApi(undefined);
 
     render(<LinksSection limit={100} />);
     await settle();
 
-    // Parked, not failed: no rendered "window.__api is not a function".
+    // Parked, not failed: no rendered "api is not a function".
     expect(el("links-empty").style.display).toBe("none");
     expect(el("links-loading").style.display).toBe("");
 
@@ -63,7 +64,7 @@ describe("Links island — loading", () => {
 
   it("sends no request at all until the auth gate opens", async () => {
     const auth = gate();
-    window.__apiReady = auth.wait;
+    stubApiReady(auth.wait);
     const calls = standardApi({ links: [] });
 
     render(<LinksSection limit={100} />);

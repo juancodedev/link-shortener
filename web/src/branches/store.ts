@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { api, whenApiReady } from "../api";
 
 /**
  * The tenant's businesses and branches, held once for the whole bundle
@@ -63,16 +64,16 @@ export function subscribeBranches(listener: () => void): () => void {
 
 /**
  * GET /api/locations and /api/businesses, together. Safe to call at any
- * point: it parks on window.__apiReady until the auth bootstrap defines
- * window.__api. When loads overlap, only the newest one lands.
+ * point: it parks on the API gate (../api) until the auth bootstrap has a
+ * session. When loads overlap, only the newest one lands.
  */
 export async function loadBranches(): Promise<void> {
   const mine = ++seq;
-  if (window.__apiReady) await window.__apiReady;
+  await whenApiReady();
   try {
     const [locRes, bizRes] = await Promise.all([
-      window.__api("GET", "/api/locations"),
-      window.__api("GET", "/api/businesses"),
+      api("GET", "/api/locations"),
+      api("GET", "/api/businesses"),
     ]);
     if (!locRes.ok) throw new Error("branches: HTTP " + locRes.status);
     if (!bizRes.ok) throw new Error("businesses: HTTP " + bizRes.status);

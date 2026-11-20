@@ -7,6 +7,7 @@ import {
   prunePrintQueue,
   setPrintQueued,
 } from "../src/print-queue";
+import { stubApi } from "./api-stub";
 
 // The print queue moved from the legacy page into this store
 // (odd/tasks/dashboard-react.md T3a). These pin what the legacy
@@ -107,7 +108,7 @@ describe("print queue store", () => {
   it("keeps the queue in page memory: no request, and empty in a fresh page", async () => {
     const api = vi.fn();
     const fetchSpy = vi.fn();
-    window.__api = api;
+    stubApi(api);
     vi.stubGlobal("fetch", fetchSpy);
 
     setPrintQueued("a", true, "AAA");

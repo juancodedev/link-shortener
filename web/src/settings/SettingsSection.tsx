@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { api, whenApiReady } from "../api";
 
 /**
  * THE SETTINGS SECTION (dashboard-react T5): where feedback should go.
@@ -28,9 +29,9 @@ export function SettingsSection() {
   useEffect(() => {
     let live = true;
     void (async () => {
-      if (window.__apiReady) await window.__apiReady;
+      await whenApiReady();
       try {
-        const res = await window.__api("GET", "/api/tenant/feedback-email");
+        const res = await api("GET", "/api/tenant/feedback-email");
         const body = (await res.json()) as { feedback_email?: unknown };
         if (live && typeof body.feedback_email === "string") setEmail(body.feedback_email);
       } catch {
@@ -47,7 +48,7 @@ export function SettingsSection() {
     setSaving(true);
     setMsg({ kind: "", text: "" });
     try {
-      const res = await window.__api("PUT", "/api/tenant/feedback-email", { feedback_email: email });
+      const res = await api("PUT", "/api/tenant/feedback-email", { feedback_email: email });
       // Only say "saved" when the server agreed. A confirmation that lies is
       // worse than no confirmation: the owner walks away believing an
       // address is recorded that is not.

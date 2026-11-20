@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { errorText, type Link } from "./load";
+import { api } from "../api";
 
 /**
  * MANUFACTURING CARD STOCK IN BULK (dashboard-react T3b).
@@ -64,7 +65,7 @@ export function BulkModal({ onCreated }: { onCreated: () => void }) {
         is_gated: gated,
         ...(ref ? { client_ref: ref } : {}),
       }));
-      const res = await window.__api("POST", "/api/links/batch", { links });
+      const res = await api("POST", "/api/links/batch", { links });
 
       const body = (await res.json()) as { results?: BatchResult[]; error?: string };
       // A partial batch is reported, never treated as success: nine of ten
@@ -94,11 +95,11 @@ export function BulkModal({ onCreated }: { onCreated: () => void }) {
     }
 
     try {
-      // Through __api, never a hand-rolled fetch: an earlier version read the
+      // Through api(), never a hand-rolled fetch: an earlier version read the
       // token from the wrong place and the sheet 401'd after the cards had
-      // been created. __api returns the response, so the blob comes through
+      // been created. api() returns the response, so the blob comes through
       // unchanged, with the 401 redirect and the tenant picker included.
-      const res = await window.__api("POST", "/api/links/qr-sheet.zip", { link_ids: ids });
+      const res = await api("POST", "/api/links/qr-sheet.zip", { link_ids: ids });
 
       const blob = await res.blob();
       const href = URL.createObjectURL(blob);

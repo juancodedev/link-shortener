@@ -10,6 +10,7 @@ import { LinkRow, type MetricsState } from "./LinkRow";
 import { fetchLinks, type ClickMetrics, type Link } from "./load";
 import { QrModal } from "./QrModal";
 import { provideLinksLoad } from "./reload";
+import { api, whenApiReady } from "../api";
 
 /**
  * THE LINKS SECTION (dashboard-react T3a/T3b, S2/S5).
@@ -23,7 +24,7 @@ import { provideLinksLoad } from "./reload";
  * as is. The `<section>` itself stays server-rendered: the legacy
  * showSection toggles its `hidden`.
  *
- * It loads itself once the auth bootstrap opens window.__apiReady. Creating
+ * It loads itself once the auth bootstrap opens the API gate (../api). Creating
  * here reloads through the same load directly; the sections that change what
  * the table shows from outside (Cards after a print run, Businesses after a
  * rename, move or switch) reach the same load through ./reload. The branch
@@ -85,7 +86,7 @@ export function LinksSection({ limit }: { limit: number }) {
     inflight.current.set(id, token);
     setMetric(id, { status: "loading" });
     try {
-      const res = await window.__api("GET", `/api/links/${encodeURIComponent(id)}/clicks`);
+      const res = await api("GET", `/api/links/${encodeURIComponent(id)}/clicks`);
       if (!res) throw new Error("No response");
       const data = (await res.json()) as ClickMetrics;
       if (!res.ok) throw new Error(data.error || "Server error");
@@ -110,8 +111,8 @@ export function LinksSection({ limit }: { limit: number }) {
   const load = useCallback(async () => {
     const seq = ++loadSeq.current;
     // Safe at any point in the page lifecycle: a call made while getSession()
-    // is still in flight parks here, and runs once window.__api exists.
-    if (window.__apiReady) await window.__apiReady;
+    // is still in flight parks here, and runs once the helper can authenticate.
+    await whenApiReady();
 
     // A table already on screen means a refresh after an edit, not the first
     // load. Hiding it then collapsed the page and threw the owner back to the

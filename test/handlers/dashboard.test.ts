@@ -1,14 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { dashboardHandler } from "../../src/handlers/dashboard";
-import { inlineScripts } from "../helpers/inline-scripts";
 
 // ---------------------------------------------------------------------------
 // The served dashboard page.
 //
-// Most of the dashboard is built client-side by the inline <script> this
-// handler serves, so these tests extract the real functions out of the SERVED
-// output and execute them. Asserting against a hand-copied copy would pass
-// while the shipped code stayed broken.
+// The dashboard is built client-side by the React bundle (web/); this
+// handler serves the document it runs in. These tests assert against the
+// SERVED output, not the handler's source.
 //
 // Sections that moved to React islands (odd/tasks/dashboard-react.md) are
 // tested as components in web/test instead: the Links section (table, create
@@ -17,9 +15,10 @@ import { inlineScripts } from "../helpers/inline-scripts";
 // button, satisfaction panel, busy hours, client rollup) in web/test/overview
 // (T4); Businesses, Comments and Settings, with the branches store they
 // share, in web/test/businesses, web/test/comments, web/test/settings and
-// web/test/branches (T5). What stays here is the served shell: the mount
-// points, the first paint, the auth bootstrap, the tenant picker and the
-// sidebar routing.
+// web/test/branches (T5); the shell (auth bootstrap, API helper, tenant
+// picker, sidebar routing) in web/test/shell and web/test/api.test.ts (T6a).
+// What stays here is the served document: the mount points, the first paint,
+// the stylesheet, the config block and the bundle tag.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -46,43 +45,6 @@ async function serve(): Promise<string> {
   return response.text();
 }
 
-/**
- * A statement only the dashboard's own inline <script> block carries (the
- * readiness gate it creates). The shell's other inline block is the Supabase
- * auth bootstrap, which resolves the gate but never creates it.
- */
-const CLIENT_SCRIPT_MARKER = "window.__apiReady = new Promise";
-
-/** Returns the dashboard's own inline <script> block. */
-async function clientScript(): Promise<string> {
-  const html = await serve();
-  const script = inlineScripts(html)[0];
-  if (!script || !script.includes(CLIENT_SCRIPT_MARKER)) {
-    throw new Error("dashboard client script not found in served HTML");
-  }
-  return script;
-}
-
-
-/**
- * The served script with its COMMENTS removed.
- *
- * Added after a negative assertion (`not.toContain("original_url:")`) failed
- * because the comment directly above it explained the rule and contained the
- * word. It was the third time in this file a substring assertion caught its own
- * prose — the first was `data-action`, the second a test name.
- *
- * The failure mode is nasty precisely because it looks like a real finding: the
- * assertion reports a violation of a rule, and the violation is the test's own
- * documentation of that rule. Stripping comments first makes a negative
- * assertion mean what it says — about the CODE.
- */
-function codeOnly(script: string): string {
-  return script
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^\s*\/\/.*$/gm, "");
-}
-
 /** Markup with its HTML comments removed, so a test reads only the elements. */
 function codeOnlyHtml(html: string): string {
   let previous: string;
@@ -93,28 +55,6 @@ function codeOnlyHtml(html: string): string {
   } while (current !== previous);
   return current;
 }
-
-/** Extracts a named `function foo(...) {...}` by brace matching. */
-function extractFunction(src: string, name: string): string {
-  const start = src.indexOf(`function ${name}(`);
-  if (start < 0) throw new Error(`${name}() not found`);
-  let depth = 0;
-  for (let i = src.indexOf("{", start); i < src.length; i++) {
-    if (src[i] === "{") depth++;
-    else if (src[i] === "}" && --depth === 0) return src.slice(start, i + 1);
-  }
-  throw new Error(`unterminated ${name}()`);
-}
-
-/** Compiles a named client-side function out of the SERVED script. */
-async function loadClientFunction<T>(name: string): Promise<T> {
-  const src = extractFunction(await clientScript(), name);
-  return new Function(`${src}\nreturn ${name};`)() as T;
-}
-
-// ---------------------------------------------------------------------------
-// Shell contract
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Shell contract
@@ -190,19 +130,15 @@ import { VISITOR_ESTIMATE_CAVEAT } from "../../src/analytics/metrics";
 /**
  * The part of the served page that exists WITHOUT any script running.
  *
- * Every server-rendered element sits ahead of the dashboard's inline <script>
- * — nav, the create form, the links card and the clients card. Note the
- * boundary is the inline `<script>`, NOT `<script src=`: the dashboard's own
- * script (which carries the row template, and a second copy of the caveat) is
- * rendered INSIDE the container, ahead of the shell's Supabase loader. Cutting
- * at `<script src=` therefore included script content and made every caveat
- * assertion satisfiable by text a script produces — which is precisely the
- * failure this function exists to prevent.
+ * Every server-rendered element sits ahead of the page's first <script>
+ * element (the config block, then the bundle). The cut is at that first
+ * <script, so no caveat assertion can be satisfied by text a script carries
+ * — the failure this function exists to prevent.
  */
 async function staticRegion(): Promise<string> {
   const html = await serve();
-  const cut = html.indexOf("<script>");
-  if (cut < 0) throw new Error("inline script boundary not found in served HTML");
+  const cut = html.indexOf("<script");
+  if (cut < 0) throw new Error("script boundary not found in served HTML");
   return html.slice(0, cut);
 }
 
@@ -294,290 +230,119 @@ describe("printable report", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The auth bootstrap and the readiness gate
+// The served document (odd/tasks/dashboard-react.md T6a)
 //
-// The dashboard serves TWO inline scripts and they do not run in a
-// cooperative order:
-//
-//   <script>  (container)   creates window.__apiReady, wires the page
-//   <script src=...supabase>
-//   <script>  (shell)       async IIFE -> await sb.auth.getSession()
-//                           -> defines window.__api -> resolves the gate
-//   <script type=module>    the React islands; the Links island awaits the
-//                           gate, then loads (web/test/links/loading.test.tsx)
-//
-// The shell bootstrap suspends on a network round-trip, so anything that runs
-// before it resolves finds no window.__api. Loading the links at parse time
-// once rendered "Could not load links. window.__api is not a function".
+// The shell's behaviour is the React bundle's now, pinned in web/test:
+//   - the auth bootstrap (session check, /login redirect, nav email, logout,
+//     the readiness gate and its ordering): web/test/shell/auth.test.ts
+//   - the API helper (Bearer token, X-Tenant-Slug from the URL then storage,
+//     401 -> /login, 409 tenant_required, error text): web/test/api.test.ts
+//   - the tenant picker: web/test/shell/tenant-picker.test.tsx
+//   - the sidebar routing (sectionFromHash, showSection, hashchange):
+//     web/test/shell/routing.test.ts
+// What the Worker still owns is the document: the stylesheet, the markup the
+// bundle drives, the config block it reads, and the bundle tag.
 // ---------------------------------------------------------------------------
 
-type ElementStub = {
-  style: { display: string };
-  textContent: string;
-  innerHTML: string;
-  dataset: Record<string, unknown>;
-  addEventListener: (type: string, handler: unknown) => void;
-};
-function stubElement(): ElementStub {
-  return {
-    style: { display: "" },
-    textContent: "",
-    innerHTML: "",
-    dataset: {},
-    addEventListener: () => {},
-  };
+const SCRIPT_TAG = /<script\b([^>]*)>([\s\S]*?)<\/script\b[^>]*>/gi;
+
+/** Every <script> element of the served page: its attributes and its body. */
+function scripts(html: string): Array<{ attrs: string; body: string }> {
+  return [...html.matchAll(SCRIPT_TAG)].map((m) => ({ attrs: m[1] ?? "", body: m[2] ?? "" }));
 }
 
-/**
- * Executes the served shell auth bootstrap against a stub window, so the
- * redirect path and the resolve ordering are observed rather than assumed.
- * `session: null` is the unauthenticated visitor.
- */
-async function runAuthBootstrap(session: unknown) {
-  const html = await serve();
-  const start = html.indexOf("<script src=");
-  if (start < 0) throw new Error("auth bootstrap not found in served HTML");
-  const end = html.indexOf("})();", start);
-  if (end < 0) throw new Error("auth bootstrap is not terminated in served HTML");
-  const iife = html.slice(html.indexOf("(async () => {", start), end + 5);
-
-  let resolveCalls = 0;
-  let apiTypeAtResolve = "<never called>";
-  const win: Record<string, any> = {
-    location: { href: "" },
-    supabase: {
-      createClient: () => ({ auth: { getSession: async () => ({ data: { session } }) } }),
-    },
-  };
-  // Pre-installed so the bootstrap finds one whichever order it is written in.
-  // The bootstrap itself never defines it — only the container script does.
-  win.__apiReadyResolve = () => {
-    resolveCalls++;
-    apiTypeAtResolve = typeof win.__api;
-  };
-
-  await new Function("window", "document", `return ${iife}`)(win, {
-    getElementById: stubElement,
-  });
-
-  return {
-    win,
-    resolveCalls: () => resolveCalls,
-    apiTypeAtResolve: () => apiTypeAtResolve,
-  };
+function contextWith(env: Record<string, string>) {
+  const c = mockContext();
+  c.env = { ...c.env, ...env };
+  return c;
 }
 
-describe("the dashboard script never triggers a load at parse time", () => {
-  it("makes no request at all: every load belongs to an island", async () => {
-    const script = codeOnly(await clientScript());
+/** The parsed body of the config block. */
+function config(html: string): unknown {
+  const block = html.match(/<script type="application\/json" id="dashboard-config">([\s\S]*?)<\/script>/);
+  if (!block) throw new Error("no config block in served HTML");
+  return JSON.parse(block[1]!);
+}
 
-    // Each section's island awaits the gate and loads itself (web/test/*);
-    // a call here would run before the session resolved and before
-    // window.__api existed.
-    expect(script).not.toContain("window.__api(");
-    expect(script).not.toMatch(/\bload[A-Z]\w*\(/);
-    expect(script).not.toContain("__loadLinks");
-  });
-
-  it("creates the readiness gate in the container script, before the auth script", async () => {
+describe("the served document", () => {
+  it("hands the bundle the Supabase URL and anon key from env, and nothing else", async () => {
     const html = await serve();
 
-    const gateAt = html.indexOf("window.__apiReady = new Promise");
-    const authAt = html.indexOf("<script src=");
-    expect(gateAt).toBeGreaterThan(-1);
-    // If the gate were created after the bootstrap script, a parse-time caller
-    // would find it undefined and the race would come straight back.
-    expect(gateAt).toBeLessThan(authAt);
+    expect(config(html)).toEqual({ supabaseUrl: "https://test.supabase.co", supabaseAnonKey: "test-anon-key" });
   });
-});
 
-describe("the auth bootstrap gates its own load", () => {
-  it("resolves the gate only after window.__api exists", async () => {
-    const { resolveCalls, apiTypeAtResolve, win } = await runAuthBootstrap({
-      access_token: "tok",
-      user: { email: "owner@example.com" },
+  it("keeps a config value from closing the block or opening markup", async () => {
+    const response = await dashboardHandler(contextWith({ SUPABASE_ANON_KEY: 'k</script><img src=x onerror="alert(1)">' }));
+    const html = await response.text();
+
+    expect(html).not.toContain("<img src=x");
+    expect(config(html)).toEqual({
+      supabaseUrl: "https://test.supabase.co",
+      supabaseAnonKey: 'k</script><img src=x onerror="alert(1)">',
     });
-
-    expect(win.location.href).toBe("");
-    expect(typeof win.__api).toBe("function");
-    expect(resolveCalls()).toBe(1);
-    // Ordering, observed: a resolver that ran before __api existed would
-    // release every waiter onto the same race.
-    expect(apiTypeAtResolve()).toBe("function");
   });
 
-  it("opens the gate after defining the helper, and starts no load of its own", async () => {
-    const html = await serve();
-    const auth = html.slice(html.indexOf("<script src="));
-    const iife = codeOnly(auth.slice(0, auth.indexOf("})();")));
+  it("escapes U+2028 and U+2029 in config values and still round-trips them", async () => {
+    const key = "a\u2028b\u2029c<!--d";
+    const html = await (await dashboardHandler(contextWith({ SUPABASE_ANON_KEY: key }))).text();
+    const block = html.match(/<script type="application\/json" id="dashboard-config">([\s\S]*?)<\/script>/)![1]!;
 
-    // The islands load themselves once the gate opens, the branches store
-    // included (web/test/branches/store.test.ts); a call here too would load
-    // them twice.
-    const resolveAt = iife.indexOf("window.__apiReadyResolve?.()");
-    const helperAt = iife.indexOf("window.__api = async");
-    expect(helperAt).toBeGreaterThan(-1);
-    expect(resolveAt).toBeGreaterThan(helperAt);
-    for (const fn of ["loadLinks", "loadBranches", "loadFeedbackEmail", "loadFeedbackInbox", "loadHourlyTraffic"]) {
-      expect(iife, fn).not.toContain(fn);
+    expect(block).not.toMatch(/[\u2028\u2029<]/);
+    expect(config(html)).toEqual({ supabaseUrl: "https://test.supabase.co", supabaseAnonKey: key });
+  });
+
+  it("serves no inline executable script: only the JSON config block and the bundle", async () => {
+    const html = await serve();
+    const all = scripts(html);
+
+    expect(all.map((s) => s.attrs.trim())).toEqual([
+      'type="application/json" id="dashboard-config"',
+      'type="module" src="/assets/dashboard.js"',
+    ]);
+    expect(all[1]!.body).toBe("");
+    expect(html).not.toMatch(/<[^>]+\son[a-z]+=/i);
+  });
+
+  it("loads Supabase from the bundle, not from a CDN", async () => {
+    const html = await serve();
+
+    expect(html).not.toContain("unpkg.com");
+    expect(html).not.toContain("supabase-js");
+    expect(html).not.toContain("jsdelivr");
+  });
+
+  it("loads the bundle as a module, last, after the config block it reads", async () => {
+    const html = await serve();
+    const tag = '<script type="module" src="/assets/dashboard.js"></script>';
+
+    expect(html).toContain(tag);
+    expect(html.indexOf(tag)).toBeGreaterThan(html.indexOf('id="dashboard-config"'));
+    expect(html.indexOf(tag)).toBeLessThan(html.indexOf("</body>"));
+    expect(html.slice(html.indexOf(tag) + tag.length).trim()).toBe("</body>\n</html>");
+  });
+
+  it("lends nothing on window: no api helper, gate, token, client or picker global", async () => {
+    const html = codeOnlyHtml(await serve());
+
+    for (const name of ["__api", "__apiReady", "__token", "__sb", "__showTenantPicker", "window.supabase"]) {
+      expect(html, name).not.toContain(name);
     }
   });
 
-  it("redirects without opening the gate or defining the api helper", async () => {
-    const { win, resolveCalls } = await runAuthBootstrap(null);
+  it("keeps the topbar the bundle drives: the nav email, logout and home link", async () => {
+    const html = await serve();
+    const nav = html.slice(html.indexOf('<nav class="topbar">'), html.indexOf("</nav>"));
 
-    expect(win.location.href).toBe("/login");
-    expect(win.__api).toBeUndefined();
-    // The page is navigating away. Releasing the gate here would only start a
-    // load that cannot succeed, so the unauthenticated path leaves every waiter
-    // parked — nothing to render, nothing to fetch.
-    expect(resolveCalls()).toBe(0);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Multi-location switcher
-//
-// The API answers 409 tenant_required when a user holds several memberships and
-// names none — it refuses rather than guessing, because guessing was the bug
-// Phase 4 removed. Until this shipped, such a user got an error instead of a
-// dashboard. It is the last known broken path in the product.
-// ---------------------------------------------------------------------------
-
-describe("dashboard — tenant switcher", () => {
-  // Read the HTML the server actually serves, not the handler's source: these
-  // assertions are about what the browser receives.
-  async function script(): Promise<string> {
-    return serve();
-  }
-
-  it("sends the selected location on every API call", async () => {
-    expect(await script()).toContain("X-Tenant-Slug");
+    expect(nav).toContain('<span id="nav-email" class="nav-email"></span>');
+    expect(nav).toMatch(/<button id="logout-nav">[\s\S]*?<span>Log Out<\/span><\/button>/);
+    expect(nav).toContain('<a href="/">Home</a>');
   });
 
-  it("remembers the choice, so a refresh does not fall back to 409", async () => {
-    // The failure mode this exists to prevent: the user picks a location, the
-    // page reloads, the selection is gone, and they are back at an error.
-    expect(await script()).toContain('localStorage.setItem("tenant"');
-    expect(await script()).toContain('localStorage.getItem("tenant")');
-  });
-
-  // A shared dashboard link should open the store it names, without the user
-  // re-picking it on every visit.
-  it("prefers a tenant named in the URL over the remembered one", async () => {
-    expect(await script()).toContain("URLSearchParams");
-  });
-
-  it("handles 409 and renders the picker", async () => {
-    const src = await script();
-    expect(src).toContain("res.status === 409");
-    expect(src).toContain("tenant_required");
-    expect(src).toContain("__showTenantPicker");
-  });
-
-  it("shows which role the user holds in that location", async () => {
-    // Admin and viewer mean different permissions. A switcher showing only
-    // names would let someone pick a store they can see but not manage, and
-    // then find out at the worst moment.
-    expect(await script()).toContain("t.role");
-  });
-
-  // __api calls the picker synchronously on a 409, and the boot loads run at
-  // the end of the same IIFE. Defined later, it is undefined at the moment of call.
-  it("defines the picker before any API call can reach it", async () => {
-    const src = await script();
-    expect(src.indexOf("__showTenantPicker = function")).toBeGreaterThan(-1);
-    // Both markers are asserted to exist by the tests above, so this compares
-    // two real offsets rather than two -1s.
-    const defined = src.indexOf("__showTenantPicker = function");
-    const called = src.indexOf("__showTenantPicker(payload.available)");
-    expect(defined).toBeGreaterThan(-1);
-    expect(called).toBeGreaterThan(-1);
-    expect(defined).toBeLessThan(called);
-  });
-
-  // The business name comes from the API, so it is untrusted markup.
-  it("escapes a location name that contains markup", async () => {
-    expect(await script()).toContain('.replace(/[<>&]/g, "")');
-  });
-
-  it("does not break the single-location user who never sees the picker", async () => {
-    // One membership resolves server-side with no header, so nothing here may
-    // become a precondition for the dashboard loading at all.
-    expect(await script()).toContain("if (q) headers[");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// The api helper's auth contract
-//
-// The Links island's requests (bulk cards and their print sheet included,
-// web/test/links/bulk.test.tsx) all go through window.__api, so the helper
-// itself has to keep carrying the whole contract.
-// ---------------------------------------------------------------------------
-
-describe("the api helper", () => {
-  it("carries the bearer token and the tenant on every request", async () => {
-    // Asserted against the WHOLE served page: __api lives in the shell's
-    // bootstrap block, not in clientScript().
+  it("still serves the stylesheet the tenant bar and the sidebar use", async () => {
     const html = await serve();
 
-    expect(html).toContain("Bearer " + '" + window.__token');
-    expect(html).toContain('headers["X-Tenant-Slug"] = q');
-  });
-});
-
-describe("the served client script parses", () => {
-  /**
-   * The test that was missing, added after shipping a dead dashboard.
-   *
-   * Every other assertion in this file compares SUBSTRINGS. Substrings match
-   * happily inside a script the browser cannot parse, so a hundred green
-   * assertions once coexisted with `Uncaught SyntaxError: Invalid or unexpected
-   * token` and a dashboard that did nothing at all.
-   *
-   * `new Function` COMPILES without EXECUTING. Nothing in this script runs: no
-   * fetch, no DOM access, no auth. It is a parser, not a smoke test — which is
-   * what makes it safe to run on the whole block on every test run.
-   */
-  it("is valid JavaScript", async () => {
-    const html = await serve();
-    const blocks = inlineScripts(html);
-    const client = blocks.find((b) => b.includes(CLIENT_SCRIPT_MARKER));
-    expect(client).toBeDefined();
-
-    let error: unknown = null;
-    try {
-      new Function(client!);
-    } catch (e) {
-      error = e;
-    }
-    expect(error, String(error)).toBeNull();
-  });
-
-  it("emits no raw newline inside a string literal", async () => {
-    // The specific escape that broke it.
-    //
-    // The client script is a TEMPLATE LITERAL in the handler, so a `\n` written
-    // in that source becomes a REAL newline in the served JavaScript. Real
-    // newlines inside a double-quoted string are a SyntaxError. The prompt text
-    // needed `\\n` in the handler so the browser receives the two-character
-    // escape and renders a line break at runtime.
-    //
-    // Asserted here because it is invisible in review: the handler compiles, the
-    // typecheck passes, and every substring assertion still matches. Only the
-    // parser sees it.
-    //
-    // The prompt that carried that escape was replaced by an inline field
-    // (odd/tasks/business-branches.md, S4). What remains true: no escaped
-    // newline in the handler may reach the browser as a real one inside a
-    // string. The parse test above is what proves it for the whole block; this
-    // one pins that no window.prompt with multi-line text came back.
-    const html = await serve();
-    const blocks = inlineScripts(html);
-    const client = blocks.find((b) => b.includes(CLIENT_SCRIPT_MARKER))!;
-
-    expect(client).not.toMatch(/window\.prompt\("[^"]*\n/);
+    expect(html).toMatch(/<style>[\s\S]*\.tenant-bar \{[\s\S]*<\/style>/);
+    expect(html).toMatch(/<style>[\s\S]*\.side-nav a\.is-active \{[\s\S]*<\/style>/);
   });
 });
 
@@ -662,16 +427,6 @@ describe("sidebar sections (odd/tasks/print-queue-cards.md S1)", () => {
       ["settings", true],
     ]);
   });
-
-  it("reads the section from the URL hash and falls back to Links", async () => {
-    const fromHash = await loadClientFunction<(h: string) => string>("sectionFromHash");
-
-    expect(fromHash("#cards")).toBe("cards");
-    expect(fromHash("#overview")).toBe("overview");
-    expect(fromHash("")).toBe("links");
-    expect(fromHash("#nope")).toBe("links");
-    expect(codeOnly(await clientScript())).toContain('addEventListener("hashchange"');
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -686,15 +441,15 @@ describe("cards section", () => {
   }
 
   it("hands the section to the React island (web/src/cards), with no server-rendered controls", async () => {
-    const section = cardsSection(await serve());
-    const script = codeOnly(await clientScript());
+    const html = await serve();
+    const section = cardsSection(html);
 
     expect(section).toContain('<div class="card" id="cards-root" data-island="cards"></div>');
     for (const id of ["card-sheet", "card-sheets", "cards-controls", "cards-export", "cards-mark-printed"]) {
       expect(section).not.toContain(`id="${id}"`);
     }
     for (const fn of ["renderCardSheets", "exportCards", "markCardsPrinted", "cardOptions", "computeSheetLayout"]) {
-      expect(script).not.toContain(`function ${fn}(`);
+      expect(html).not.toContain(`function ${fn}(`);
     }
   });
 
@@ -754,7 +509,7 @@ describe("cards section", () => {
   });
 
   it("keeps the queue itself in the page", async () => {
-    const script = codeOnly(await clientScript());
+    const script = codeOnlyHtml(await serve());
 
     expect(script).not.toContain("/api/links/print-queue");
     expect(script).not.toContain("/api/links/printed");
@@ -768,18 +523,6 @@ describe("cards section", () => {
   });
 });
 
-describe("React islands bundle", () => {
-  it("loads the bundle as a module after the page's own scripts", async () => {
-    const html = await serve();
-    const tag = '<script type="module" src="/assets/dashboard.js"></script>';
-
-    expect(html).toContain(tag);
-    // After the auth bootstrap, the last classic script on the page.
-    expect(html.indexOf(tag)).toBeGreaterThan(html.lastIndexOf("})();"));
-    expect(html.indexOf(tag)).toBeLessThan(html.indexOf("</body>"));
-  });
-});
-
 // ---------------------------------------------------------------------------
 // The Links island handoff (odd/tasks/dashboard-react.md T3a)
 //
@@ -790,47 +533,24 @@ describe("React islands bundle", () => {
 // ---------------------------------------------------------------------------
 
 describe("Links island handoff", () => {
-  it("removes every legacy Links function that moved to the island", async () => {
-    const script = codeOnly(await clientScript());
+  // The legacy Links functions, the record-action switch and the window
+  // print-queue setters went with the page's inline script: the page has none
+  // left ("the served document" above).
+  it("keeps the queue in the page: the page never calls the print-queue endpoints", async () => {
+    const html = codeOnlyHtml(await serve());
 
-    for (const fn of [
-      "onLinksTableClick", "renderLinkRow", "loadLinks", "renderVisitors", "repaintLink", "toggleLink",
-      "setGated", "saveClientRef", "saveDestination", "saveBranch", "fillBranchSelects", "openEditor",
-      "showMetrics", "deleteLink", "copyUrl", "setPrintQueued", "showQueuedState", "syncPrintQueue",
-      "renderPrintQueue", "clearPrintQueue", "showQR",
-    ]) {
-      expect(script, fn).not.toMatch(new RegExp(`function ${fn}\\(`));
+    expect(html).not.toContain("/api/links/print-queue");
+    expect(html).not.toContain("/api/links/printed");
+  });
+
+  it("lends no Links bridge", async () => {
+    const html = codeOnlyHtml(await serve());
+
+    // The QR modal is the island's (web/test/links/qr.test.tsx); Cards and
+    // Businesses reload the table in-bundle (web/src/links/reload.ts).
+    for (const name of ["__showQR", "__loadLinks", "__setPrintQueued", "__clearPrintQueue", "__syncPrintQueue"]) {
+      expect(html, name).not.toContain(name);
     }
-    // No record-action switch either: the row actions are the island's own
-    // controls (web/test/links/rows.test.tsx pins which ones a row offers).
-    expect(script).not.toMatch(/case "(copy|qr|metrics|edit|save-client-ref|save-destination|save-branch|toggle|toggle-gate|delete|queue-print|unqueue-print)":/);
-    // The queue is the bundle's (web/src/print-queue.ts) and the page never
-    // sets it, so the two cannot disagree.
-    expect(script).not.toMatch(/window\.__printQueue\s*=/);
-    expect(script).not.toContain("__setPrintQueued =");
-    expect(script).not.toContain("__clearPrintQueue =");
-    expect(script).not.toContain("__syncPrintQueue");
-  });
-
-  it("keeps the queue in the page: neither side ever calls the print-queue endpoints", async () => {
-    const script = codeOnly(await clientScript());
-
-    expect(script).not.toContain("/api/links/print-queue");
-    expect(script).not.toContain("/api/links/printed");
-  });
-
-  it("no longer lends a QR modal", async () => {
-    // The QR modal is the island's (web/test/links/qr.test.tsx).
-    expect(codeOnly(await clientScript())).not.toContain("__showQR");
-  });
-
-  it("lends the islands nothing but the api helper and its gate", async () => {
-    const script = codeOnly(await clientScript());
-
-    // Cards and Businesses reload the table in-bundle (web/src/links/reload.ts).
-    expect(script).not.toContain("__loadLinks");
-    // Only the sidebar routing is left as functions.
-    expect([...script.matchAll(/function (\w+)\(/g)].map((m) => m[1])).toEqual(["sectionFromHash", "showSection"]);
   });
 });
 
@@ -856,28 +576,15 @@ describe("Overview island handoff", () => {
     }
   });
 
-  it("removes every legacy Overview function and bridge", async () => {
-    const script = codeOnly(await clientScript());
+  it("lends no Overview bridge and fetches nothing itself", async () => {
+    const html = codeOnlyHtml(await serve());
 
-    for (const fn of ["renderClients", "renderHourlyTraffic", "loadHourlyTraffic", "refreshClientsCard"]) {
-      expect(script, fn).not.toMatch(new RegExp(`function ${fn}\\(`));
-    }
-    expect(script).not.toContain("renderGatePanel");
-    expect(script).not.toContain("__renderOverviewCards");
-    expect(script).not.toContain("__refreshClientsCard");
-    expect(script).not.toContain("print-report");
+    expect(html).not.toContain("__renderOverviewCards");
+    expect(html).not.toContain("__refreshClientsCard");
     // The island fetches these itself (web/test/overview/overview.test.tsx).
-    expect(script).not.toContain("/api/traffic/hourly");
-    expect(script).not.toContain("/api/clients/metrics");
-    expect(script).not.toContain('"/api/review-gate/metrics"');
-  });
-
-  it("leaves the Overview loads out of the auth bootstrap: the island loads itself once the gate opens", async () => {
-    const html = await serve();
-    const auth = html.slice(html.indexOf("<script src="));
-    const iife = auth.slice(0, auth.indexOf("})();"));
-
-    expect(codeOnly(iife)).not.toContain("loadHourlyTraffic");
+    expect(html).not.toContain("/api/traffic/hourly");
+    expect(html).not.toContain("/api/clients/metrics");
+    expect(html).not.toContain('"/api/review-gate/metrics"');
   });
 });
 
@@ -916,25 +623,13 @@ describe("Businesses, Comments and Settings island handoff", () => {
     }
   });
 
-  it("removes every legacy Businesses, Comments and Settings function", async () => {
-    const script = codeOnly(await clientScript());
+  it("leaves the endpoints to the islands", async () => {
+    const html = codeOnlyHtml(await serve());
 
-    for (const fn of [
-      "loadBranches", "renderBusinesses", "refreshOwnership", "showBusinessesMessage", "addBusiness", "addBranch",
-      "moveBranch", "setBusinessActive", "setBranchActive", "pickableBranches", "loadFeedbackInbox", "feedbackQuery",
-      "fillFeedbackFilter", "exportFeedbackCsv", "loadFeedbackEmail", "esc",
-    ]) {
-      expect(script, fn).not.toMatch(new RegExp(`function ${fn}\\(`));
-    }
-    // The injected server renderer and the esbuild shim it needed are gone:
-    // the inbox is a component (web/test/comments/inbox.test.tsx).
-    expect(script).not.toContain("renderFeedbackInbox");
-    expect(script).not.toContain("__name");
-    expect(script).not.toContain("innerHTML");
-    // The endpoints are the islands' now.
     for (const path of ["/api/locations", "/api/businesses", "/api/review-gate/feedback", "/api/tenant/feedback-email"]) {
-      expect(script, path).not.toContain(path);
+      expect(html, path).not.toContain(path);
     }
+    expect(html).not.toContain("innerHTML");
   });
 
   it("lends no branches bridge: the lists are the bundle's store", async () => {

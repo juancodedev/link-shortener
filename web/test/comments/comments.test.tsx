@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadBranches, resetBranches } from "../../src/branches/store";
 import { CommentsSection, feedbackQuery } from "../../src/comments/CommentsSection";
 import { count, gate, installApi, provideBranches, settle, type Call } from "../links/harness";
+import { stubApiReady } from "../api-stub";
 
 // The Comments section (dashboard-react T5): the feedback inbox, its business
 // and branch filter, and the CSV export. Ported from the Worker tests of the
@@ -83,7 +84,7 @@ let revoked: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   resetBranches();
-  window.__apiReady = Promise.resolve();
+  stubApiReady(Promise.resolve());
   errors = vi.spyOn(console, "error").mockImplementation(() => {});
   downloads = [];
   created = vi.fn(() => "blob:feedback");
@@ -104,7 +105,7 @@ afterEach(() => {
 describe("Comments island — the inbox", () => {
   it("sends nothing until the auth gate opens, then loads the inbox once", async () => {
     const auth = gate();
-    window.__apiReady = auth.wait;
+    stubApiReady(auth.wait);
     const calls = commentsApi();
 
     render(<CommentsSection />);
@@ -259,7 +260,7 @@ describe("Comments island — the filter", () => {
 });
 
 describe("Comments island — the CSV export", () => {
-  it("downloads through window.__api with the filter on screen, never through a bare link", async () => {
+  it("downloads through the API helper with the filter on screen, never through a bare link", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     await provideBranches(BRANCHES, BUSINESSES);
     const calls = commentsApi();

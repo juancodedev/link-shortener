@@ -249,7 +249,7 @@ export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePane
               {/* One badge, two states: waiting wins over a past run, because
                   the pending action is what the owner has to do next. */}
               <span
-                className={`badge ${queued ? "badge-queued" : "badge-printed"}`}
+                className={`badge ${!queued && l.printed_at ? "badge-printed" : "badge-queued"}`}
                 data-print-badge={l.id}
                 hidden={!queued && !l.printed_at}
                 title={!queued && l.printed_at ? printedTitle(l.printed_at) : undefined}

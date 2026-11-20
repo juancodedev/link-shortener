@@ -168,6 +168,42 @@ describe("Links island — the row", () => {
     expect(badge.title).toMatch(/^Printed /);
   });
 
+  it("offers Reprint, not Send to print, on a card that was already printed", async () => {
+    const { row, panel } = await show({ original_url: null, printed_at: "2026-11-19T12:00:00Z" });
+
+    expect(text(row) + text(panel)).toContain("Reprint");
+    expect(text(row) + text(panel)).not.toContain("Send to print");
+  });
+
+  it("still offers Send to print on a card that was never printed", async () => {
+    const { row } = await show({ original_url: null, printed_at: null });
+
+    expect(text(row)).toContain("Send to print");
+    expect(text(row)).not.toContain("Reprint");
+  });
+
+  it("queues a printed card through Reprint and lets it leave the queue again", async () => {
+    await show({ original_url: null, printed_at: "2026-11-19T12:00:00Z" });
+    const reprint = [...row("link-uuid").querySelectorAll("button")].find((b) => b.textContent === "Reprint")!;
+
+    act(() => reprint.click());
+    await settle();
+    expect(window.__printQueue.map((q) => q.id)).toEqual(["link-uuid"]);
+    expect(text(row("link-uuid"))).toContain("Remove from queue");
+
+    const remove = [...row("link-uuid").querySelectorAll("button")].find((b) => b.textContent === "Remove from queue")!;
+    act(() => remove.click());
+    await settle();
+    expect(text(row("link-uuid"))).toContain("Reprint");
+  });
+
+  it("offers no print control on a printed card that has a destination", async () => {
+    const { row, panel } = await show({ original_url: "https://g.page/r/x", printed_at: "2026-11-19T12:00:00Z" });
+
+    expect(text(row) + text(panel)).not.toContain("Reprint");
+    expect(text(row) + text(panel)).not.toContain("Send to print");
+  });
+
   it("lets the queue badge win when a printed card is sent to print again", async () => {
     await show({ original_url: null, printed_at: "2026-11-19T12:00:00Z" });
 

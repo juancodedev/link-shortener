@@ -193,9 +193,12 @@ export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePane
   }
 
   const status = linkStatus(l);
+  // A card with a destination is done: nothing to print. One already printed
+  // says Reprint, so sending it to the queue again is a deliberate choice and
+  // not a first print by mistake.
   const printButton = l.original_url ? null : (
     <button className="btn-sm btn-outline" onClick={() => setPrintQueued(l.id, !queued, l.short_code)}>
-      {queued ? "Remove from queue" : "Send to print"}
+      {queued ? "Remove from queue" : l.printed_at ? "Reprint" : "Send to print"}
     </button>
   );
 

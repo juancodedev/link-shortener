@@ -39,7 +39,7 @@ describe("landingHandler", () => {
 
     expect(text).toContain("<title>Tarjetas de reseñas con QR para tu local — Más Reseñas</title>");
     expect(text).toContain('<a class="brand" href="/">Más Reseñas</a>');
-    expect(text).toContain("Más Reseñas. Hecho con Cloudflare Workers y Supabase.");
+    expect(text).toContain('Más Reseñas. Desarrollado por <a href="https://www.juancode.dev">juancode.dev</a>.');
     expect(text).not.toContain("Link Shortener");
   });
 
@@ -136,11 +136,11 @@ describe("landingHandler", () => {
     expect(text).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.table-card \.paper\s*\{\s*animation:\s*none;/);
   });
 
-  it("includes a footer with attribution", async () => {
+  it("credits the developer in the footer, linking to juancode.dev", async () => {
     const text = await page();
+    const footer = text.slice(text.indexOf("<footer>"), text.indexOf("</footer>"));
 
-    expect(text).toContain("<footer>");
-    expect(text).toContain("Cloudflare Workers");
-    expect(text).toContain("Supabase");
+    expect(footer).toContain('Desarrollado por <a href="https://www.juancode.dev">juancode.dev</a>');
+    expect(footer).not.toContain("Hecho con");
   });
 });

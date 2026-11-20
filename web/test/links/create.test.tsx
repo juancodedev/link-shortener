@@ -46,7 +46,7 @@ describe("create form — the fields", () => {
     const url = field("url");
     expect(url.required).toBe(false);
     expect(form().querySelector("input")).toBe(url);
-    expect(document.querySelector('label[for="url"]')!.textContent).toBe("Destination URL");
+    expect(document.querySelector('label[for="url"]')!.textContent).toBe("URL de destino");
   });
 
   it("says what an empty destination produces", async () => {
@@ -54,8 +54,8 @@ describe("create form — the fields", () => {
     await mountLinks();
 
     const help = [...form().querySelectorAll(".field-help")].map((p) => p.textContent).join(" ");
-    expect(help).toContain("Leave empty to create a card first and add its destination later.");
-    expect(help).toContain('"not configured" page');
+    expect(help).toContain("Déjalo vacío para crear primero una tarjeta y agregar su destino después.");
+    expect(help).toContain('página "sin configurar"');
   });
 
   it("shapes the custom short code and the title the way the server does", async () => {
@@ -115,7 +115,7 @@ describe("create form — submitting", () => {
     expect(result().style.display).toBe("");
     expect(clipboard).toEqual(["https://short.link/new1234"]);
     expect(msg().className).toBe("message success");
-    expect(msg().textContent).toBe("Link created! Copied to clipboard.");
+    expect(msg().textContent).toBe("¡Enlace creado! Copiado al portapapeles.");
   });
 
   it("names a card with no destination as a card", async () => {
@@ -124,7 +124,7 @@ describe("create form — submitting", () => {
 
     await submit();
 
-    expect(msg().textContent).toBe("Card created! Its QR opens a 'not configured' page until you add a destination.");
+    expect(msg().textContent).toBe("¡Tarjeta creada! Su QR abre una página 'sin configurar' hasta que agregues un destino.");
   });
 
   it("clears every field after creating", async () => {
@@ -170,13 +170,13 @@ describe("create form — submitting", () => {
     });
 
     expect(submitButton().disabled).toBe(true);
-    expect(submitButton().textContent).toBe("Creating...");
+    expect(submitButton().textContent).toBe("Creando…");
     expect(result().style.display).toBe("none");
 
     hold.release();
     await settle();
     expect(submitButton().disabled).toBe(false);
-    expect(submitButton().textContent).toBe("Shorten");
+    expect(submitButton().textContent).toBe("Acortar");
     expect(result().style.display).toBe("");
   });
 
@@ -196,15 +196,15 @@ describe("create form — submitting", () => {
   it("shows the error the api helper throws", async () => {
     standardApi({
       create: () => {
-        throw new Error("Server error");
+        throw new Error("Error del servidor");
       },
     });
     await mountLinks();
 
     await submit();
 
-    expect(msg().textContent).toBe("Server error");
-    expect(submitButton().textContent).toBe("Shorten");
+    expect(msg().textContent).toBe("Error del servidor");
+    expect(submitButton().textContent).toBe("Acortar");
   });
 
   it("still reloads the table when the clipboard is unavailable", async () => {

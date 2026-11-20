@@ -191,10 +191,10 @@ describe("flat short link routing", () => {
   });
 
   it.each([
-    ["/dashboard", "Dashboard"],
-    ["/login", "Log In"],
-    ["/signup", "Sign Up"],
-    ["/reset-password", "Reset Password"],
+    ["/dashboard", "Panel — Más Reseñas"],
+    ["/login", "Iniciar sesión"],
+    ["/signup", "Crear cuenta"],
+    ["/reset-password", "Restablecer contraseña"],
   ])("%s still reaches its own handler instead of /:code", async (path, marker) => {
     // These handlers render HTML and touch no database, so an unmocked env is
     // enough: if /:code had won, the request would have gone to the registry.

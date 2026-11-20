@@ -44,7 +44,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-const save = (fieldId: string) => fireEvent.click(button(field(fieldId).closest(".field")!, "Save"));
+const save = (fieldId: string) => fireEvent.click(button(field(fieldId).closest(".field")!, "Guardar"));
 const type = (fieldId: string, value: string) => fireEvent.change(field(fieldId), { target: { value } });
 const openPanel = async (id = "link-uuid") => {
   fireEvent.click(row(id).querySelector(".clicks-link")!);
@@ -77,7 +77,7 @@ describe("destination", () => {
     await settle();
 
     expect(calls.find((c) => c.method === "PATCH")!.body).toEqual({ original_url: null });
-    expect(button(row(), "Send to print")).toBeDefined();
+    expect(button(row(), "Enviar a imprimir")).toBeDefined();
   });
 
   it("does not validate the URL in the browser: the server owns the rules", async () => {
@@ -116,7 +116,7 @@ describe("destination", () => {
       patch: () => ({ ok: true, original_url: "https://example.com" }),
     });
     await mountLinks();
-    fireEvent.click(button(row(), "Send to print"));
+    fireEvent.click(button(row(), "Enviar a imprimir"));
     expect(getPrintQueue()).toHaveLength(1);
 
     type("dest-link-uuid", "https://example.com");
@@ -164,7 +164,7 @@ describe("branch", () => {
     await settle();
 
     expect(calls.find((c) => c.method === "PATCH")!.body).toEqual({ location_id: null });
-    expect(row().querySelector(".owner-none")!.textContent).toBe("Unassigned");
+    expect(row().querySelector(".owner-none")!.textContent).toBe("Sin asignar");
   });
 
   it("puts the picker back on the stored branch when the server refuses", async () => {
@@ -250,14 +250,14 @@ describe("disable / enable", () => {
     const calls = standardApi();
     await mountLinks();
 
-    fireEvent.click(button(panel(), "Disable"));
+    fireEvent.click(button(panel(), "Desactivar"));
     await settle();
 
     expect(calls.filter((c) => c.method === "PATCH")).toEqual([
       { method: "PATCH", path: "/api/links/link-uuid", body: { is_active: false } },
     ]);
     expect(row().querySelector(".badge-inactive")).not.toBeNull();
-    expect(button(panel(), "Enable")).toBeDefined();
+    expect(button(panel(), "Activar")).toBeDefined();
     expect(count(calls, "GET", "/api/links")).toBe(1);
   });
 
@@ -269,7 +269,7 @@ describe("disable / enable", () => {
     });
     await mountLinks();
 
-    fireEvent.click(button(panel(), "Disable"));
+    fireEvent.click(button(panel(), "Desactivar"));
     await settle();
 
     expect(alerts).toEqual(["Error: Failed"]);
@@ -349,7 +349,7 @@ describe("repaint of one link", () => {
     await mountLinks();
     type("client-ref-b", "draft on b");
 
-    fireEvent.click(button(panel("a"), "Disable"));
+    fireEvent.click(button(panel("a"), "Desactivar"));
     await settle();
 
     expect(row("a").querySelector(".badge-inactive")).not.toBeNull();
@@ -364,10 +364,10 @@ describe("delete", () => {
     const calls = standardApi();
     await mountLinks();
 
-    fireEvent.click(button(row(), "Del"));
+    fireEvent.click(button(row(), "Eliminar"));
     await settle();
 
-    expect(window.confirm).toHaveBeenCalledWith("Delete this link permanently?");
+    expect(window.confirm).toHaveBeenCalledWith("¿Eliminar este enlace de forma permanente?");
     expect(calls.filter((c) => c.method === "DELETE")).toEqual([]);
   });
 
@@ -382,7 +382,7 @@ describe("delete", () => {
     });
     await mountLinks();
 
-    fireEvent.click(button(row("a"), "Del"));
+    fireEvent.click(button(row("a"), "Eliminar"));
     await settle();
 
     expect(calls.filter((c) => c.method === "DELETE")).toEqual([{ method: "DELETE", path: "/api/links/a" }]);
@@ -399,7 +399,7 @@ describe("delete", () => {
     });
     await mountLinks();
 
-    fireEvent.click(button(row(), "Del"));
+    fireEvent.click(button(row(), "Eliminar"));
     await settle();
 
     expect(alerts).toEqual(["Error: Failed"]);
@@ -420,11 +420,11 @@ describe("copy", () => {
     });
 
     expect(writeText).toHaveBeenCalledWith("https://short.link/abc1234");
-    expect(code.textContent).toBe("Copied!");
+    expect(code.textContent).toBe("¡Copiado!");
     act(() => {
       vi.advanceTimersByTime(1499);
     });
-    expect(code.textContent).toBe("Copied!");
+    expect(code.textContent).toBe("¡Copiado!");
     act(() => {
       vi.advanceTimersByTime(1);
     });
@@ -445,7 +445,7 @@ describe("copy", () => {
     await settle();
 
     expect(exec).toHaveBeenCalledWith("copy");
-    expect(code.textContent).toBe("Copied!");
+    expect(code.textContent).toBe("¡Copiado!");
     expect(document.querySelectorAll("body > input")).toHaveLength(0);
   });
 });
@@ -472,8 +472,8 @@ describe("metrics panel", () => {
 
     const rows = [...document.getElementById("visitors-link-uuid")!.children];
     expect(rows.map((r) => r.outerHTML)).toEqual([
-      '<div class="metric-row"><span>Unique visitors (last 7 days)</span><strong>30</strong></div>',
-      '<div class="metric-row"><span>Sessions (per 15 minutes)</span><strong>42</strong></div>',
+      '<div class="metric-row"><span>Visitantes únicos (período: 7 días)</span><strong>30</strong></div>',
+      '<div class="metric-row"><span>Sesiones (cada 15 minutos)</span><strong>42</strong></div>',
     ]);
   });
 
@@ -483,7 +483,7 @@ describe("metrics panel", () => {
     await openPanel();
 
     const visitors = document.getElementById("visitors-link-uuid")!;
-    expect(visitors.textContent).toBe("Unique visitors (last 1 day)0Sessions (per 30 minutes)0");
+    expect(visitors.textContent).toBe("Visitantes únicos (período: 1 día)0Sesiones (cada 30 minutos)0");
   });
 
   it("lists each breakdown busiest first, and says No data when empty", async () => {
@@ -494,7 +494,7 @@ describe("metrics panel", () => {
     const country = [...document.getElementById("country-link-uuid")!.querySelectorAll(".metric-row")];
     expect(country.map((r) => r.textContent)).toEqual(["AR7", "CL3"]);
     expect(document.getElementById("device-link-uuid")!.textContent).toBe("mobile9");
-    expect(document.getElementById("source-link-uuid")!.innerHTML).toBe('<div class="metric-row">No data</div>');
+    expect(document.getElementById("source-link-uuid")!.innerHTML).toBe('<div class="metric-row">Sin datos</div>');
   });
 
   it("puts breakdown keys from request data in as text", async () => {
@@ -535,7 +535,7 @@ describe("Edit button", () => {
     const calls = standardApi();
     await mountLinks();
 
-    fireEvent.click(button(row(), "Edit"));
+    fireEvent.click(button(row(), "Editar"));
     await settle();
 
     expect(isOpen()).toBe(true);
@@ -549,7 +549,7 @@ describe("Edit button", () => {
     await openPanel();
     field("client-ref-link-uuid").focus();
 
-    fireEvent.click(button(row(), "Edit"));
+    fireEvent.click(button(row(), "Editar"));
     await settle();
 
     expect(isOpen()).toBe(true);
@@ -564,40 +564,40 @@ describe("print queue in the table", () => {
     await mountLinks();
     const before = calls.length;
 
-    fireEvent.click(button(row(), "Send to print"));
+    fireEvent.click(button(row(), "Enviar a imprimir"));
 
     expect(getPrintQueue()).toEqual([{ id: "link-uuid", short_code: "abc1234" }]);
     expect(calls.length).toBe(before);
     expect((row().querySelector("[data-print-badge]") as HTMLElement).hidden).toBe(false);
     // Both copies follow: the row and the panel.
-    expect([...document.querySelectorAll("#links-body button")].filter((b) => b.textContent === "Remove from queue")).toHaveLength(2);
+    expect([...document.querySelectorAll("#links-body button")].filter((b) => b.textContent === "Quitar de la cola")).toHaveLength(2);
   });
 
   it("takes it out again from either copy of the control", async () => {
     standardApi({ links: [link({ original_url: null })] });
     await mountLinks();
-    fireEvent.click(button(row(), "Send to print"));
+    fireEvent.click(button(row(), "Enviar a imprimir"));
 
-    fireEvent.click(button(panel(), "Remove from queue"));
+    fireEvent.click(button(panel(), "Quitar de la cola"));
 
     expect(getPrintQueue()).toEqual([]);
     expect((row().querySelector("[data-print-badge]") as HTMLElement).hidden).toBe(true);
-    expect(button(row(), "Send to print")).toBeDefined();
+    expect(button(row(), "Enviar a imprimir")).toBeDefined();
   });
 
   it("resets every row when the Cards island marks the batch printed, leaving open panels open", async () => {
     standardApi({ links: [link({ id: "a", original_url: null }), link({ id: "b", original_url: null })] });
     await mountLinks();
-    fireEvent.click(button(row("a"), "Send to print"));
-    fireEvent.click(button(row("b"), "Send to print"));
+    fireEvent.click(button(row("a"), "Enviar a imprimir"));
+    fireEvent.click(button(row("b"), "Enviar a imprimir"));
     await openPanel("a");
 
     act(() => {
       window.__clearPrintQueue();
     });
 
-    expect(button(row("a"), "Send to print")).toBeDefined();
-    expect(button(row("b"), "Send to print")).toBeDefined();
+    expect(button(row("a"), "Enviar a imprimir")).toBeDefined();
+    expect(button(row("b"), "Enviar a imprimir")).toBeDefined();
     expect(isOpen("a")).toBe(true);
   });
 
@@ -605,8 +605,8 @@ describe("print queue in the table", () => {
     let links = [link({ id: "a", original_url: null }), link({ id: "b", original_url: null })];
     standardApi({ links: () => links });
     await mountLinks();
-    fireEvent.click(button(row("a"), "Send to print"));
-    fireEvent.click(button(row("b"), "Send to print"));
+    fireEvent.click(button(row("a"), "Enviar a imprimir"));
+    fireEvent.click(button(row("b"), "Enviar a imprimir"));
 
     links = [link({ id: "a", original_url: "https://configured.example" })];
     await act(async () => {

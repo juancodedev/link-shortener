@@ -31,7 +31,7 @@ async function openFor(shortUrl: string) {
   standardApi({ links: [link({ short_url: shortUrl })] });
   await mountLinks();
   await act(async () => {
-    fireEvent.click(button(panel(), "QR code"));
+    fireEvent.click(button(panel(), "Código QR"));
   });
   return {
     // Exactly what the QR service receives as `data`, after its own decode.
@@ -95,10 +95,10 @@ describe("QR modal — closing", () => {
     expect(isShown()).toBe(false);
 
     await act(async () => {
-      fireEvent.click(button(panel(), "QR code"));
+      fireEvent.click(button(panel(), "Código QR"));
     });
     expect(isShown()).toBe(true);
-    fireEvent.click(button(modal(), "Close"));
+    fireEvent.click(button(modal(), "Cerrar"));
     expect(isShown()).toBe(false);
   });
 });
@@ -115,12 +115,12 @@ describe("QR modal — copy for the print sheet", () => {
 
     expect(written).toEqual([caption()]);
     expect(written).toEqual(["https://short.link/a?x=1&y=2"]);
-    expect(copyButton().textContent).toBe("Copied!");
+    expect(copyButton().textContent).toBe("¡Copiado!");
 
     act(() => {
       vi.advanceTimersByTime(1500);
     });
-    expect(copyButton().textContent).toBe("Copy URL for print sheet");
+    expect(copyButton().textContent).toBe("Copiar URL para la hoja de impresión");
   });
 
   it("asks for a manual copy when the clipboard refuses", async () => {
@@ -131,7 +131,7 @@ describe("QR modal — copy for the print sheet", () => {
       fireEvent.click(copyButton());
     });
 
-    expect(alerts).toEqual(["Copy failed — select the URL above and copy it manually."]);
-    expect(copyButton().textContent).toBe("Copy URL for print sheet");
+    expect(alerts).toEqual(["No se pudo copiar: selecciona la URL de arriba y cópiala a mano."]);
+    expect(copyButton().textContent).toBe("Copiar URL para la hoja de impresión");
   });
 });

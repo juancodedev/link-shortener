@@ -46,6 +46,8 @@ export type FeedbackRow = {
 
 export type FeedbackInboxPayload = { feedback: FeedbackRow[]; truncated: boolean; limit: number };
 
+import { LOCALE } from "../format";
+
 const present = (v: string | null | undefined): v is string => typeof v === "string" && v !== "";
 
 /**
@@ -59,7 +61,7 @@ function Origin({ r }: { r: FeedbackRow }) {
   const parts = [r.business_name, r.location_name, r.client_ref].filter(present);
   return (
     <span className="feedback-origin">
-      {parts.length > 0 ? parts.join(" · ") : "No location"}
+      {parts.length > 0 ? parts.join(" · ") : "Sin ubicación"}
       {/* The short code always, so a comment is traceable to its exact link
           even when the link was never placed in a branch. */}
       {present(r.short_code) && (
@@ -77,7 +79,7 @@ function Item({ r }: { r: FeedbackRow }) {
   // owner uses to call back about a bad night.
   const contacts = [r.customer_phone, r.customer_contact].filter(present);
   const when = new Date(r.scanned_at);
-  const shown = Number.isNaN(when.getTime()) ? r.scanned_at : when.toLocaleString();
+  const shown = Number.isNaN(when.getTime()) ? r.scanned_at : when.toLocaleString(LOCALE);
 
   return (
     <li className="feedback-item">
@@ -87,14 +89,14 @@ function Item({ r }: { r: FeedbackRow }) {
             would read as "this customer gave nothing" — a judgement the
             customer never made. */}
         {r.rating === null ? (
-          <span className="feedback-rating withheld">No rating</span>
+          <span className="feedback-rating withheld">Sin calificación</span>
         ) : (
           <span className="feedback-rating">{r.rating} / 5</span>
         )}{" "}
         <Origin r={r} />
       </div>
       <p className="feedback-comment">{r.comment}</p>
-      {contacts.length > 0 && <div className="feedback-contact">Contact: {contacts.join(" · ")}</div>}
+      {contacts.length > 0 && <div className="feedback-contact">Contacto: {contacts.join(" · ")}</div>}
     </li>
   );
 }
@@ -104,7 +106,7 @@ export function FeedbackInbox({ payload }: { payload: FeedbackInboxPayload }) {
 
   if (feedback.length === 0) {
     // Said in words so an empty inbox does not look like a broken one.
-    return <p className="gate-empty">No comments yet. When a customer leaves one at the review gate, it appears here.</p>;
+    return <p className="gate-empty">Aún no hay comentarios. Cuando un cliente deje uno en la pantalla de reseña, aparecerá aquí.</p>;
   }
 
   return (
@@ -116,7 +118,7 @@ export function FeedbackInbox({ payload }: { payload: FeedbackInboxPayload }) {
       </ul>
       {/* The cap is stated, never applied silently: an owner who counts a
           hundred comments would otherwise conclude that is all there is. */}
-      {truncated && <p className="estimate-note">Showing the newest {limit} comments. Download the CSV to see more.</p>}
+      {truncated && <p className="estimate-note">Mostrando los {limit} comentarios más recientes. Descarga el CSV para ver más.</p>}
     </>
   );
 }

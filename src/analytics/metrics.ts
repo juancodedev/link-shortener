@@ -69,9 +69,9 @@ export const SESSION_WINDOW = "30 minutes";
  * the metric, not to a documentation file that no one opens.
  */
 export const VISITOR_ESTIMATE_CAVEAT =
-  "Estimates, not exact counts. Visitors are identified by a salted hash of their IP " +
-  "address, so people on the same Wi-Fi or mobile network are counted as one visitor. " +
-  "Both figures UNDER-report real footfall.";
+  "Son estimaciones, no conteos exactos. Los visitantes se identifican con un hash con sal " +
+  "de su dirección IP, así que las personas en la misma red Wi-Fi o móvil cuentan como un solo visitante. " +
+  "Ambas cifras SUBESTIMAN el flujo real de personas.";
 
 /**
  * The floor for a fixed-width bucket, in epoch seconds.

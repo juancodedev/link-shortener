@@ -50,16 +50,16 @@ describe("Settings island — the feedback email card", () => {
     await mount();
 
     const card = document.getElementById("feedback-email-card")!;
-    expect(card.querySelector("h3")!.textContent).toBe("Feedback email");
+    expect(card.querySelector("h3")!.textContent).toBe("Correo para comentarios");
     expect(card.querySelector(".field-help")!.textContent!.replace(/\s+/g, " ").trim()).toBe(
-      "Where you would like private customer comments delivered. Stored now; nothing is emailed yet — comments still arrive in the Comments section.",
+      "Dónde te gustaría recibir los comentarios privados de tus clientes. Se guarda ahora; todavía no se envía ningún correo: los comentarios siguen llegando a la sección Comentarios.",
     );
     expect(input().type).toBe("email");
-    expect(input().placeholder).toBe("you@yourbusiness.com");
+    expect(input().placeholder).toBe("tu@tunegocio.com");
     expect(input().autocomplete).toBe("email");
     expect(input().maxLength).toBe(254);
-    expect(document.querySelector('label[for="feedback-email"]')!.textContent).toBe("Email address");
-    expect(save().textContent).toBe("Save");
+    expect(document.querySelector('label[for="feedback-email"]')!.textContent).toBe("Correo electrónico");
+    expect(save().textContent).toBe("Guardar");
   });
 
   it("sends nothing until the auth gate opens, then shows the stored address, read once", async () => {
@@ -80,7 +80,7 @@ describe("Settings island — the feedback email card", () => {
   it.each([
     ["no address is stored", () => ({ feedback_email: null })],
     ["the setting cannot be read", () => {
-      throw new Error("Server error");
+      throw new Error("Error del servidor");
     }],
   ])("leaves the field empty, and the card working, when %s", async (_case, get) => {
     settingsApi({ get });
@@ -100,13 +100,13 @@ describe("Settings island — the feedback email card", () => {
 
     expect(calls.at(-1)).toEqual({ method: "PUT", path: "/api/tenant/feedback-email", body: { feedback_email: "new@cafe.cl" } });
     expect(msg().className).toBe("message success");
-    expect(msg().textContent).toBe("Saved.");
+    expect(msg().textContent).toBe("Guardado.");
   });
 
   it.each([
     ["the server's detail", { detail: "That does not look like an email address.", error: "invalid" }, "That does not look like an email address."],
     ["the server's error", { error: "invalid" }, "invalid"],
-    ["a fallback", {}, "Could not save"],
+    ["a fallback", {}, "No se pudo guardar"],
   ])("shows %s when the server refuses", async (_case, body, text) => {
     settingsApi({ put: () => new Response(JSON.stringify(body), { status: 400 }) });
     await mount();
@@ -157,6 +157,6 @@ describe("Settings island — the feedback email card", () => {
     hold.release();
     await settle();
     expect(save().disabled).toBe(false);
-    expect(msg().textContent).toBe("Saved.");
+    expect(msg().textContent).toBe("Guardado.");
   });
 });

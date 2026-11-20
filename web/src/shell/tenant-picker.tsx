@@ -5,6 +5,10 @@ import { reload } from "./navigate";
 /** One location the user belongs to, as the API's 409 tenant_required lists it. */
 export type TenantChoice = { slug: string; displayName?: string | null; role: string };
 
+/** Display names for the membership roles (tenant_memberships.role); an unknown one is shown as sent. */
+const ROLE_LABEL: Record<string, string> = { owner: "propietario", admin: "administrador", viewer: "lector" };
+const roleLabel = (role: string) => ROLE_LABEL[role] ?? role;
+
 function remembered(): string | null {
   try {
     return window.localStorage.getItem("tenant");
@@ -38,7 +42,7 @@ function TenantPicker({ available, current }: { available: TenantChoice[]; curre
       >
         {available.map((t) => (
           <option key={String(t.slug)} value={String(t.slug)}>
-            {String(t.displayName || t.slug) + " (" + String(t.role) + ")"}
+            {String(t.displayName || t.slug) + " (" + roleLabel(String(t.role)) + ")"}
           </option>
         ))}
       </select>

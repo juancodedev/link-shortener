@@ -53,11 +53,38 @@ async function cardSvg(item: QueueItem, design: string, variant: string): Promis
   return svg;
 }
 
+/**
+ * The "Solo NFC Centrado" card prints no QR and no link (the tag is written by
+ * hand afterwards), so every copy is the same SVG: one request, any amount.
+ */
+const nfcCache = new Map<string, Promise<string>>();
+
+function nfcCardSvg(design: string): Promise<string> {
+  // The promise is cached, not the text: typing the amount re-renders while
+  // the first request is still in flight, and it must not ask again.
+  const hit = nfcCache.get(design);
+  if (hit !== undefined) return hit;
+  const load = api("GET", `/api/cards/nfc.svg?design=${design}`).then((res) => {
+    if (!res.ok) throw new Error(`nfc card: HTTP ${res.status}`);
+    return res.text();
+  });
+  load.catch(() => nfcCache.delete(design));
+  nfcCache.set(design, load);
+  return load;
+}
+
+/** The typed amount of NFC cards, as a whole number; 0 when empty or invalid. */
+function cardCount(value: string): number {
+  const n = Math.floor(parseFloat(value));
+  return Number.isNaN(n) || n < 0 ? 0 : n;
+}
+
 type Cards = { status: "loading" } | { status: "error" } | { status: "ready"; svgs: string[] };
 
 export function CardsSection() {
   const queue = usePrintQueue();
   const [variant, setVariant] = useState<string>("hybrid");
+  const [count, setCount] = useState("1");
   const [design, setDesign] = useState<string>("official");
   const [mirror, setMirror] = useState(false);
   const [crop, setCrop] = useState(true);
@@ -73,13 +100,19 @@ export function CardsSection() {
   const size = sheetPresetSize(preset, mm(width, 600), mm(height, 400));
   const sheetMargin = size.single ? 0 : mm(margin, 10);
   const sheetGap = size.single ? 0 : mm(gap, 6);
-  const layout = computeSheetLayout(size.w, size.h, sheetMargin, sheetGap, queue.length);
+  const nfcOnly = variant === "nfc";
+  // NFC-only cards ignore the queue: the user says how many they need.
+  const total = nfcOnly ? cardCount(count) : queue.length;
+  const layout = computeSheetLayout(size.w, size.h, sheetMargin, sheetGap, total);
 
   useEffect(() => {
-    if (queue.length === 0) return;
+    if (total === 0) return;
     let current = true;
     setCards({ status: "loading" });
-    Promise.all(queue.map((item) => cardSvg(item, design, variant))).then(
+    const load = nfcOnly
+      ? nfcCardSvg(design).then((svg) => Array<string>(total).fill(svg))
+      : Promise.all(queue.map((item) => cardSvg(item, design, variant)));
+    load.then(
       (svgs) => {
         if (current) setCards({ status: "ready", svgs });
       },
@@ -92,7 +125,7 @@ export function CardsSection() {
     return () => {
       current = false;
     };
-  }, [queue, design, variant]);
+  }, [queue, design, variant, nfcOnly, total]);
 
   useEffect(() => {
     const afterPrint = () => {
@@ -124,7 +157,7 @@ export function CardsSection() {
    * removed afterwards, so "Print report" keeps the browser's page.
    */
   function exportCards() {
-    if (queue.length === 0) return;
+    if (total === 0) return;
     let style = document.getElementById("card-page-style");
     if (!style) {
       style = document.createElement("style");
@@ -163,15 +196,17 @@ export function CardsSection() {
 
   let info = "";
   let sheets: React.ReactNode = null;
-  if (queue.length === 0) {
+  if (nfcOnly && total === 0) {
+    sheets = <p className="gate-empty">Indica cuántas tarjetas Solo NFC necesitas.</p>;
+  } else if (total === 0) {
     sheets = <p className="gate-empty">No hay tarjetas por imprimir. Envía a imprimir enlaces sin configurar desde la sección Enlaces.</p>;
   } else if (!layout.fits) {
     info = `La hoja es demasiado pequeña para una tarjeta de ${CARD_MM}×${CARD_MM} mm con ese margen.`;
   } else {
-    info = `${layout.cols}×${layout.rows} = ${layout.cap} tarjetas por hoja · tarjetas de ${CARD_MM}×${CARD_MM} mm · ${queue.length} tarjeta(s) · ${layout.pages} hoja(s)`;
+    info = `${layout.cols}×${layout.rows} = ${layout.cap} tarjetas por hoja · tarjetas de ${CARD_MM}×${CARD_MM} mm · ${total} tarjeta(s) · ${layout.pages} hoja(s)`;
     if (cards.status === "error") {
       sheets = <p className="gate-empty">No se pudieron cargar las tarjetas.</p>;
-    } else if (cards.status === "ready" && cards.svgs.length === queue.length) {
+    } else if (cards.status === "ready" && cards.svgs.length === total) {
       const pages: string[][] = [];
       cards.svgs.forEach((svg, i) => {
         if (i % layout.cap === 0) pages.push([]);
@@ -208,16 +243,18 @@ export function CardsSection() {
         Los enlaces que envías a imprimir desde la sección Enlaces esperan aquí. Una tarjeta sale de la cola cuando la marcas
         como impresa, la quitas o guardas su destino. La cola vive solo en esta página: al recargarla, empieza vacía.
       </p>
-      <ul id="cards-queue" className="cards-queue">
-        {queue.map((item) => (
-          <li key={item.id}>
-            <span className="code">{item.short_code}</span>
-            <button type="button" className="btn-sm btn-outline" onClick={() => setPrintQueued(item.id, false)}>
-              Quitar
-            </button>
-          </li>
-        ))}
-      </ul>
+      {!nfcOnly && (
+        <ul id="cards-queue" className="cards-queue">
+          {queue.map((item) => (
+            <li key={item.id}>
+              <span className="code">{item.short_code}</span>
+              <button type="button" className="btn-sm btn-outline" onClick={() => setPrintQueued(item.id, false)}>
+                Quitar
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
       <div id="cards-controls" className="cards-controls">
         <fieldset>
           <legend>Variante</legend>
@@ -233,6 +270,15 @@ export function CardsSection() {
               {v.label}
             </label>
           ))}
+          {nfcOnly && (
+            <>
+              <label className="gap-top-sm">
+                Cantidad de tarjetas
+                <input id="card-count" type="number" min="1" step="1" value={count} onChange={(e) => setCount(e.target.value)} />
+              </label>
+              <p className="field-help">Sin QR ni enlace: el NFC lo grabas tú después de imprimir.</p>
+            </>
+          )}
         </fieldset>
         <fieldset>
           <legend>Diseño</legend>
@@ -286,18 +332,20 @@ export function CardsSection() {
         </fieldset>
       </div>
       <div className="cards-actions">
-        <button type="button" id="cards-export" className="btn-sm btn-primary" disabled={queue.length === 0} onClick={exportCards}>
+        <button type="button" id="cards-export" className="btn-sm btn-primary" disabled={total === 0} onClick={exportCards}>
           Exportar PDF / Imprimir
         </button>
-        <button
-          type="button"
-          id="cards-mark-printed"
-          className="btn-sm btn-outline"
-          disabled={queue.length === 0 || marking}
-          onClick={markPrinted}
-        >
-          Marcar como impresas
-        </button>
+        {!nfcOnly && (
+          <button
+            type="button"
+            id="cards-mark-printed"
+            className="btn-sm btn-outline"
+            disabled={queue.length === 0 || marking}
+            onClick={markPrinted}
+          >
+            Marcar como impresas
+          </button>
+        )}
         <span id="cards-info" className="cards-info">
           {info}
         </span>

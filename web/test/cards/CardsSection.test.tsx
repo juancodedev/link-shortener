@@ -274,4 +274,65 @@ describe("Cards section (React)", () => {
     expect(document.body.classList.contains("printing-cards")).toBe(false);
     expect(document.getElementById("card-page-style")!.textContent).toBe("");
   });
+
+  describe("Solo NFC Centrado", () => {
+    it("asks how many cards to print and lays them out with no queued links", async () => {
+      const calls = queueWith([]);
+      await mount();
+      expect(document.getElementById("card-count")).toBeNull();
+
+      fireEvent.click(screen.getByLabelText("Solo NFC Centrado"));
+      fireEvent.change(screen.getByLabelText("Cantidad de tarjetas"), { target: { value: "5" } });
+      fireEvent.change(field("card-sheet"), { target: { value: "210x297" } });
+      await act(async () => {});
+
+      expect(calls.api).toEqual(["/api/cards/nfc.svg?design=official"]);
+      screen.getByText("1×2 = 2 tarjetas por hoja · tarjetas de 100×100 mm · 5 tarjeta(s) · 3 hoja(s)");
+      const sheets = [...document.querySelectorAll<HTMLElement>("#card-sheets > .card-sheet")];
+      expect(sheets.map((s) => s.querySelectorAll(".print-card").length)).toEqual([2, 2, 1]);
+      expect(sheets[0]!.querySelector("svg")!.getAttribute("data-path")).toBe("/api/cards/nfc.svg?design=official");
+      expect(screen.getByRole("button", { name: "Exportar PDF / Imprimir" })).toBeEnabled();
+    });
+
+    it("never asks the API for the queued links' cards and offers nothing to mark as printed", async () => {
+      const calls = queueWith([{ id: "a", short_code: "AAA" }]);
+      await mount();
+      calls.api.length = 0;
+
+      fireEvent.click(screen.getByLabelText("Solo NFC Centrado"));
+      fireEvent.change(field("card-design"), { target: { value: "minimal" } });
+      await act(async () => {});
+
+      expect(calls.api).toEqual(["/api/cards/nfc.svg?design=minimal"]);
+      expect(screen.getByLabelText("Cantidad de tarjetas")).toHaveValue(1);
+      expect(screen.queryByRole("button", { name: "Marcar como impresas" })).toBeNull();
+      expect(document.getElementById("cards-queue")).toBeNull();
+      screen.getByText("2×3 = 6 tarjetas por hoja · tarjetas de 100×100 mm · 1 tarjeta(s) · 1 hoja(s)");
+      expect(getPrintQueue()).toEqual([{ id: "a", short_code: "AAA" }]);
+    });
+
+    it("prints nothing when the amount is empty or zero", async () => {
+      queueWith([]);
+      await mount();
+      fireEvent.click(screen.getByLabelText("Solo NFC Centrado"));
+      fireEvent.change(screen.getByLabelText("Cantidad de tarjetas"), { target: { value: "0" } });
+      await act(async () => {});
+
+      screen.getByText("Indica cuántas tarjetas Solo NFC necesitas.");
+      expect(screen.getByRole("button", { name: "Exportar PDF / Imprimir" })).toBeDisabled();
+      expect(document.querySelectorAll(".card-sheet")).toHaveLength(0);
+    });
+
+    it("keeps the queued link cards for the other variants", async () => {
+      const calls = queueWith([{ id: "a", short_code: "AAA" }]);
+      await mount();
+      fireEvent.click(screen.getByLabelText("Solo NFC Centrado"));
+      fireEvent.click(screen.getByLabelText("Solo QR Centrado"));
+      await act(async () => {});
+
+      expect(calls.api).toContain("/api/links/a/card.svg?design=official&variant=qr");
+      expect(screen.getByRole("listitem").textContent).toContain("AAA");
+      expect(screen.getByRole("button", { name: "Marcar como impresas" })).toBeEnabled();
+    });
+  });
 });

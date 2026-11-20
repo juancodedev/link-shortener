@@ -7,7 +7,7 @@ vi.mock("../../src/db/client", () => ({
 }));
 
 import { withClient } from "../../src/db/client";
-import { linkCardSvg } from "../../src/api/cards";
+import { linkCardSvg, nfcCardSvg } from "../../src/api/cards";
 import { renderReviewCard } from "../../src/cards/render";
 import { NotFoundError, ValidationError } from "../../src/middleware/error";
 
@@ -74,5 +74,31 @@ describe("GET /api/links/:id/card.svg", () => {
     mockDb([]);
 
     await expect(linkCardSvg(mockContext({}) as any, vi.fn())).rejects.toThrow(NotFoundError);
+  });
+});
+
+// GET /api/cards/nfc.svg: the NFC-only card carries no link, so it needs none.
+describe("GET /api/cards/nfc.svg", () => {
+  beforeEach(() => vi.resetAllMocks());
+
+  it("renders the NFC-only card in the chosen design without reading any link", async () => {
+    const res = (await nfcCardSvg(mockContext({ design: "minimal" }) as any, vi.fn())) as Response;
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("image/svg+xml; charset=utf-8");
+    const svg = await res.text();
+    expect(svg).toBe(renderReviewCard({ shortUrl: "", design: "minimal", variant: "nfc" }));
+    expect(svg).toContain("Tap");
+    expect(withClient).not.toHaveBeenCalled();
+  });
+
+  it("defaults to the official design", async () => {
+    const res = (await nfcCardSvg(mockContext({}) as any, vi.fn())) as Response;
+
+    expect(await res.text()).toBe(renderReviewCard({ shortUrl: "", design: "official", variant: "nfc" }));
+  });
+
+  it("rejects an unknown design", async () => {
+    await expect(nfcCardSvg(mockContext({ design: "fancy" }) as any, vi.fn())).rejects.toThrow(ValidationError);
   });
 });

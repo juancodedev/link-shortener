@@ -2,6 +2,7 @@ import type { Handler } from "hono";
 import type { AppEnv } from "../types/env";
 import { SUPABASE_JS_SCRIPT } from "./supabase-cdn";
 import { renderReviewCard } from "../cards/render";
+import { BRAND_ICONS, socialMeta } from "./brand-head";
 
 /**
  * Serves the landing page at `GET /`: what the review cards are, for the owner
@@ -20,6 +21,10 @@ import { renderReviewCard } from "../cards/render";
  *   script is the Supabase client, which swaps the guest view for the
  *   signed-in one.
  */
+const TITLE = "Tarjetas de reseñas con QR para tu local — Más Reseñas";
+const DESCRIPTION =
+  "Una tarjeta con QR en cada mesa. Tu cliente califica su visita y elige: publicar su reseña en Google o escribirte directo.";
+
 export const landingHandler: Handler<{ Bindings: AppEnv }> = (c) => {
   const signupUrl = originOf(c.req?.url) + "/signup";
   const card = renderReviewCard({ shortUrl: signupUrl, design: "official", variant: "qr" });
@@ -29,8 +34,10 @@ export const landingHandler: Handler<{ Bindings: AppEnv }> = (c) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Tarjetas de reseñas con QR para tu local — Más Reseñas</title>
-  <meta name="description" content="Una tarjeta con QR en cada mesa. Tu cliente califica su visita y elige: publicar su reseña en Google o escribirte directo.">
+  <title>${TITLE}</title>
+  <meta name="description" content="${DESCRIPTION}">
+  ${BRAND_ICONS}
+  ${socialMeta({ origin: originOf(c.req?.url), path: "/", title: TITLE, description: DESCRIPTION })}
   <style>
     :root {
       --pizarra: #1f3b34;

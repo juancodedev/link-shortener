@@ -1,6 +1,7 @@
 import type { Handler } from "hono";
 import type { AppEnv, HonoVars } from "../types/env";
 import { SUPABASE_JS_SCRIPT } from "./supabase-cdn";
+import { BRAND_ICONS } from "./brand-head";
 
 // ---------------------------------------------------------------------------
 // Shared HTML shell
@@ -12,6 +13,7 @@ function htmlShell(title: string, body: string, supabaseUrl: string, supabaseAno
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  ${BRAND_ICONS}
   <title>${title} — Más Reseñas</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -462,6 +464,7 @@ export const authCallbackHandler: Handler<{ Bindings: AppEnv; Variables: HonoVar
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  ${BRAND_ICONS}
   <title>Correo confirmado — Más Reseñas</title>
   <style>
     body {

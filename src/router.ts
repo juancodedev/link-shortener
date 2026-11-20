@@ -25,7 +25,7 @@ import { createLinksBatch } from "./api/batch";
 import { listClientRefMetrics } from "./api/clients";
 import { hourlyTraffic } from "./api/traffic";
 import { listPrintQueue, markPrinted } from "./api/print-queue";
-import { linkCardSvg } from "./api/cards";
+import { linkCardSvg, nfcCardSvg } from "./api/cards";
 import { listLocations, createLocation, updateLocation } from "./api/locations";
 import { listBusinesses, createBusiness, updateBusiness } from "./api/businesses";
 import { linkQrSvg, batchQrSheet } from "./api/qr";
@@ -184,6 +184,8 @@ export function createApp(_env: AppEnv): Hono<{ Bindings: AppEnv; Variables: Hon
   app.get("/api/links/:id/qr.svg", auth, tenantMembershipMiddleware, linkQrSvg);
   // One 10×10 cm review card for the Cards section (src/api/cards.ts).
   app.get("/api/links/:id/card.svg", auth, tenantMembershipMiddleware, linkCardSvg);
+  // The NFC-only card carries no link: one SVG, printed as many times as asked.
+  app.get("/api/cards/nfc.svg", auth, tenantMembershipMiddleware, nfcCardSvg);
   app.post("/api/links/qr-sheet.zip", auth, tenantMembershipMiddleware, batchQrSheet);
 
   app.get("/api/locations", auth, tenantMembershipMiddleware, listLocations);

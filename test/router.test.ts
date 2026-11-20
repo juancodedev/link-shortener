@@ -438,6 +438,7 @@ describe("router client metrics route", () => {
     expect(chainFor("GET", "/api/links/print-queue")).toHaveLength(3);
     expect(chainFor("POST", "/api/links/printed")).toHaveLength(3);
     expect(chainFor("GET", "/api/links/:id/card.svg")).toHaveLength(3);
+    expect(chainFor("GET", "/api/cards/nfc.svg")).toHaveLength(3);
 
     // Same chain length as the routes it must match.
     expect(chainFor("GET", "/api/links")).toHaveLength(3);

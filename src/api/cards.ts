@@ -40,3 +40,22 @@ export const linkCardSvg: Handler<{ Bindings: AppEnv; Variables: HonoVars }> = a
     headers: { "Content-Type": "image/svg+xml; charset=utf-8" },
   });
 };
+
+// ---------------------------------------------------------------------------
+// GET /api/cards/nfc.svg?design=official|minimal
+//
+// The "Solo NFC Centrado" card. It prints no QR and no link: the NFC tag is
+// written by hand after printing, so the card is the same for every copy and
+// the Cards section asks only for how many to lay out.
+// ---------------------------------------------------------------------------
+
+export const nfcCardSvg: Handler<{ Bindings: AppEnv; Variables: HonoVars }> = async (c) => {
+  const design = c.req.query("design") ?? "official";
+  if (!isCardDesign(design)) throw new ValidationError("design must be official or minimal", "invalid_request");
+
+  const svg = renderReviewCard({ shortUrl: "", design, variant: "nfc" });
+  return new Response(svg, {
+    status: 200,
+    headers: { "Content-Type": "image/svg+xml; charset=utf-8" },
+  });
+};

@@ -205,6 +205,7 @@ Every mutation flushes the tenant's `reg:{code}` KV entries so the change takes 
 | `POST` | `/api/links/batch` | Create up to 100 links in one call |
 | `GET` | `/api/links/:id/qr.svg` | One card's QR, as a print-ready SVG |
 | `GET` | `/api/links/:id/card.svg` | One 10×10 cm review card: `design=official\|minimal`, `variant=hybrid\|qr\|nfc` (defaults `official`, `hybrid`); the QR encodes the short URL |
+| `GET` | `/api/cards/nfc.svg` | The "Solo NFC Centrado" card, `design=official\|minimal` (default `official`): no QR and no link, since the NFC tag is written by hand; the Cards section prints it as many times as asked |
 | `POST` | `/api/links/qr-sheet.zip` | A batch of cards as a ZIP: one SVG per card plus `links.csv` |
 | `GET` | `/api/locations` | List locations (tables, zones) with a link count each |
 | `POST` | `/api/locations` | Create one location, optionally inside a business (`business_id`) |

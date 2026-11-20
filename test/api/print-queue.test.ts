@@ -107,6 +107,14 @@ describe("POST /api/links/printed", () => {
     expect(jsonFn).toHaveBeenCalledWith({ printed: 2 });
   });
 
+  it("accepts the full batch of 200 ids", async () => {
+    mockRecordingDb([]);
+    const ids = Array.from({ length: 200 }, () => ID_A);
+    const { c } = mockContext({ ids });
+
+    await expect(markPrinted(c as any, vi.fn())).resolves.toBeDefined();
+  });
+
   it.each([
     ["a missing ids", {}],
     ["an empty list", { ids: [] }],

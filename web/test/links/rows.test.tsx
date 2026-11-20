@@ -179,6 +179,20 @@ describe("Links island — the row", () => {
     expect(badge.textContent).toBe("To print");
     expect(badge.classList.contains("badge-queued")).toBe(true);
   });
+
+  it("brings the Printed badge back when the card leaves the queue again", async () => {
+    await show({ original_url: null, printed_at: "2026-11-19T12:00:00Z" });
+
+    act(() => window.__setPrintQueued("link-uuid", true, "abc1234"));
+    await settle();
+    act(() => window.__setPrintQueued("link-uuid", false));
+    await settle();
+
+    const badge = row("link-uuid").querySelector('[data-print-badge="link-uuid"]') as HTMLElement;
+    expect(badge.textContent).toBe("Printed");
+    expect(badge.classList.contains("badge-printed")).toBe(true);
+    expect(badge.title).toMatch(/^Printed /);
+  });
 });
 
 describe("Links island — the editing panel", () => {

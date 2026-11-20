@@ -50,6 +50,7 @@ import m00016 from "../../supabase/migrations/00016_business_feedback_email.sql?
 import m00017 from "../../supabase/migrations/00017_feedback_customer_phone.sql?raw";
 import m00018 from "../../supabase/migrations/00018_businesses.sql?raw";
 import m00019 from "../../supabase/migrations/00019_print_queue.sql?raw";
+import m00020 from "../../supabase/migrations/00020_printed_at.sql?raw";
 
 interface Migration {
   version: number;
@@ -78,6 +79,7 @@ const MIGRATIONS: Migration[] = [
   { version: 17, name: "00017_feedback_customer_phone", sql: m00017 },
   { version: 18, name: "00018_businesses", sql: m00018 },
   { version: 19, name: "00019_print_queue", sql: m00019 },
+  { version: 20, name: "00020_printed_at", sql: m00020 },
 ];
 
 /** Strips `--` comments so a prose version number is never read as a claim. */
@@ -255,7 +257,7 @@ describe("migration safety", () => {
   it("the tenant-ALTER migrations skip tenants with no links table", () => {
     // One half-provisioned registry row must not abort the loop for everyone
     // else's ALTER.
-    for (const m of [m00004, m00007, m00008, m00019]) {
+    for (const m of [m00004, m00007, m00008, m00019, m00020]) {
       expect(m).toMatch(/CONTINUE\s+WHEN/i);
       expect(m).toMatch(/to_regclass/i);
     }

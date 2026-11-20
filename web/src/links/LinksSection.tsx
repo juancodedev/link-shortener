@@ -3,20 +3,27 @@ import { flushSync } from "react-dom";
 import { VISITOR_ESTIMATE_CAVEAT } from "../../../src/analytics/metrics";
 import { getPrintQueue, prunePrintQueue, subscribePrintQueue } from "../print-queue";
 import { useBranches } from "./branches";
+import { CreateCard } from "./CreateCard";
 import { LinkRow, type MetricsState } from "./LinkRow";
 import { fetchLinks, type ClickMetrics, type Link } from "./load";
+import { QrModal } from "./QrModal";
 
 /**
- * THE LINKS TABLE (dashboard-react T3a, S2/S5).
+ * THE LINKS SECTION (dashboard-react T3a/T3b, S2/S5).
  *
- * Renders inside the server-rendered `#links-card`, keeping its ids and
- * classes (#link-count, #links-loading, #links-table, #links-body,
- * #links-empty, the per-link metrics-/dest-/branch-/client-ref- ids), so the
- * dashboard's CSS applies as is.
+ * Everything inside the server-rendered `<section data-section="links">`: the
+ * create card (single link and bulk card stock), the links table in
+ * `#links-card`, and the QR modal its rows open. It keeps the ids and classes
+ * the dashboard's CSS was written against (#link-count, #links-loading,
+ * #links-table, #links-body, #links-empty, the per-link metrics-/dest-/
+ * branch-/client-ref- ids, .qr-modal), so the styles and print rules apply
+ * as is. The `<section>` itself stays server-rendered: the legacy
+ * showSection toggles its `hidden`.
  *
- * It loads itself once the auth bootstrap opens window.__apiReady, and lends
- * `window.__loadLinks` to the legacy callers that change what the table shows
- * (create form, bulk create, businesses and branches). The Overview's gate and
+ * It loads itself once the auth bootstrap opens window.__apiReady. Creating
+ * here reloads through the same load directly; `window.__loadLinks` is lent
+ * only to the legacy caller that changes what the table shows from outside
+ * (businesses and branches, through refreshOwnership). The Overview's gate and
  * clients cards still come from this load (L9) and are painted by the legacy
  * page through `window.__renderOverviewCards`.
  */
@@ -34,6 +41,8 @@ export function LinksSection({ limit }: { limit: number }) {
   const [generation, setGeneration] = useState(0);
   const [open, setOpenState] = useState<ReadonlySet<string>>(new Set());
   const [metrics, setMetricsState] = useState<Record<string, MetricsState>>({});
+  /** The short URL whose QR is on show, or null while the modal is closed. */
+  const [qrUrl, setQrUrl] = useState<string | null>(null);
   const queue = useSyncExternalStore(subscribePrintQueue, getPrintQueue);
   const branches = useBranches();
 
@@ -194,52 +203,58 @@ export function LinksSection({ limit }: { limit: number }) {
 
   return (
     <>
-      <h3>
-        Your Links (<span id="link-count">{count}</span>/{limit})
-      </h3>
-      <div id="links-loading" className="loading" style={{ display: view.status === "loading" ? "" : "none" }}>
-        Loading...
+      <CreateCard onCreated={() => void load()} />
+      {/* The table is not part of the printed report. */}
+      <div className="card no-print" id="links-card">
+        <h3>
+          Your Links (<span id="link-count">{count}</span>/{limit})
+        </h3>
+        <div id="links-loading" className="loading" style={{ display: view.status === "loading" ? "" : "none" }}>
+          Loading...
+        </div>
+        <div className="table-wrap">
+          <table id="links-table" style={{ display: showTable ? "" : "none" }}>
+            <thead>
+              <tr>
+                <th>Short Code</th>
+                <th className="hide-sm">Business / branch</th>
+                <th className="hide-sm">URL</th>
+                <th className="hide-sm">Opens</th>
+                <th>Clicks</th>
+                <th>Status</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="links-body">
+              {links.map((l) => (
+                <LinkRow
+                  key={`${generation}:${l.id}`}
+                  link={l}
+                  queued={queued.has(l.id)}
+                  open={open.has(l.id)}
+                  metrics={metrics[l.id]}
+                  branches={branches}
+                  onTogglePanel={togglePanel}
+                  onEdit={edit}
+                  onRepaint={repaint}
+                  onReload={() => void load()}
+                  onShowQR={setQrUrl}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div id="links-empty" className="empty" style={{ display: emptyText ? "" : "none" }}>
+          {emptyText}
+        </div>
+        {/* Beside the table, not behind a tooltip: a store owner acts on the
+            visitor number, so the limitation is on the page before they expand
+            anything. The text lives with the metric in src/analytics/metrics.ts. */}
+        <p className="estimate-note">
+          <strong>About visitor figures:</strong> {VISITOR_ESTIMATE_CAVEAT}
+        </p>
       </div>
-      <div className="table-wrap">
-        <table id="links-table" style={{ display: showTable ? "" : "none" }}>
-          <thead>
-            <tr>
-              <th>Short Code</th>
-              <th className="hide-sm">Business / branch</th>
-              <th className="hide-sm">URL</th>
-              <th className="hide-sm">Opens</th>
-              <th>Clicks</th>
-              <th>Status</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="links-body">
-            {links.map((l) => (
-              <LinkRow
-                key={`${generation}:${l.id}`}
-                link={l}
-                queued={queued.has(l.id)}
-                open={open.has(l.id)}
-                metrics={metrics[l.id]}
-                branches={branches}
-                onTogglePanel={togglePanel}
-                onEdit={edit}
-                onRepaint={repaint}
-                onReload={() => void load()}
-              />
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div id="links-empty" className="empty" style={{ display: emptyText ? "" : "none" }}>
-        {emptyText}
-      </div>
-      {/* Beside the table, not behind a tooltip: a store owner acts on the
-          visitor number, so the limitation is on the page before they expand
-          anything. The text lives with the metric in src/analytics/metrics.ts. */}
-      <p className="estimate-note">
-        <strong>About visitor figures:</strong> {VISITOR_ESTIMATE_CAVEAT}
-      </p>
+      <QrModal url={qrUrl} onClose={() => setQrUrl(null)} />
     </>
   );
 }

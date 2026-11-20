@@ -952,81 +952,20 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
     </section>
 
     <section class="dash-section" data-section="links">
-    <div class="card">
-      <h3>Create Short Link</h3>
-      <form id="create-form">
-        <label for="url">Destination URL</label>
-        <!--
-          NOT required.
-
-          Card stock is manufactured before its destination exists: the owner
-          creates the link, the designer prints the short_code as a QR, and the
-          real URL is loaded later. \`required\` would block that at the
-          browser and leave the API able to do something the form cannot reach.
-
-          The field stays first and stays labelled. Leaving it blank is a
-          deliberate act, not a default, and the help text says what it means —
-          an accidental empty submit should not silently create a card that
-          points nowhere.
-        -->
-        <input type="text" id="url" placeholder="example.com or https://...">
-        <p class="field-help">Leave empty to create a card first and add its destination later. Until you do, its QR opens a \"not configured\" page.</p>
-        <label for="slug">Custom short code (optional)</label>
-        <!--
-          Pre-printed tags. A sticker is printed ONCE and lives in the world for
-          months, so the code on it must be one the user chose deliberately —
-          \`cafe-central\` is meaningful to a store owner in a way \`x7f3b2q\` is not.
-          Leaving this blank falls back to a random code, exactly as before.
-
-          The rules (3-32 chars, letters/digits/-/_ only, no leading or trailing
-          hyphen, not an app route) are enforced server-side in
-          src/utils/short-code.ts; this pattern only helps the user see the shape
-          before they hit the error.
-        -->
-        <input type="text" id="slug" placeholder="cafe-central" maxlength="32" pattern="[A-Za-z0-9_-]+">
-        <label for="title">Title (optional)</label>
-        <input type="text" id="title" placeholder="My awesome link" maxlength="200">
-        <!--
-          THE REVIEW SCREEN IS OPT-IN.
-
-          Unchecked, a scan is a plain 302 to the destination — for a Google
-          review link, the customer lands on Google's own form. Checked, the
-          scan shows our review screen first (stars, Google button, private
-          comment). Only checked links feed the satisfaction panel, because
-          only they record anything; the help text says so.
-        -->
-        <label class="check-row">
-          <input type="checkbox" id="gated">
-          <span>Show the review screen before redirecting</span>
-        </label>
-        <p class="field-help">Off: the scan goes straight to the destination. On: customers see the star rating and can leave you a private comment. Only links with this on feed the satisfaction panel.</p>
-        <button type="submit">Shorten</button>
-      </form>
-      <div id="create-msg" class="message"></div>
-      <div id="result" class="gap-top" style="display:none;">
-        <p class="caption">Your short link:</p>
-        <input type="text" id="short-url" readonly class="short-url" onclick="this.select();navigator.clipboard.writeText(this.value)">
-      </div>
-      <!--
-        Card stock is a different job from shortening a URL, so it gets its own
-        entry point rather than an option on this form. An owner making a hundred
-        stickers does not want a hundred submissions.
-      -->
-      <hr style="margin:1.25rem 0;border:none;border-top:1px solid var(--edge);">
-      <button type="button" id="open-bulk" class="btn-sm btn-outline">
-        Create cards in bulk...
-      </button>
-    </div>
-
-
     <!--
-      THE LINKS TABLE, drawn by the React island in web/src/links
-      (odd/tasks/dashboard-react.md T3a). The island replaces what is inside
-      this card when it mounts; what the server puts here is the first paint
-      before the bundle runs: the title, the loading state and the caveat.
+      THE LINKS SECTION, drawn by the React island in web/src/links
+      (odd/tasks/dashboard-react.md T3a/T3b): the create form, bulk card
+      stock, the links table and the QR modal. The <section> stays here, so
+      showSection and the print rules keep working on it; the island replaces
+      what is inside #links-root when it mounts.
+
+      What the server puts there is the first paint before the bundle runs:
+      the table's title, its loading state and the visitor caveat. No form is
+      served, because a form without its script would submit as a plain GET.
       data-link-limit carries the plan limit, which only the server knows.
     -->
-    <div class="card no-print" id="links-card" data-island="links" data-link-limit="${activeLinkLimit}">
+    <div id="links-root" data-island="links" data-link-limit="${activeLinkLimit}">
+    <div class="card no-print" id="links-card">
       <h3>Your Links (<span id="link-count">0</span>/${activeLinkLimit})</h3>
       <div id="links-loading" class="loading">Loading...</div>
       <!--
@@ -1042,6 +981,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         in src/analytics/metrics.ts so the two cannot drift apart.
       -->
       <p class="estimate-note"><strong>About visitor figures:</strong> ${VISITOR_ESTIMATE_CAVEAT}</p>
+    </div>
     </div>
     </section>
 
@@ -1131,101 +1071,6 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
     </main>
     </div>
 
-    <!-- QR code modal -->
-    <div id="qr-modal" class="qr-modal hidden" onclick="this.classList.add('hidden')">
-      <div class="qr-card" onclick="event.stopPropagation()">
-        <h3 class="qr-title">QR Code</h3>
-        <img id="qr-img" src="" alt="QR Code" class="qr-img">
-        <p id="qr-url" class="qr-url"></p>
-        <!--
-          PRINT-SHEET ENTRY POINT (T3.4).
-
-          The whole point of this phase is a URL that goes on a sticker. The modal
-          already DISPLAYS that URL, but a <p> is not something a user can
-          usefully copy: selecting it by hand, with a word-break to dodge, is
-          exactly the friction that ends with a mistyped code on a sticker.
-
-          So the one action the user came here for is a real control. It copies
-          the URL from the DOM — never from a re-derived string — so what lands
-          on the sticker is byte-for-byte what the QR image encodes.
-
-          Wired with addEventListener, NOT onclick="...". No inline handler is
-          added anywhere in this file: an attribute body is handed to the JS
-          engine, where the HTML entities esc() emits are ordinary characters
-          that terminate nothing. The pre-existing inline handlers on the modal
-          chrome are static and carry no record data; this one is not that.
-        -->
-        <button id="copy-print-sheet" class="btn-sm btn-outline gap-top-sm">Copy URL for print sheet</button>
-        <button class="btn-sm gap-top-sm" onclick="document.getElementById('qr-modal').classList.add('hidden')">Close</button>
-      </div>
-    </div>
-
-    <!--
-      MANUFACTURING CARD STOCK IN BULK.
-
-      One card at a time is the wrong shape for the job. An owner making a
-      hundred stickers does not want a hundred form submissions; they want to
-      say "ten of these" and receive a print sheet they can hand to a designer.
-
-      This creates them WITHOUT a destination, which is the state the whole flow
-      depends on: the QR goes on the card now and the review URL is loaded later,
-      when it is settled. A card created with a destination already filled in
-      commits the owner to knowing the URL before the sticker exists.
-
-      The modal asks for a COUNT and nothing else. Every field the create form
-      has — title, client_ref, location — is per-card by nature, and pretending
-      otherwise would mean inventing a bulk meaning for each one. Those stay on
-      the row, editable after the fact.
-
-      Deliberately not a row action: the row actions (now the Links island's,
-      web/src/links) act on one record, and this acts on none. It is a static
-      button with a static listener, which is the same discipline the create
-      form follows.
-    -->
-    <div id="bulk-modal" class="qr-modal hidden" onclick="this.classList.add('hidden')">
-      <div class="qr-card" onclick="event.stopPropagation()" style="max-width:26rem;">
-        <h3 class="qr-title">Create cards in bulk</h3>
-        <p class="field-help">
-          Each card gets its own QR and no destination yet. Print them, and load
-          the real URL whenever it is settled — until then, scanning a card
-          opens a \"not configured\" page rather than a broken link.
-        </p>
-        <label for="bulk-count">How many cards</label>
-        <input type="number" id="bulk-count" min="1" max="200" step="1" value="10">
-        <label for="bulk-label" class="gap-top-sm">Label for this batch <span class="field-note">(optional)</span></label>
-        <input type="text" id="bulk-label" maxlength="200" placeholder="e.g. Main room — tables 1 to 10">
-        <label class="check-row gap-top-sm">
-          <input type="checkbox" id="bulk-gated">
-          <span>Show the review screen before redirecting</span>
-        </label>
-        <p class="field-help">
-          Off: once a destination is loaded, scans go straight to it. On:
-          customers see the star rating and can leave a private comment — and
-          only these cards feed the satisfaction panel. Changeable per card later.
-        </p>
-        <p class="field-help">
-          Printed under the code on every card, and written to the sheet's CSV, so
-          the designer knows which sticker is which before cutting. One field for
-          the whole batch beats typing it ten times.
-        </p>
-        <div id="bulk-msg" class="message"></div>
-        <div id="bulk-result" style="display:none;">
-          <p class="caption" id="bulk-summary"></p>
-          <button type="button" id="bulk-download" class="btn-sm btn-primary gap-top-sm">
-            Download print sheet (.zip)
-          </button>
-          <p class="field-help">
-            One SVG per card plus a links.csv listing them. The cards go straight
-            to your designer.
-          </p>
-        </div>
-        <div class="gap-top-sm" style="display:flex;gap:.5rem;">
-          <button type="button" id="bulk-create" class="btn-sm btn-primary">Create them</button>
-          <button class="btn-sm gap-top-sm" onclick="document.getElementById('bulk-modal').classList.add('hidden')">Close</button>
-        </div>
-      </div>
-    </div>
-
     <script>
       /**
        * The esbuild runtime shim.
@@ -1276,103 +1121,6 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
        */
       window.__apiReady = new Promise((resolve) => { window.__apiReadyResolve = resolve; });
 
-      /**
-       * Copies the QR modal's URL to the clipboard — the print-sheet handoff.
-       *
-       * Reads #qr-url's textContent rather than rebuilding the URL, so the
-       * copied string cannot drift from the one the QR image encodes. showQR
-       * writes that element with textContent (never innerHTML), so what is read
-       * back here is the plain URL and not markup.
-       */
-      document.getElementById("copy-print-sheet").addEventListener("click", async (e) => {
-        const btn = e.currentTarget;
-        const url = document.getElementById("qr-url").textContent;
-        if (!url) return;
-        try {
-          await navigator.clipboard.writeText(url);
-          const original = btn.textContent;
-          btn.textContent = "Copied!";
-          setTimeout(() => { btn.textContent = original; }, 1500);
-        } catch {
-          // Clipboard access can be refused; surfacing the text beats a silent
-          // no-op, because the user's next move is to hand-write the code on a
-          // sticker and a typo there is unrecoverable.
-          alert("Copy failed — select the URL above and copy it manually.");
-        }
-      });
-
-      document.getElementById("create-form").addEventListener("submit", async (e) => {
-        e.preventDefault();
-        const btn = e.target.querySelector("button");
-        const msg = document.getElementById("create-msg");
-        const result = document.getElementById("result");
-        btn.disabled = true;
-        btn.textContent = "Creating...";
-        msg.className = "message";
-        result.style.display = "none";
-
-        try {
-          // A blank slug field means "generate one for me" and must stay
-          // optional, so it is sent as undefined rather than as "". The server
-          // treats an explicit empty string as absent too, but a client should
-          // not lean on that when it can simply omit the key.
-          const slugValue = document.getElementById("slug").value.trim();
-
-          // A blank destination is OMITTED, not sent as "". The server treats "" as
-          // absent too, but omitting states the intent at the boundary rather
-          // than relying on a coercion the reader has to go and find. This is
-          // what makes card stock creatable from the form.
-          const urlValue = document.getElementById("url").value.trim();
-
-          const res = await window.__api("POST", "/api/links", {
-            ...(urlValue ? { original_url: urlValue } : {}),
-            title: document.getElementById("title").value || undefined,
-            slug: slugValue || undefined,
-            is_gated: document.getElementById("gated").checked,
-          });
-
-          if (!res.ok) {
-            const err = await res.json();
-            throw new Error(err.error || "Failed to create link");
-          }
-
-          const data = await res.json();
-          document.getElementById("short-url").value = data.short_url;
-          result.style.display = "";
-          document.getElementById("url").value = "";
-          document.getElementById("title").value = "";
-          document.getElementById("slug").value = "";
-          document.getElementById("gated").checked = false;
-          msg.className = "message success";
-          // A card and a link are different objects, and saying "Link created!" for one
-          // that has nowhere to point yet is a small lie the owner discovers
-          // later, when a customer scans the sticker. Name the state instead.
-          msg.textContent = data.original_url
-            ? "Link created! Copied to clipboard."
-            : "Card created! Its QR opens a 'not configured' page until you add a destination.";
-          navigator.clipboard.writeText(data.short_url);
-          if (window.__loadLinks) window.__loadLinks();
-        } catch (err) {
-          msg.className = "message error";
-          msg.textContent = err instanceof Error ? err.message : "Error";
-        } finally {
-          btn.disabled = false;
-          btn.textContent = "Shorten";
-        }
-      });
-
-      // ---------------------------------------------------------------------
-      // Bulk card creation
-      //
-      // The count is the only input, and that is deliberate: every other field
-      // on a link is per-card by nature, and inventing a bulk meaning for each
-      // would be inventing vocabulary the product does not have. They stay
-      // editable on the row afterwards.
-      //
-      // The generated ids are kept in module scope rather than in the DOM,
-      // because the download button needs them and a data-* attribute would be
-      // a second copy of the same list that could drift out of sync with it.
-      // ---------------------------------------------------------------------
       // ---------------------------------------------------------------------
       // Feedback email
       //
@@ -1481,11 +1229,11 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
       // ---------------------------------------------------------------------
       // Bridges for the React islands (web/, odd/tasks/dashboard-react.md).
       //
-      // The Links table and the print queue are React now (T3a). What they
-      // still need from this page, and only that, is lent through window:
-      // the Overview cards their load paints (L9), the client rollup refresh,
-      // and the QR modal. The print queue itself is lent the other way, by
-      // the bundle (web/src/print-queue.ts).
+      // The Links section (T3a/T3b) and the print queue are React now. What
+      // they still need from this page, and only that, is lent through
+      // window: the Overview cards their load paints (L9) and the client
+      // rollup refresh. The print queue and window.__loadLinks are lent the
+      // other way, by the bundle (web/src/print-queue.ts, web/src/links).
       // ---------------------------------------------------------------------
 
       /**
@@ -1520,7 +1268,6 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         }
       };
       window.__refreshClientsCard = refreshClientsCard;
-      window.__showQR = showQR;
 
       async function loadFeedbackInbox() {
         const body = document.getElementById("feedback-body");
@@ -1629,130 +1376,6 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
           btn.disabled = false;
         }
       });
-
-      // >>> BULK BLOCK — the dashboard test scopes its row-action assertion to
-      // exactly this range.
-      let bulkIds = [];
-
-      document.getElementById("open-bulk").addEventListener("click", () => {
-        bulkIds = [];
-        document.getElementById("bulk-result").style.display = "none";
-        const msg = document.getElementById("bulk-msg");
-        msg.className = "message";
-        msg.textContent = "";
-        document.getElementById("bulk-modal").classList.remove("hidden");
-      });
-
-      document.getElementById("bulk-create").addEventListener("click", async () => {
-        const btn = document.getElementById("bulk-create");
-        const msg = document.getElementById("bulk-msg");
-        const count = parseInt(document.getElementById("bulk-count").value, 10);
-
-        // Validated here as well as on the server: the server is what makes it
-        // safe, but a button that does nothing for ten seconds because the count
-        // was 0 teaches the owner that the button is broken.
-        if (!Number.isInteger(count) || count < 1 || count > 200) {
-          msg.className = "message error";
-          msg.textContent = "Enter a number between 1 and 200.";
-          return;
-        }
-
-        btn.disabled = true;
-        btn.textContent = "Creating...";
-        msg.className = "message";
-        msg.textContent = "";
-
-        try {
-          // No destination, and \`is_gated\` as the owner chose it. It used to be
-          // forced on; it is opt-in now (odd/tasks/review-screen-refresh.md, S1)
-          // and the modal's help text states the cost: an ungated card goes
-          // straight to its destination and records nothing for the panel.
-          // The label is applied to EVERY card in the batch on purpose. It is
-          // one field for the whole run rather than one per card, because the
-          // question being asked is "where does this batch go" — ten stickers
-          // for the main room — not ten separate identities.
-          const label = document.getElementById("bulk-label").value.trim();
-          const gated = document.getElementById("bulk-gated").checked;
-          const links = Array.from({ length: count }, () => ({
-            is_gated: gated,
-            ...(label ? { client_ref: label } : {}),
-          }));
-          const res = await window.__api("POST", "/api/links/batch", { links });
-
-          const body = await res.json();
-          // A partial batch is reported, never treated as success. Nine of ten
-          // cards is a shortfall the owner discovers at the printer.
-          const created = (body.results || []).filter((r) => r.status === 201);
-
-          if (!res.ok && !created.length) {
-            throw new Error(body.error || "Could not create the cards");
-          }
-
-          bulkIds = created.map((r) => r.link.id);
-
-          document.getElementById("bulk-result").style.display = "";
-          const failed = (body.results || []).length - created.length;
-          document.getElementById("bulk-summary").textContent =
-            created.length + (created.length === 1 ? " card created. " : " cards created. ") +
-            (failed ? failed + " failed — try those again." : "");
-
-          msg.className = failed ? "message error" : "message success";
-          if (!failed) msg.textContent = "";
-          if (window.__loadLinks) window.__loadLinks();
-        } catch (err) {
-          msg.className = "message error";
-          msg.textContent = err instanceof Error ? err.message : "Error";
-        } finally {
-          btn.disabled = false;
-          btn.textContent = "Create them";
-        }
-      });
-
-      document.getElementById("bulk-download").addEventListener("click", async () => {
-        const msg = document.getElementById("bulk-msg");
-
-        if (!bulkIds.length) {
-          msg.className = "message error";
-          msg.textContent = "Create the cards first.";
-          return;
-        }
-
-        try {
-          // Through __api, NOT a hand-rolled fetch.
-          //
-          // This handler used to do its own fetch with its own headers, reading
-          // the token from localStorage. The dashboard keeps it on window.__token,
-          // so the sheet request went out as
-          // an empty bearer token and came back 401, while the create (which
-          // does go through the helper) had already succeeded: the modal
-          // cheerfully claimed ten cards existed and none could be printed.
-          //
-          // __api returns the response rather than a parsed body, so a blob
-          // downloads through it unchanged — and the 401-to-login redirect, the
-          // 409 tenant picker, and the server's own error text all come along
-          // instead of being reimplemented slightly wrong.
-          const res = await window.__api("POST", "/api/links/qr-sheet.zip", {
-            link_ids: bulkIds,
-          });
-
-          const blob = await res.blob();
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = "cards.zip";
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          // Revoked immediately after the click: the download has already been
-          // handed to the browser, and leaving the object URL alive pins the
-          // whole ZIP in memory for the life of the tab.
-          URL.revokeObjectURL(url);
-        } catch (err) {
-          msg.className = "message error";
-          msg.textContent = err instanceof Error ? err.message : "Error";
-        }
-      });
-      // <<< BULK BLOCK
 
       /**
        * Renders the per-store rollup.
@@ -2033,8 +1656,8 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         refreshOwnership();
       }
 
-      // Static and delegated listeners, like the create form's: these act on
-      // businesses and branches, not on a link row.
+      // Static and delegated listeners: these act on businesses and branches,
+      // not on a link row.
       document.getElementById("add-business").addEventListener("click", addBusiness);
       document.getElementById("businesses-body").addEventListener("click", (e) => {
         const el = e.target.closest("[data-biz-action]");
@@ -2044,31 +1667,6 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         else if (el.dataset.bizAction === "toggle-business") setBusinessActive(el.dataset.businessId, el.dataset.active === "true");
         else if (el.dataset.bizAction === "toggle-branch") setBranchActive(el.dataset.locationId, el.dataset.active === "true");
       });
-
-      /**
-       * Opens the QR modal for a short URL. Lent to the Links island as
-       * window.__showQR, whose QR button passes the URL raw.
-       *
-       * Takes the URL RAW and encodes exactly once, right here, because this
-       * is the only place that builds a query string. The call site used to
-       * encode too, and that second layer is what shipped: the QR image
-       * encoded \`https%3A%2F%2F…\` instead of \`https://…\`, so scanning a sticker
-       * landed nowhere. Two encodes and one decode is not a transformation, it
-       * is a coin flip.
-       *
-       * The displayed text is the raw url, NOT a decoded one. Decoding here
-       * would only exist to undo the call site's encode; with that gone, a
-       * \`decodeURIComponent\` on a plain URL is not a no-op — it throws on a
-       * literal \`%\`.
-       *
-       * This is also what makes the print-sheet handoff honest: #qr-url holds
-       * the same bytes the QR encodes, so the copy button cannot drift.
-       */
-      function showQR(url) {
-        document.getElementById("qr-img").src = "https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=" + encodeURIComponent(url);
-        document.getElementById("qr-url").textContent = url;
-        document.getElementById("qr-modal").classList.remove("hidden");
-      }
     </script>
   `;
 

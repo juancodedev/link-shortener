@@ -42,14 +42,12 @@ declare global {
     __setPrintQueued: (id: string, queued: boolean, code?: string) => void;
     /** Empties the queue after a print run. */
     __clearPrintQueue: () => void;
-    /** Reloads the Links table; set by the Links island while it is mounted. */
+    /** Reloads the Links table; set by the Links island while it is mounted, for the legacy refreshOwnership. */
     __loadLinks?: () => Promise<void>;
     /** Legacy: paints the Overview's gate and clients cards from the Links load. */
     __renderOverviewCards?: (cards: OverviewCards) => void;
     /** Legacy: refetches and repaints the client_ref rollup. */
     __refreshClientsCard?: () => void;
-    /** Legacy: opens the QR modal for a raw short URL. */
-    __showQR?: (url: string) => void;
     /** Legacy: the tenant's branches and businesses, set by loadBranches. */
     __branches?: Branch[];
     __businesses?: Business[];

@@ -23,7 +23,8 @@ import {
 // dashboard.test.ts: "field saves repaint only their own link", "repaintLink",
 // "setGated updates its field in place", "each row has an Edit button", the
 // QR encoding guard, the copy feedback, the metric renderers and
-// "renderVisitors", and the print queue in the table).
+// "renderVisitors", and the print queue in the table). The QR button and its
+// modal are pinned in qr.test.tsx (T3b).
 
 let bridges: Bridges;
 let alerts: string[];
@@ -448,18 +449,6 @@ describe("copy", () => {
     expect(exec).toHaveBeenCalledWith("copy");
     expect(code.textContent).toBe("Copied!");
     expect(document.querySelectorAll("body > input")).toHaveLength(0);
-  });
-});
-
-describe("QR code", () => {
-  it("hands the raw short URL to the legacy modal, which encodes it exactly once", async () => {
-    const awkward = "https://shorter.juancode.dev/a?b=1&c=2#frag";
-    standardApi({ links: [link({ short_url: awkward })] });
-    await mountLinks();
-
-    fireEvent.click(button(panel(), "QR code"));
-
-    expect(bridges.qr).toEqual([awkward]);
   });
 });
 

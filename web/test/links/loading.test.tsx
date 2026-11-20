@@ -126,7 +126,7 @@ describe("Links island — loading", () => {
     standardApi({ links: [link({ id: "a" }), link({ id: "b" })] });
     await mountLinks(25);
 
-    expect(document.querySelector("h3")!.textContent).toBe("Your Links (2/25)");
+    expect(document.querySelector("#links-card h3")!.textContent).toBe("Your Links (2/25)");
     expect(el("link-count").textContent).toBe("2");
   });
 

@@ -61,6 +61,12 @@ type Routes = {
   clicks?: (id: string) => unknown;
   patch?: (id: string, body: unknown) => unknown;
   del?: (id: string) => unknown;
+  /** POST /api/links (the create form). */
+  create?: (body: unknown) => unknown;
+  /** POST /api/links/batch (bulk cards). */
+  batch?: (body: unknown) => unknown;
+  /** POST /api/links/qr-sheet.zip (the bulk print sheet). */
+  sheet?: (body: unknown) => unknown;
 };
 
 /** The dashboard API with sensible defaults; each route can be overridden. */
@@ -71,6 +77,19 @@ export function standardApi(routes: Routes = {}): Call[] {
     }
     if (method === "GET" && path === "/api/clients/metrics") return routes.clients ?? [];
     if (method === "GET" && path === "/api/review-gate/metrics") return routes.gate ?? { rated: 0 };
+    if (method === "POST" && path === "/api/links") {
+      if (routes.create) return routes.create(body);
+      const sent = body as { original_url?: string };
+      return link({ id: "new-id", short_code: "new1234", short_url: "https://short.link/new1234", original_url: sent.original_url ?? null });
+    }
+    if (method === "POST" && path === "/api/links/batch") {
+      if (routes.batch) return routes.batch(body);
+      const items = (body as { links: unknown[] }).links;
+      return { results: items.map((_, i) => ({ status: 201, link: link({ id: `bulk-${i}` }) })) };
+    }
+    if (method === "POST" && path === "/api/links/qr-sheet.zip") {
+      return routes.sheet ? routes.sheet(body) : new Response("zip", { status: 200, headers: { "Content-Type": "application/zip" } });
+    }
     const clicks = path.match(/^\/api\/links\/([^/]+)\/clicks$/);
     if (method === "GET" && clicks) return routes.clicks ? routes.clicks(clicks[1]!) : CLICKS;
     const one = path.match(/^\/api\/links\/([^/]+)$/);
@@ -83,18 +102,16 @@ export function standardApi(routes: Routes = {}): Call[] {
 export type Bridges = {
   overview: Array<Record<string, unknown>>;
   clientsRefreshed: number;
-  qr: string[];
 };
 
 /** The legacy page's bridges, recorded. */
 export function installLegacy(): Bridges {
-  const bridges: Bridges = { overview: [], clientsRefreshed: 0, qr: [] };
+  const bridges: Bridges = { overview: [], clientsRefreshed: 0 };
   window.__apiReady = Promise.resolve();
   window.__renderOverviewCards = (cards) => bridges.overview.push(cards as Record<string, unknown>);
   window.__refreshClientsCard = () => {
     bridges.clientsRefreshed++;
   };
-  window.__showQR = (url: string) => bridges.qr.push(url);
   window.__branches = undefined;
   window.__businesses = undefined;
   installPrintQueue();
@@ -132,6 +149,21 @@ export const isOpen = (id = "link-uuid") => panel(id).style.display !== "none";
 export const field = (id: string) => document.getElementById(id) as HTMLInputElement & HTMLSelectElement;
 export const count = (calls: Call[], method: string, path: string) =>
   calls.filter((c) => c.method === method && c.path === path).length;
+
+/** A stand-in for navigator.clipboard (jsdom has none); `refuse` makes writeText reject. */
+export function installClipboard(refuse = false): string[] {
+  const written: string[] = [];
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText: vi.fn(async (text: string) => {
+        if (refuse) throw new Error("denied");
+        written.push(text);
+      }),
+    },
+  });
+  return written;
+}
 
 /** The button with this exact text inside `root`. */
 export function button(root: Element, text: string): HTMLButtonElement {

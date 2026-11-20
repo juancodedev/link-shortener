@@ -11,10 +11,11 @@ import { inlineScripts } from "../helpers/inline-scripts";
 // while the shipped code stayed broken.
 //
 // Sections that moved to React islands (odd/tasks/dashboard-react.md) are
-// tested as components in web/test instead: the Links table and the print
-// queue in web/test/links and web/test/print-queue.test.ts (T3a). What stays
-// here for them is the served shell: the mount point, and the bridges this
-// page lends the island.
+// tested as components in web/test instead: the Links section (table, create
+// form, bulk cards, QR modal) and the print queue in web/test/links and
+// web/test/print-queue.test.ts (T3a/T3b). What stays here for them is the
+// served shell: the mount point, the first paint, and the bridges this page
+// lends the island.
 // ---------------------------------------------------------------------------
 
 const XSS_URL = '<img src=x onerror=alert(1)>';
@@ -45,13 +46,17 @@ async function serve(): Promise<string> {
 }
 
 /**
- * Returns the dashboard's own inline <script> block (the one that wires the
- * create form). The shell's other inline block is the Supabase auth bootstrap.
+ * A statement only the dashboard's own inline <script> block carries (the
+ * readiness gate it creates). The shell's other inline block is the Supabase
+ * auth bootstrap, which resolves the gate but never creates it.
  */
+const CLIENT_SCRIPT_MARKER = "window.__apiReady = new Promise";
+
+/** Returns the dashboard's own inline <script> block. */
 async function clientScript(): Promise<string> {
   const html = await serve();
   const script = inlineScripts(html)[0];
-  if (!script || !script.includes("create-form")) {
+  if (!script || !script.includes(CLIENT_SCRIPT_MARKER)) {
     throw new Error("dashboard client script not found in served HTML");
   }
   return script;
@@ -122,14 +127,30 @@ describe("dashboardHandler shell", () => {
     expect(response.headers.get("Content-Type")).toContain("text/html");
   });
 
-  it("serves the Links card as the React island's mount point, titled before the bundle runs", async () => {
+  it("serves the Links section's content as the React island's mount point, titled before the bundle runs", async () => {
     const html = await serve();
 
-    expect(html).toMatch(/<div class="card no-print" id="links-card" data-island="links" data-link-limit="\d+">/);
+    // The <section> stays server-rendered (showSection and the print rules
+    // act on it); everything inside it is the island's.
+    expect(html).toMatch(
+      /<section class="dash-section" data-section="links">\s*<!--[\s\S]*?-->\s*<div id="links-root" data-island="links" data-link-limit="\d+">\s*<div class="card no-print" id="links-card">/,
+    );
     expect(html).toContain("Your Links");
     // The table itself is the island's (web/src/links); the server ships none.
     expect(html).not.toContain('id="links-table"');
     expect(html).not.toContain('id="links-body"');
+  });
+
+  it("serves no Links markup the island now draws: no create form, no bulk or QR modal", async () => {
+    const html = await serve();
+
+    // web/test/links/create.test.tsx, bulk.test.tsx and qr.test.tsx pin them.
+    for (const id of ["create-form", "url", "slug", "gated", "create-msg", "result", "short-url", "open-bulk", "bulk-modal", "bulk-count", "bulk-label", "bulk-gated", "qr-modal", "qr-img", "qr-url", "copy-print-sheet"]) {
+      expect(html, id).not.toContain(`id="${id}"`);
+    }
+    // And with them went the last inline handlers: an attribute body is
+    // handed to the JS engine, where esc()'s entities terminate nothing.
+    expect(html).not.toMatch(/<[^>]+\sonclick=/i);
   });
 });
 
@@ -487,10 +508,10 @@ describe("the dashboard script never triggers a load at parse time", () => {
       (m) => m[1].length,
     );
 
-    // One per legacy handler that changes what the table shows: the create
-    // form, the bulk create and refreshOwnership (a business or branch
-    // changed). Delete and the field saves live in the island now.
-    expect(statements).toHaveLength(3);
+    // Only refreshOwnership (a business or branch changed) is left. The
+    // create form, bulk cards, delete and the field saves live in the island
+    // and reload through its own load.
+    expect(statements).toHaveLength(1);
     expect(statements.every((indent) => indent > TOP_LEVEL_INDENT)).toBe(true);
     expect(codeOnly(script)).not.toMatch(/\bloadLinks\(/);
   });
@@ -704,369 +725,21 @@ describe("the dashboard declares the esbuild runtime its injected panel calls", 
 });
 
 // ---------------------------------------------------------------------------
-// The QR encoding guard.
+// The api helper's auth contract
 //
-// The QR image is fetched from a third-party service with the URL as a query
-// parameter, so the URL gets percent-encoded for transport. The service decodes
-// that parameter once and encodes whatever it finds inside the QR image.
-//
-// That makes the round trip exact only if the payload is encoded ONCE. The
-// handler encoded twice — once at the click handler and again inside showQR —
-// so the image encoded `https%3A%2F%2F...` and scanning a sticker led nowhere.
-// The bug was invisible in the UI: the caption under the image decoded its way
-// back to a correct-looking URL, so the only place the wrong bytes appeared was
-// the one place that mattered.
-//
-// These tests drive the SERVED click handler against the SERVED showQR and read
-// the query parameter the way the service does, so the assertion is about the
-// bytes the QR will actually carry.
+// The Links island's requests (bulk cards and their print sheet included,
+// web/test/links/bulk.test.tsx) all go through window.__api, so the helper
+// itself has to keep carrying the whole contract.
 // ---------------------------------------------------------------------------
 
-const SHORT_URL = "https://shorter.juancode.dev/X4tonhH";
-
-describe("the QR image encodes the short URL, not its encoded form", () => {
-  /**
-   * Runs the SERVED showQR, the one the Links island calls through
-   * window.__showQR with the raw URL (web/test/links/edits.test.tsx pins that
-   * the island does not encode), and reports the bytes the QR will carry.
-   */
-  async function showQr(rawUrl: string) {
-    const written: Record<string, any> = {
-      "qr-img": { src: "" },
-      "qr-url": { textContent: "" },
-      "qr-modal": { classList: { remove: () => {} } },
-    };
-    const document = { getElementById: (id: string) => written[id] };
-    const showQR = new Function("document", `${extractFunction(await clientScript(), "showQR")}\nreturn showQR;`)(document);
-
-    showQR(rawUrl);
-
-    return {
-      // Exactly what the QR service receives as `data`, after its own decode.
-      qrPayload: new URL(written["qr-img"].src).searchParams.get("data"),
-      caption: written["qr-url"].textContent,
-      rawSrc: written["qr-img"].src,
-    };
-  }
-
-  it("round-trips a plain short URL through the query parameter", async () => {
-    const { qrPayload } = await showQr(SHORT_URL);
-    expect(qrPayload).toBe(SHORT_URL);
-  });
-
-  it("shows the same bytes the QR encodes", async () => {
-    // The print-sheet handoff reads #qr-url. If the caption and the payload can
-    // disagree, the owner copies one string and prints a QR carrying another.
-    const { qrPayload, caption } = await showQr(SHORT_URL);
-    expect(caption).toBe(qrPayload);
-  });
-
-  it("still encodes reserved characters so the query parameter survives", async () => {
-    // One layer of encoding is not the same as none: a bare `&` or `#` in the
-    // payload would terminate the parameter or start a fragment.
-    const awkward = "https://shorter.juancode.dev/a?b=1&c=2#frag";
-    const { qrPayload, rawSrc } = await showQr(awkward);
-
-    expect(qrPayload).toBe(awkward);
-    expect(rawSrc).toContain("%26");
-  });
-
-  it("does not double-encode at a call site", async () => {
-    const script = await clientScript();
-    expect(script).not.toMatch(/showQR\(\s*encodeURIComponent/);
-  });
-
-  it("never decodes in showQR, which would throw on a literal %", async () => {
-    const src = extractFunction(await clientScript(), "showQR");
-    expect(src).not.toContain("decodeURIComponent");
-  });
-});
-
-
-// ---------------------------------------------------------------------------
-// Creating card stock from the form (T4 UI)
-//
-// The API can create a destination-less link. If the form still says
-// `required`, that capability is unreachable by the person who needs it, and
-// the API is right for no one. These tests pin the two halves of the form —
-// that the browser does not block an empty destination, and that the handler
-// omits the key rather than sending a blank one.
-// ---------------------------------------------------------------------------
-
-describe("the create form can manufacture card stock", () => {
-  it("does not mark the destination as required", async () => {
+describe("the api helper", () => {
+  it("carries the bearer token and the tenant on every request", async () => {
+    // Asserted against the WHOLE served page: __api lives in the shell's
+    // bootstrap block, not in clientScript().
     const html = await serve();
 
-    // `required` would block the exact flow this feature exists for, in the
-    // one place the owner actually types.
-    expect(html).not.toMatch(/<input[^>]*id="url"[^>]*\brequired\b/);
-  });
-
-  it("keeps the destination field, labelled and first", async () => {
-    const html = await serve();
-
-    // Optional must not mean hidden or deprioritised — creating a normal link
-    // is the common case and must stay the obvious one.
-    expect(html).toContain('<label for="url">Destination URL</label>');
-    expect(html).toContain('id="url"');
-  });
-
-  it("says what an empty destination produces", async () => {
-    const html = await serve();
-
-    // A blank submit that silently creates a card pointing nowhere is the
-    // accident this helps avoid, so the consequence is stated on the form.
-    expect(html).toContain("field-help");
-    expect(html).toContain("later");
-  });
-
-  it("omits original_url entirely when the field is blank", async () => {
-    const script = await clientScript();
-
-    // Sending "" would rely on a server-side coercion the reader has to go and
-    // find. Omitting states the intent at the boundary.
-    expect(script).toContain("...(urlValue ? { original_url: urlValue } : {})");
-  });
-
-  it("trims the destination before sending it", async () => {
-    const script = await clientScript();
-
-    expect(script).toContain('getElementById("url").value.trim()');
-  });
-
-  it("distinguishes a card from a link in the confirmation", async () => {
-    const script = await clientScript();
-
-    // "Link created!" for a link with no destination is a small lie the owner
-    // discovers later, when a customer scans the sticker.
-    expect(script).toContain("Card created!");
-    expect(script).toContain("data.original_url");
-  });
-
-  it("still clears the destination field after creating", async () => {
-    const script = await clientScript();
-
-    expect(script).toContain('document.getElementById("url").value = ""');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Bulk card creation
-//
-// An owner making a hundred stickers does not want a hundred form submissions.
-// This creates them in one call with no destination and hands back a print sheet
-// the designer can use directly.
-//
-// The generated ids live in module scope rather than in a data-* attribute,
-// because the download button needs them and a second copy in the DOM could
-// drift out of sync with the list the handler actually holds.
-// ---------------------------------------------------------------------------
-
-describe("the dashboard can manufacture cards in bulk", () => {
-  it("offers a bulk entry point", async () => {
-    const html = await serve();
-    expect(html).toContain('id="open-bulk"');
-    expect(html).toContain('id="bulk-modal"');
-  });
-
-  it("asks for a count and nothing else", async () => {
-    const html = await serve();
-
-    // Every other field on a link is per-card by nature. Inventing a bulk
-    // meaning for each would be inventing vocabulary the product does not have.
-    const modal = html.slice(html.indexOf('id="bulk-modal"'));
-    const card = modal.slice(0, modal.indexOf("</div>"));
-    expect(card).toContain('id="bulk-count"');
-    expect(card).not.toContain('id="url"');
-  });
-
-  it("caps the count at the server's own limit", async () => {
-    const html = await serve();
-    // The server is what makes it safe; this stops a 900-card request spending
-    // ten seconds before it is refused.
-    expect(html).toContain('max="200"');
-  });
-
-  it("says what an unconfigured card does when scanned", async () => {
-    const html = await serve();
-    // The owner has to know the QR is not broken — it is waiting.
-    expect(html).toContain("not configured");
-  });
-
-  it("creates the cards WITHOUT a destination", async () => {
-    const script = await clientScript();
-
-    // The item literal itself is the claim: a card is `is_gated` and nothing
-    // else. Asserting on the whole script for "no original_url" would also
-    // catch the single-create form above, which legitimately has one.
-    // The item literal IS the claim: a card is gated, and it carries a
-    // destination only if the owner typed a label. `...(label ? ...)` is what
-    // makes "no destination" the default rather than a special case.
-    expect(script).toContain("Array.from({ length: count }, () => ({");
-    expect(script).toContain("is_gated: gated");
-    // Scoped to the BULK BLOCK, not the whole script.
-    //
-    // The dashboard has two creation paths and only one of them must omit the
-    // destination. The single-create form legitimately sets `original_url` — it
-    // is how an owner shortens a URL they already have. Asserting on the whole
-    // script conflates the two and is wrong, not merely imprecise.
-    const start = script.indexOf(">>> BULK BLOCK");
-    const end = script.indexOf("<<< BULK BLOCK", start);
-    expect(codeOnly(script.slice(start, end))).not.toContain("original_url:");
-  });
-
-  it("lets the owner choose the review screen for the batch, OFF by default", async () => {
-    const html = await serve();
-    const script = await clientScript();
-
-    // The owner decides now (odd/tasks/review-screen-refresh.md, S1). Unchecked
-    // means the card goes straight to Google; the help text says that such
-    // cards do not feed the satisfaction panel, which is the trade being made.
-    const box = html.match(/<input[^>]*id="bulk-gated"[^>]*>/)?.[0] ?? "";
-    expect(box).toContain('type="checkbox"');
-    expect(box).not.toContain("checked");
-    expect(script).toContain('document.getElementById("bulk-gated").checked');
-  });
-
-  it("posts to the batch endpoint that already exists", async () => {
-    const script = await clientScript();
-    expect(script).toContain('"/api/links/batch"');
-  });
-
-  it("reports a PARTIAL batch rather than calling it a success", async () => {
-    const script = await clientScript();
-
-    // Nine of ten cards is a shortfall the owner discovers at the printer.
-    expect(script).toContain("failed — try those again");
-    expect(script).toMatch(/created\.length/);
-  });
-
-  it("keeps only the ids that were actually created", async () => {
-    const script = await clientScript();
-
-    // A failed item has no link to export, so its id must not enter the sheet.
-    expect(script).toContain('filter((r) => r.status === 201)');
-  });
-
-  it("downloads the sheet as a ZIP", async () => {
-    const script = await clientScript();
-    expect(script).toContain('"/api/links/qr-sheet.zip"');
-    expect(script).toContain('a.download = "cards.zip"');
-  });
-
-  it("fetches the sheet as a blob rather than navigating to it", async () => {
-    const script = await clientScript();
-
-    // The claim is "not a navigation", and it holds for a reason that is now
-    // structural rather than incidental: the request goes through __api, whose
-    // signature is (method, path, body) — it cannot become a navigation, and it
-    // returns the response so a blob can be read off it.
-    expect(script).toContain('window.__api("POST", "/api/links/qr-sheet.zip", {');
-    expect(script).toContain("URL.createObjectURL");
-    expect(script).toContain("await res.blob()");
-  });
-
-  it("revokes the object URL, so the ZIP is not pinned in memory", async () => {
-    const script = await clientScript();
-    expect(script).toContain("URL.revokeObjectURL");
-  });
-
-  it("surfaces the server's own refusal instead of a generic failure", async () => {
-    const script = await clientScript();
-
-    // The server refuses a batch containing an unconfigured card and says so.
-    // That sentence IS the answer.
-    expect(script).toContain("body.error");
-  });
-
-  it("downloads through the dashboard's OWN api helper, not a hand-rolled fetch", async () => {
-    const script = await clientScript();
-
-    // THE REGRESSION THAT MATTERS.
-    //
-    // This handler originally did its own `fetch` with its own headers, reading
-    // the token from `localStorage.getItem("access_token")`. The dashboard keeps
-    // it in `window.__token`. So the create succeeded — it goes through __api —
-    // and the download 401'd with `Bearer null`, leaving the modal claiming ten
-    // cards existed and the sheet unreachable.
-    //
-    // Reusing __api is the fix: one auth contract, one place to change it, and
-    // the 401-to-login and 409-tenant-picker behaviour comes along for free
-    // instead of being reimplemented slightly wrong.
-    expect(script).toContain('window.__api("POST", "/api/links/qr-sheet.zip"');
-  });
-
-  it("never rebuilds auth headers inside the bulk block", async () => {
-    const script = await clientScript();
-    const start = script.indexOf(">>> BULK BLOCK");
-    const end = script.indexOf("<<< BULK BLOCK", start);
-    const wired = script.slice(start, end);
-
-    // A duplicated auth contract is a contract that will drift. The token lives
-    // in one place and this block does not get a second opinion on where.
-    expect(wired).not.toMatch(/Authorization:/);
-    expect(wired).not.toMatch(/X-Tenant-Slug/);
-  });
-
-  it("inherits the full auth contract instead of approximating it", async () => {
-    // Asserted against the WHOLE served page, not clientScript().
-    //
-    // The dashboard serves __api and the bulk client as two separate <script>
-    // blocks, so clientScript() — which returns the one holding the client —
-    // cannot see the helper at all. Scoping this assertion to it produced a
-    // failure that looked like missing auth but was really the wrong slice.
-    const html = await serve();
-
-    // The download carries whatever __api carries — JWT, tenant, and the 409
-    // picker — by going through it at all. This asserts the helper still does
-    // its own job, so the download inherits a working contract rather than a
-    // broken one.
     expect(html).toContain("Bearer " + '" + window.__token');
     expect(html).toContain('headers["X-Tenant-Slug"] = q');
-  });
-
-  it("refuses to download before anything was created", async () => {
-    const script = await clientScript();
-    expect(script).toContain("Create the cards first.");
-  });
-
-  it("validates the count before spending a request on it", async () => {
-    const script = await clientScript();
-
-    // A button that does nothing for ten seconds because the count was 0
-    // teaches the owner the button is broken.
-    expect(script).toMatch(/count < 1 \|\| count > 200/);
-  });
-
-  it("adds no inline handler and no new data-action", async () => {
-    const script = await clientScript();
-
-    // The delegated switch handles record actions and a test pins its exact
-    // membership. Bulk acts on NO record, so it must not join that switch — it
-    // is a static button with a static listener, like the create form.
-    //
-    // Scoped to the bulk BLOCK, delimited by the two function names that bracket
-    // it in the source. Slicing to the end of the script would sweep in the
-    // delegated switch below, which legitimately contains data-action and would
-    // make the assertion meaningless.
-    // Delimited by markers the source plants, not by guessing where a
-    // function happens to end — a slice bounded by a function name breaks the
-    // moment the block is reordered.
-    const start = script.indexOf(">>> BULK BLOCK");
-    const end = script.indexOf("<<< BULK BLOCK", start);
-    const wired = script.slice(start, end);
-    expect(wired.length).toBeGreaterThan(0);
-    // Matched on the ATTRIBUTE, not the substring: an earlier version asserted
-    // on "data-action" and this very comment contained the word, so the test
-    // detected itself and failed for a reason that had nothing to do with the
-    // code under test.
-    expect(wired).not.toMatch(/data-action=/);
-
-    // And the page no longer carries a record-action switch at all: the row
-    // actions are the Links island's own controls (web/test/links/rows.test.tsx
-    // pins which ones a row offers).
-    expect(script).not.toContain("function onLinksTableClick(");
-    expect(script).not.toMatch(/case "(copy|qr|metrics|edit|save-client-ref|save-destination|save-branch|toggle|toggle-gate|delete|queue-print|unqueue-print)":/);
   });
 });
 
@@ -1104,7 +777,7 @@ describe("the served client script parses", () => {
   it("is valid JavaScript", async () => {
     const html = await serve();
     const blocks = inlineScripts(html);
-    const client = blocks.find((b) => b.includes("create-form"));
+    const client = blocks.find((b) => b.includes(CLIENT_SCRIPT_MARKER));
     expect(client).toBeDefined();
 
     let error: unknown = null;
@@ -1136,46 +809,9 @@ describe("the served client script parses", () => {
     // one pins that no window.prompt with multi-line text came back.
     const html = await serve();
     const blocks = inlineScripts(html);
-    const client = blocks.find((b) => b.includes("create-form"))!;
+    const client = blocks.find((b) => b.includes(CLIENT_SCRIPT_MARKER))!;
 
     expect(client).not.toMatch(/window\.prompt\("[^"]*\n/);
-  });
-});
-
-describe("a bulk batch can carry one label", () => {
-  it("asks for a label beside the count", async () => {
-    const html = await serve();
-
-    expect(html).toContain('id="bulk-label"');
-    expect(html).toContain("Label for this batch");
-  });
-
-  it("says the label reaches the card AND the CSV", async () => {
-    const html = await serve();
-
-    // The CSV is what the designer reads while laying out the sheet. A label
-    // that reaches only the card would still leave ten identical stickers and
-    // a blank column.
-    expect(html).toMatch(/CSV/);
-    expect(html).toMatch(/designer/i);
-  });
-
-  it("applies ONE label to every card in the batch", async () => {
-    const script = await clientScript();
-
-    // Ten stickers for the main room is one decision, not ten. Asking for a
-    // label per card would make a batch a form again.
-    expect(script).toContain("client_ref: label");
-    expect(script).toContain("Array.from({ length: count }");
-  });
-
-  it("treats an empty label as no label at all", async () => {
-    const script = await clientScript();
-
-    // A blank input must not produce ten cards carrying a blank identifier —
-    // that is a value that looks like data and is not.
-    expect(script).toContain("...(label ? { client_ref: label } : {})");
-    expect(script).toContain(".value.trim()");
   });
 });
 
@@ -1424,22 +1060,6 @@ describe("the feedback inbox, when the server refuses", () => {
 // to the destination. Unchecked is the default everywhere.
 // ---------------------------------------------------------------------------
 
-describe("review screen checkbox", () => {
-  it("is on the create form, unchecked by default", async () => {
-    const html = await serve();
-    const box = html.match(/<input[^>]*id="gated"[^>]*>/)?.[0] ?? "";
-    expect(box).toContain('type="checkbox"');
-    expect(box).not.toContain("checked");
-  });
-
-  it("sends the choice with the create request", async () => {
-    const script = await clientScript();
-    expect(script).toContain('is_gated: document.getElementById("gated").checked');
-  });
-  // The row checkbox is the Links island's (web/test/links/rows.test.tsx, edits.test.tsx).
-});
-
-
 // ---------------------------------------------------------------------------
 // Full-width layout (odd/tasks/review-screen-refresh.md, S5)
 //
@@ -1490,9 +1110,10 @@ describe("sidebar sections (odd/tasks/print-queue-cards.md S1)", () => {
     expect(overview).toContain('id="traffic-card"');
     expect(overview).toContain('id="clients-card"');
     const links = section(html, "links");
-    expect(links).toContain('id="create-form"');
-    // The table is drawn into #links-card by the Links island.
-    expect(links).toContain('id="links-card" data-island="links"');
+    // The whole section's content is the Links island's (create form, bulk
+    // cards, table, QR modal); the server paints the table card first.
+    expect(links).toContain('<div id="links-root" data-island="links"');
+    expect(links).toContain('id="links-card"');
     expect(section(html, "cards")).toContain('id="cards-root"');
     expect(section(html, "businesses")).toContain('id="businesses-card"');
     expect(section(html, "comments")).toContain('id="feedback-card"');
@@ -1866,10 +1487,13 @@ describe("Links island handoff", () => {
       "onLinksTableClick", "renderLinkRow", "loadLinks", "renderVisitors", "repaintLink", "toggleLink",
       "setGated", "saveClientRef", "saveDestination", "saveBranch", "fillBranchSelects", "openEditor",
       "showMetrics", "deleteLink", "copyUrl", "setPrintQueued", "showQueuedState", "syncPrintQueue",
-      "renderPrintQueue", "clearPrintQueue",
+      "renderPrintQueue", "clearPrintQueue", "showQR",
     ]) {
       expect(script, fn).not.toMatch(new RegExp(`function ${fn}\\(`));
     }
+    // No record-action switch either: the row actions are the island's own
+    // controls (web/test/links/rows.test.tsx pins which ones a row offers).
+    expect(script).not.toMatch(/case "(copy|qr|metrics|edit|save-client-ref|save-destination|save-branch|toggle|toggle-gate|delete|queue-print|unqueue-print)":/);
     // The queue is the bundle's (web/src/print-queue.ts) and the page never
     // sets it, so the two cannot disagree.
     expect(script).not.toMatch(/window\.__printQueue\s*=/);
@@ -1885,12 +1509,23 @@ describe("Links island handoff", () => {
     expect(script).not.toContain("/api/links/printed");
   });
 
-  it("lends the island the client rollup refresh and the QR modal", async () => {
+  it("lends the island the client rollup refresh, and no longer a QR modal", async () => {
     const script = codeOnly(await clientScript());
 
     expect(script).toContain("window.__refreshClientsCard = refreshClientsCard;");
-    expect(script).toContain("window.__showQR = showQR;");
-    expect(script).toMatch(/function showQR\(url\)/);
+    // The QR modal is the island's (web/test/links/qr.test.tsx).
+    expect(script).not.toContain("__showQR");
+  });
+
+  it("keeps everything the remaining legacy code calls", async () => {
+    const script = codeOnly(await clientScript());
+
+    // refreshOwnership still reloads the table through the island's bridge,
+    // and the bootstrap still finds the boot loaders it calls by name.
+    expect(extractFunction(script, "refreshOwnership")).toContain("if (window.__loadLinks) window.__loadLinks();");
+    for (const fn of ["loadBranches", "loadFeedbackEmail", "loadFeedbackInbox", "loadHourlyTraffic", "refreshClientsCard", "showSection", "esc"]) {
+      expect(script, fn).toMatch(new RegExp(`function ${fn}\\(`));
+    }
   });
 
   describe("window.__renderOverviewCards", () => {

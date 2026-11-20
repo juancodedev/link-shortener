@@ -36,6 +36,8 @@ export type LinkRowProps = {
   onRepaint: (id: string, changes: Partial<Link>) => void;
   /** Reloads the whole table (after a delete). */
   onReload: () => void;
+  /** Opens the QR modal for this raw short URL (the modal encodes it, exactly once). */
+  onShowQR: (shortUrl: string) => void;
 };
 
 const PATCH = (id: string, body: Record<string, unknown>) =>
@@ -47,7 +49,7 @@ function linkStatus(l: Link): "inactive" | "expired" | "active" {
   return "active";
 }
 
-export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePanel, onEdit, onRepaint, onReload }: LinkRowProps) {
+export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePanel, onEdit, onRepaint, onReload, onShowQR }: LinkRowProps) {
   const shortUrl = l.short_url || "";
   const [clientRef, setClientRef] = useState(l.client_ref ?? "");
   const [destination, setDestination] = useState(l.original_url ?? "");
@@ -284,8 +286,8 @@ export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePane
                     className="btn-sm"
                     onClick={(e) => {
                       e.stopPropagation();
-                      // Raw: the legacy modal encodes exactly once.
-                      window.__showQR?.(shortUrl);
+                      // Raw: the modal encodes exactly once.
+                      onShowQR(shortUrl);
                     }}
                   >
                     QR code

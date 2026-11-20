@@ -15,7 +15,10 @@ describe("Links island — mounting", () => {
   it("is registered under the name its placeholder carries, and reads the plan limit from it", async () => {
     installLegacy();
     standardApi({ links: [] });
-    document.body.innerHTML = '<div class="card no-print" id="links-card" data-island="links" data-link-limit="50"></div>';
+    // The served mount (src/handlers/dashboard.ts): the island fills the whole
+    // Links section, so its own #links-card is the only one on the page.
+    document.body.innerHTML =
+      '<section class="dash-section" data-section="links"><div id="links-root" data-island="links" data-link-limit="50"></div></section>';
     const { ISLANDS } = await import("../../src/registry");
     const { mountIslands } = await import("../../src/islands");
 
@@ -27,6 +30,8 @@ describe("Links island — mounting", () => {
 
     expect(Object.keys(ISLANDS)).toContain("links");
     expect(document.querySelector("#links-card h3")!.textContent).toBe("Your Links (0/50)");
+    expect(document.querySelectorAll("#links-card")).toHaveLength(1);
+    expect(document.querySelector('[data-section="links"] #create-form')).not.toBeNull();
     act(() => roots.forEach((r) => r.unmount()));
   });
 

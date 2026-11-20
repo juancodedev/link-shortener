@@ -55,8 +55,12 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     design; nothing else goes here.
   -->
   <script type="application/json" id="dashboard-config">${configJson({ supabaseUrl, supabaseAnonKey })}</script>
-  <!-- The shell (auth, API helper, tenant picker, sidebar routing) and every
-       section are the React bundle (web/, odd/tasks/dashboard-react.md). -->
+  <!-- The sidebar routing first, as its own tiny module: module scripts run
+       in document order, so a deep link such as #cards opens its section
+       without waiting for the bundle (web/src/routing-entry.ts). -->
+  <script type="module" src="/assets/routing.js"></script>
+  <!-- The shell (auth, API helper, tenant picker) and every section are the
+       React bundle (web/, odd/tasks/dashboard-react.md). -->
   <script type="module" src="/assets/dashboard.js"></script>
 </body>
 </html>`;

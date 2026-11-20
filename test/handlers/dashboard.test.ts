@@ -298,9 +298,11 @@ describe("the served document", () => {
 
     expect(all.map((s) => s.attrs.trim())).toEqual([
       'type="application/json" id="dashboard-config"',
+      'type="module" src="/assets/routing.js"',
       'type="module" src="/assets/dashboard.js"',
     ]);
     expect(all[1]!.body).toBe("");
+    expect(all[2]!.body).toBe("");
     expect(html).not.toMatch(/<[^>]+\son[a-z]+=/i);
   });
 

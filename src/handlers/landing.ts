@@ -1,5 +1,6 @@
 import type { Handler } from "hono";
 import type { AppEnv } from "../types/env";
+import { SUPABASE_JS_SCRIPT } from "./supabase-cdn";
 
 /**
  * Serves the landing page at `GET /`.
@@ -312,7 +313,7 @@ export const landingHandler: Handler<{ Bindings: AppEnv }> = (c) => {
     Built with Cloudflare Workers + Supabase
   </footer>
 
-  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  ${SUPABASE_JS_SCRIPT}
   <script>
     (async () => {
       if (!window.supabase) return;

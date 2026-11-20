@@ -1,5 +1,6 @@
 import type { Handler } from "hono";
 import type { AppEnv, HonoVars } from "../types/env";
+import { SUPABASE_JS_SCRIPT } from "./supabase-cdn";
 import { escapeHtml } from "./action-screen";
 import { MAX_CLIENT_REF_LENGTH } from "../api/links";
 
@@ -113,7 +114,7 @@ export function renderSetupPage(params: {
   </form>
   <small>C&oacute;digo <code>${code}</code></small>
 </main>
-<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+${SUPABASE_JS_SCRIPT}
 <script>
   (async function () {
     var CODE = ${scriptValue(params.code)};

@@ -84,7 +84,13 @@ function codeOnly(script: string): string {
 
 /** Markup with its HTML comments removed, so a test reads only the elements. */
 function codeOnlyHtml(html: string): string {
-  return html.replace(/<!--[\s\S]*?-->/g, "");
+  let previous: string;
+  let current = html;
+  do {
+    previous = current;
+    current = current.replace(/<!--[\s\S]*?-->/g, "");
+  } while (current !== previous);
+  return current;
 }
 
 /** Extracts a named `function foo(...) {...}` by brace matching. */

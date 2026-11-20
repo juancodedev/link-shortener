@@ -211,7 +211,7 @@ Every mutation flushes the tenant's `reg:{code}` KV entries so the change takes 
 | `GET` | `/api/clients/metrics` | Per-`client_ref` visitor rollup |
 | `GET` | `/api/traffic/hourly` | Scans per local hour of the day (last 30 days, `America/Santiago`), always 24 buckets |
 | `GET` | `/api/links/print-queue` | Links waiting to be printed (oldest first), with the short URL each QR encodes |
-| `POST` | `/api/links/printed` | Take printed links out of the queue: `{ ids }` (max 200) → `{ cleared }` |
+| `POST` | `/api/links/printed` | Record a print run: `{ ids }` (max 200) → `{ printed }`. Stamps `printed_at` and clears any queued flag; the link can be printed again |
 | `GET` | `/api/review-gate/feedback` | What customers wrote, newest first. Filters: `business_id`, `location_id`, `since` |
 | `GET` | `/api/review-gate/feedback.csv` | The same, as a download (same filters) |
 | `GET` | `/api/review-gate/metrics` | Action-screen views, sentiment, derivation rate |

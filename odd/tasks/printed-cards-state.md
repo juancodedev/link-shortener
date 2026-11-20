@@ -15,8 +15,8 @@ Branch: `feat/printed-cards-state` · Delivery: one PR, one commit per work unit
 
 | ID | Specs | Route | Risk | Status | Commit |
 |----|-------|-------|------|--------|--------|
-| T1 | S5 | inline | item 1 (migration on every tenant schema) | pending | — |
-| T2 | S1, S2, S3 | inline | — | pending | — |
+| T1 | S5 | inline | item 1 (migration on every tenant schema) | done | `feat(db): record printed_at on tenant links` |
+| T2 | S1, S2, S3 | inline | — | done | `feat(api): stamp printed_at when a print run is recorded` |
 | T3 | S4 | inline | — | pending | — |
 | T4 | S1, S2, S3 | inline | — | pending | — |
 

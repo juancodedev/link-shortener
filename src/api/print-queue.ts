@@ -6,12 +6,17 @@ import { ValidationError } from "../middleware/error";
 import { isUuid } from "../utils/validation";
 
 // ---------------------------------------------------------------------------
-// The print queue (odd/tasks/print-queue-cards.md S2-S3)
+// The print queue (odd/tasks/print-queue-cards.md S2-S3,
+// odd/tasks/printed-cards-state.md S1-S5)
 //
 // A link is queued with PATCH /api/links/:id { print_queued: true } and leaves
 // the queue with { print_queued: false }, when a destination is saved on it,
 // or in a batch through POST /api/links/printed after the sheet is printed.
 // The queue itself is the set of links with a non-NULL `print_queued_at`.
+//
+// The dashboard's queue lives in the page, so the batch call is what survives
+// a reload: it stamps `printed_at` on the links it was given, which is the
+// "this card was printed" the Links table shows.
 // ---------------------------------------------------------------------------
 
 /** Most ids one "Mark as printed" may clear: several full A3 sheets. */
@@ -53,10 +58,17 @@ export const listPrintQueue: Handler<{ Bindings: AppEnv; Variables: HonoVars }> 
 };
 
 /**
- * POST /api/links/printed { ids } — takes the printed links out of the queue.
+ * POST /api/links/printed { ids } — records a print run.
  *
- * Ids that are not queued (already cleared, configured meanwhile, or another
- * tenant's) are simply not counted: `cleared` is what actually left the queue.
+ * Stamps `printed_at = NOW()` on every link in the batch and clears any
+ * `print_queued_at` left over from the old server-side queue. Printing is not
+ * irreversible — a card gets lost or torn — so this only records the run: the
+ * same link can be sent to print again and the date moves forward.
+ *
+ * The queue is page state now, so ids arrive without a queued flag in the
+ * database; `where print_queued_at is not null` would match nothing. Ids that
+ * do not exist (deleted, or another tenant's) are simply not counted:
+ * `printed` is what actually changed.
  */
 export const markPrinted: Handler<{ Bindings: AppEnv; Variables: HonoVars }> = async (c) => {
   let body: { ids?: unknown };
@@ -78,17 +90,16 @@ export const markPrinted: Handler<{ Bindings: AppEnv; Variables: HonoVars }> = a
   }
 
   const table = qualifyTable(c.get("tenant").schemaName, "links");
-  const cleared = await withClient(c.env, async (client) => {
+  const printed = await withClient(c.env, async (client) => {
     const res = await client.query<{ id: string }>(
       `UPDATE ${table}
-          SET print_queued_at = NULL
+          SET printed_at = NOW(), print_queued_at = NULL
         WHERE id = ANY($1::uuid[])
-          AND print_queued_at IS NOT NULL
         RETURNING id`,
       [ids],
     );
     return res.rows.length;
   });
 
-  return c.json({ cleared });
+  return c.json({ printed });
 };

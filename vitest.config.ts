@@ -12,7 +12,13 @@ export default defineConfig({
             wrangler: { configPath: "./wrangler.jsonc" },
           }),
         ],
-        test: { name: "worker", include: ["test/**/*.test.ts"] },
+        test: {
+          name: "worker",
+          include: ["test/**/*.test.ts"],
+          // The stylesheet tests read web/src/dashboard.css as text (?raw);
+          // vitest blanks CSS modules unless they are processed.
+          css: { include: [/web\/src\/dashboard\.css/] },
+        },
       },
       {
         // The dashboard's React islands, in a browser-like DOM.

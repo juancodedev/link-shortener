@@ -1,3 +1,4 @@
+import "./dashboard.css";
 import { loadBranches } from "./branches/store";
 import { mountIslands } from "./islands";
 import { ISLANDS } from "./registry";

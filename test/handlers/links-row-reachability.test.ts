@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { dashboardHandler } from "../../src/handlers/dashboard";
+import { DASHBOARD_CSS } from "./dashboard-stylesheet";
 
 // ---------------------------------------------------------------------------
 // Links row reachability.
@@ -33,6 +34,6 @@ async function serve(): Promise<string> {
 
 describe("narrow screens hide informational columns, never the actions", () => {
   it("applies only below 768px", async () => {
-    expect(await serve()).toMatch(/@media \(max-width: 767px\)\s*\{\s*\.hide-sm\s*\{\s*display:\s*none;?\s*\}/);
+    expect(DASHBOARD_CSS).toMatch(/@media \(max-width: 767px\)\s*\{\s*\.hide-sm\s*\{\s*display:\s*none;?\s*\}/);
   });
 });

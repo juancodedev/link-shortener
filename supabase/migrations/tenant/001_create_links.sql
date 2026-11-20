@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS {schema}.links (
     location_id  UUID,                              -- public.locations(id), NULL = unassigned
     is_gated     BOOLEAN DEFAULT false NOT NULL,    -- false = plain 302, true = action screen
     print_queued_at TIMESTAMPTZ,                    -- NULL = not in the print queue
+    printed_at   TIMESTAMPTZ,                       -- NULL = never printed; the last run's date
     clicks_count INTEGER DEFAULT 0 NOT NULL,
     is_active    BOOLEAN DEFAULT true NOT NULL,
     expires_at   TIMESTAMPTZ,                       -- NULL = never expires

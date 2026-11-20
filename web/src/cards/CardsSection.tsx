@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import type { QueueItem } from "../legacy";
+import { clearPrintQueue, setPrintQueued, type QueueItem } from "../print-queue";
 import { CARD_MM, computeSheetLayout, presetForSize, SHEET_PRESETS, sheetPresetSize } from "./sheet";
 import { reloadLinks } from "../links/reload";
 import { usePrintQueue } from "./usePrintQueue";
@@ -149,7 +149,7 @@ export function CardsSection() {
         // One request per print run, never one per card: the queue itself is
         // page state, and this is what survives a reload.
         await api("POST", "/api/links/printed", { ids: queue.map((item) => item.id) });
-        window.__clearPrintQueue();
+        clearPrintQueue();
         // The rows carry the new printed_at: reload once, not per card.
         void reloadLinks();
       } catch (err) {
@@ -212,7 +212,7 @@ export function CardsSection() {
         {queue.map((item) => (
           <li key={item.id}>
             <span className="code">{item.short_code}</span>
-            <button type="button" className="btn-sm btn-outline" onClick={() => window.__setPrintQueued(item.id, false)}>
+            <button type="button" className="btn-sm btn-outline" onClick={() => setPrintQueued(item.id, false)}>
               Quitar
             </button>
           </li>

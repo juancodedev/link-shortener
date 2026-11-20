@@ -1,11 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PRINT_QUEUE_EVENT } from "../src/legacy";
 import {
   clearPrintQueue,
   getPrintQueue,
-  installPrintQueue,
   prunePrintQueue,
   setPrintQueued,
+  subscribePrintQueue,
 } from "../src/print-queue";
 import { stubApi } from "./api-stub";
 
@@ -13,22 +12,22 @@ import { stubApi } from "./api-stub";
 // (odd/tasks/dashboard-react.md T3a). These pin what the legacy
 // setPrintQueued / syncPrintQueue / clearPrintQueue / renderPrintQueue did
 // (formerly compiled out of the served HTML in test/handlers/dashboard.test.ts,
-// "print queue as page state"), plus the window contract the Cards island reads.
+// "print queue as page state"). Every reader imports this module; nothing
+// about the queue is published on window.
 
 describe("print queue store", () => {
   let events = 0;
-  const onChange = () => events++;
+  let stop = () => {};
 
   beforeEach(() => {
     document.body.innerHTML = '<span id="cards-count" class="side-count" hidden></span>';
-    installPrintQueue();
     clearPrintQueue();
     events = 0;
-    window.addEventListener(PRINT_QUEUE_EVENT, onChange);
+    stop = subscribePrintQueue(() => events++);
   });
 
   afterEach(() => {
-    window.removeEventListener(PRINT_QUEUE_EVENT, onChange);
+    stop();
     document.body.innerHTML = "";
   });
 
@@ -77,19 +76,20 @@ describe("print queue store", () => {
     expect(events).toBe(1);
   });
 
-  it("publishes the window contract the Cards island and the legacy page use", () => {
-    expect(window.__setPrintQueued).toBe(setPrintQueued);
-    expect(window.__clearPrintQueue).toBe(clearPrintQueue);
+  it("puts nothing on window: the migration bridge is gone", () => {
+    setPrintQueued("a", true, "AAA");
 
-    window.__setPrintQueued("a", true, "AAA");
-    expect(window.__printQueue).toEqual([{ id: "a", short_code: "AAA" }]);
+    for (const name of ["__printQueue", "__setPrintQueued", "__clearPrintQueue"]) {
+      expect(name in window).toBe(false);
+    }
+  });
 
-    // A reader that edits its copy cannot corrupt the queue.
-    window.__printQueue.push({ id: "x", short_code: "X" });
-    expect(getPrintQueue()).toEqual([{ id: "a", short_code: "AAA" }]);
+  it("hands out a new array on every change, never the same one edited", () => {
+    const before = getPrintQueue();
+    setPrintQueued("a", true, "AAA");
 
-    window.__clearPrintQueue();
-    expect(window.__printQueue).toEqual([]);
+    expect(getPrintQueue()).not.toBe(before);
+    expect(before).toEqual([]);
   });
 
   it("shows the queue size in the sidebar badge, hidden when empty", () => {

@@ -35,17 +35,13 @@ describe("Links island — mounting", () => {
     act(() => roots.forEach((r) => r.unmount()));
   });
 
-  it("lends the print queue to the page before any island mounts", async () => {
+  it("publishes no print-queue globals when the islands load", async () => {
     document.body.innerHTML = '<span id="cards-count" hidden></span>';
-    const w = window as unknown as Record<string, unknown>;
-    delete w.__setPrintQueued;
-    delete w.__clearPrintQueue;
-    delete w.__printQueue;
 
     await import("../../src/registry");
 
-    expect(typeof window.__setPrintQueued).toBe("function");
-    expect(typeof window.__clearPrintQueue).toBe("function");
-    expect(window.__printQueue).toEqual([]);
+    for (const name of ["__printQueue", "__setPrintQueued", "__clearPrintQueue"]) {
+      expect(name in window).toBe(false);
+    }
   });
 });

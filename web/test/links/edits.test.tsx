@@ -593,7 +593,7 @@ describe("print queue in the table", () => {
     await openPanel("a");
 
     act(() => {
-      window.__clearPrintQueue();
+      clearPrintQueue();
     });
 
     expect(button(row("a"), "Enviar a imprimir")).toBeDefined();

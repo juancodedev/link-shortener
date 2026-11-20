@@ -677,6 +677,7 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
     .gap-top-sm { margin-top: 0.5rem; }
     .report-actions { display: flex; justify-content: flex-end; margin-bottom: 0.75rem; }
     .badge-queued { background: var(--stale-wash); color: var(--stale); }
+    .badge-printed { background: var(--live-wash); color: var(--live); }
     .badge[hidden] { display: none; }
     /* Cards section (odd/tasks/print-queue-cards.md S4-S6). Sheets and cards
        are sized in millimetres, so the preview is the print at a zoom. */

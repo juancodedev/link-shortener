@@ -50,6 +50,13 @@ function linkStatus(l: Link): "inactive" | "expired" | "active" {
   return "active";
 }
 
+/** "Printed 19 Nov 2026, 12:00" — the run behind the badge, kept out of the cell. */
+function printedTitle(iso: string): string {
+  const when = new Date(iso);
+  if (Number.isNaN(when.getTime())) return `Printed ${iso}`;
+  return `Printed ${when.toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}`;
+}
+
 export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePanel, onEdit, onRepaint, onReload, onShowQR }: LinkRowProps) {
   const shortUrl = l.short_url || "";
   const [clientRef, setClientRef] = useState(l.client_ref ?? "");
@@ -239,8 +246,15 @@ export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePane
           {l.original_url ? null : (
             <>
               {" "}
-              <span className="badge badge-queued" data-print-badge={l.id} hidden={!queued}>
-                To print
+              {/* One badge, two states: waiting wins over a past run, because
+                  the pending action is what the owner has to do next. */}
+              <span
+                className={`badge ${queued ? "badge-queued" : "badge-printed"}`}
+                data-print-badge={l.id}
+                hidden={!queued && !l.printed_at}
+                title={!queued && l.printed_at ? printedTitle(l.printed_at) : undefined}
+              >
+                {!queued && l.printed_at ? "Printed" : "To print"}
               </span>
             </>
           )}

@@ -1,7 +1,7 @@
-import { cleanup } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
 import { VISITOR_ESTIMATE_CAVEAT } from "../../../src/analytics/metrics";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { installLegacy, link, mountLinks, panel, row, standardApi } from "./harness";
+import { installLegacy, link, mountLinks, panel, row, settle, standardApi } from "./harness";
 
 // What one link renders: its row and its editing panel. Ported from the
 // Worker tests that compiled the legacy renderLinkRow out of the served HTML
@@ -156,6 +156,28 @@ describe("Links island — the row", () => {
 
     expect(text(row) + text(panel)).not.toContain("Send to print");
     expect(row.querySelector("[data-print-badge]")).toBeNull();
+  });
+
+  it("says Printed on a card that was already printed, with the run in its title", async () => {
+    const { row } = await show({ original_url: null, printed_at: "2026-11-19T12:00:00Z" });
+
+    const badge = row.querySelector('[data-print-badge="link-uuid"]') as HTMLElement;
+    expect(badge.hidden).toBe(false);
+    expect(badge.textContent).toBe("Printed");
+    expect(badge.classList.contains("badge-printed")).toBe(true);
+    expect(badge.title).toMatch(/^Printed /);
+  });
+
+  it("lets the queue badge win when a printed card is sent to print again", async () => {
+    await show({ original_url: null, printed_at: "2026-11-19T12:00:00Z" });
+
+    act(() => window.__setPrintQueued("link-uuid", true, "abc1234"));
+    await settle();
+
+    const badge = row("link-uuid").querySelector('[data-print-badge="link-uuid"]') as HTMLElement;
+    expect(badge.hidden).toBe(false);
+    expect(badge.textContent).toBe("To print");
+    expect(badge.classList.contains("badge-queued")).toBe(true);
   });
 });
 

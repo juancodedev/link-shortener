@@ -29,15 +29,15 @@ describe("busy hours chart", () => {
     expect(bars[13]!.style.height).toBe("100%");
     expect(bars[20]!.style.height).toBe("25%");
     expect(bars[0]!.style.height).toBe("0%");
-    expect(bars[13]!.title).toBe("13:00 · 40 scans");
+    expect(bars[13]!.title).toBe("13:00 · 40 escaneos");
   });
 
   it("names the busiest hour and says whose clock and which period", () => {
     const { container } = chart(payload({ 13: 40, 20: 10 }));
 
-    expect(container.querySelector(".hour-summary")!.textContent).toBe("Busiest hour: 13:00–14:00 (40 scans)");
+    expect(container.querySelector(".hour-summary")!.textContent).toBe("Hora más concurrida: 13:00–14:00 (40 escaneos)");
     expect(container.querySelector(".estimate-note")!.textContent).toBe(
-      "Last 30 days · America/Santiago time. Every scan counts, including repeat scans.",
+      "Últimos 30 días · hora de America/Santiago. Cuenta cada escaneo, incluidos los repetidos.",
     );
     expect([...container.querySelectorAll(".peak-axis span")].map((s) => s.textContent)).toEqual([
       "00:00",
@@ -50,19 +50,19 @@ describe("busy hours chart", () => {
 
   it("wraps the busiest hour past midnight", () => {
     const { container } = chart(payload({ 23: 5 }));
-    expect(container.querySelector(".hour-summary")!.textContent).toBe("Busiest hour: 23:00–00:00 (5 scans)");
+    expect(container.querySelector(".hour-summary")!.textContent).toBe("Hora más concurrida: 23:00–00:00 (5 escaneos)");
   });
 
   it("explains the empty state instead of drawing 24 flat bars", () => {
     const { container, html } = chart(payload({}));
 
-    expect(container.querySelector(".gate-empty")!.textContent).toBe("No scans in the last 30 days yet.");
+    expect(container.querySelector(".gate-empty")!.textContent).toBe("Aún no hay escaneos en los últimos 30 días.");
     expect(html).not.toContain("hour-bar");
   });
 
   it("treats a payload without hours as empty", () => {
     const { container } = chart({ window: "30 days" });
-    expect(container.querySelector(".gate-empty")!.textContent).toBe("No scans in the last 30 days yet.");
+    expect(container.querySelector(".gate-empty")!.textContent).toBe("Aún no hay escaneos en los últimos 30 días.");
   });
 
   it("prints the time zone and window as text, never as markup", () => {

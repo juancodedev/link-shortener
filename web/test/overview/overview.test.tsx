@@ -113,11 +113,11 @@ describe("Overview island — loading", () => {
 
     const ids = [...container.querySelectorAll(".card")].map((c) => c.id);
     expect(ids).toEqual(["gate-card", "traffic-card", "clients-card"]);
-    expect(card("gate-card").querySelector("h3")!.textContent).toBe("Customer satisfaction");
-    expect(card("traffic-card").querySelector("h3")!.textContent).toBe("Busy hours");
-    expect(card("clients-card").querySelector("h3")!.textContent).toBe("Stores by Client Ref");
+    expect(card("gate-card").querySelector("h3")!.textContent).toBe("Satisfacción de clientes");
+    expect(card("traffic-card").querySelector("h3")!.textContent).toBe("Horas concurridas");
+    expect(card("clients-card").querySelector("h3")!.textContent).toBe("Locales por referencia de cliente");
     expect(card("gate-body").textContent).toContain("76.9%");
-    expect(card("traffic-body").querySelector(".hour-summary")!.textContent).toBe("Busiest hour: 13:00–14:00 (40 scans)");
+    expect(card("traffic-body").querySelector(".hour-summary")!.textContent).toBe("Hora más concurrida: 13:00–14:00 (40 escaneos)");
     expect(shown("gate-card") && shown("traffic-card") && shown("clients-card")).toBe(true);
   });
 });
@@ -167,7 +167,7 @@ describe("Overview island — each card degrades on its own", () => {
     await mountOverview();
 
     expect(shown("traffic-card")).toBe(true);
-    expect(card("traffic-body").textContent).toBe("No scans in the last 30 days yet.");
+    expect(card("traffic-body").textContent).toBe("Aún no hay escaneos en los últimos 30 días.");
   });
 
   it("hides the clients card when the rollup cannot be read, and keeps the others", async () => {
@@ -211,9 +211,9 @@ describe("Overview island — the client rollup", () => {
     ]);
     expect(card("clients-body").querySelector("td .code")!.textContent).toBe("ACME-0042");
     expect([...card("clients-card").querySelectorAll("thead th")].map((th) => th.textContent)).toEqual([
-      "Client Ref",
-      "Unique Visitors",
-      "Sessions",
+      "Referencia de cliente",
+      "Visitantes únicos",
+      "Sesiones",
     ]);
   });
 
@@ -241,7 +241,7 @@ describe("Overview island — the client rollup", () => {
     );
     const cell = container.querySelector("td.empty-cell")!;
     expect(cell.getAttribute("colspan")).toBe("3");
-    expect(cell.textContent).toBe("No client identifiers yet — set one on a link to see store-level visitors.");
+    expect(cell.textContent).toBe("Aún no hay referencias de cliente: asigna una a un enlace para ver los visitantes por local.");
   });
 });
 
@@ -263,7 +263,7 @@ describe("Overview island — stays in step with the Links section", () => {
     expect(count(calls, "GET", "/api/review-gate/metrics")).toBe(2);
     expect(count(calls, "GET", "/api/clients/metrics")).toBe(2);
     expect(count(calls, "GET", "/api/traffic/hourly")).toBe(1);
-    expect(card("gate-body").textContent).toContain("from 13 of 20");
+    expect(card("gate-body").textContent).toContain("según 13 de 20");
     expect(card("clients-body").textContent).toContain("NEW-1");
   });
 
@@ -359,7 +359,7 @@ describe("Overview island — the printable report", () => {
     const button = card("print-report") as HTMLButtonElement;
     expect(button.type).toBe("button");
     expect(button.className).toBe("btn-sm btn-outline");
-    expect(button.textContent).toBe("Print report");
+    expect(button.textContent).toBe("Imprimir informe");
     expect(button.querySelector("svg.icon")!.getAttribute("aria-hidden")).toBe("true");
     // The control is not part of what gets printed.
     expect(button.closest(".report-actions.no-print")).not.toBeNull();

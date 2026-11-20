@@ -91,11 +91,11 @@ describe("Businesses island — the card", () => {
     businessesApi();
     render(<BusinessesSection />);
 
-    expect(el("businesses-card").querySelector("h3")!.textContent).toBe("Businesses and branches");
-    expect(el("businesses-body").textContent).toBe("Loading...");
+    expect(el("businesses-card").querySelector("h3")!.textContent).toBe("Locales y sucursales");
+    expect(el("businesses-body").textContent).toBe("Cargando…");
     expect(input("new-business-name").maxLength).toBe(120);
-    expect(input("new-business-name").placeholder).toBe("e.g. Café Central");
-    expect(el("add-business").textContent).toBe("Add");
+    expect(input("new-business-name").placeholder).toBe("p. ej. Café Central");
+    expect(el("add-business").textContent).toBe("Agregar");
   });
 
   it("groups each branch under its business, with its link count and a field to add one more", async () => {
@@ -104,30 +104,30 @@ describe("Businesses island — the card", () => {
 
     const central = group("Café Central");
     expect([...central.querySelectorAll(".biz-branch")].map((l) => l.querySelector("span")!.textContent)).toEqual([
-      "Providencia 3 links ",
-      "Vieja 0 links Inactive",
+      "Providencia 3 enlaces ",
+      "Vieja 0 enlaces Inactivo",
     ]);
-    expect(input("new-branch-biz-1").placeholder).toBe("New branch, e.g. Providencia");
+    expect(input("new-branch-biz-1").placeholder).toBe("Nueva sucursal, p. ej. Providencia");
     expect(input("new-branch-biz-1").maxLength).toBe(120);
-    expect(buttonIn(central, "Add")).toBeDefined();
+    expect(buttonIn(central, "Agregar")).toBeDefined();
   });
 
   it("says a business has no branches yet", async () => {
     businessesApi();
     await mount();
 
-    expect(group("Sabores").querySelector(".biz-branches")!.textContent).toBe("No branches yet.");
+    expect(group("Sabores").querySelector(".biz-branches")!.textContent).toBe("Aún no hay sucursales.");
   });
 
   it("lists branches without a business separately, so they can be moved into one", async () => {
     businessesApi();
     await mount();
 
-    const loose = group("Not in a business");
+    const loose = group("Sin local");
     expect(loose.querySelector(".biz-branch")!.textContent).toContain("Cards");
     // Into any active business; there is no business to leave.
     expect([...input("move-loc-9").options].map((o) => [o.value, o.text])).toEqual([
-      ["", "Move to…"],
+      ["", "Mover a…"],
       ["biz-1", "Café Central"],
       ["biz-2", "Sabores"],
     ]);
@@ -140,9 +140,9 @@ describe("Businesses island — the card", () => {
     await mount();
 
     expect([...input("move-loc-1").options].map((o) => [o.value, o.text])).toEqual([
-      ["", "Move to…"],
+      ["", "Mover a…"],
       ["biz-2", "Sabores"],
-      ["none", "No business"],
+      ["none", "Sin local"],
     ]);
   });
 
@@ -150,12 +150,12 @@ describe("Businesses island — the card", () => {
     businessesApi();
     await mount();
 
-    expect(buttonIn(group("Café Central").querySelector(".biz-name")!, "Deactivate")).toBeDefined();
-    expect(buttonIn(group("Cerrado").querySelector(".biz-name")!, "Activate")).toBeDefined();
-    expect(group("Cerrado").querySelector(".biz-name .field-note")!.textContent).toBe("Inactive");
+    expect(buttonIn(group("Café Central").querySelector(".biz-name")!, "Desactivar")).toBeDefined();
+    expect(buttonIn(group("Cerrado").querySelector(".biz-name")!, "Activar")).toBeDefined();
+    expect(group("Cerrado").querySelector(".biz-name .field-note")!.textContent).toBe("Inactivo");
     expect(group("Café Central").querySelector(".biz-name .field-note")).toBeNull();
-    expect(buttonIn(branchLine("Providencia"), "Deactivate")).toBeDefined();
-    expect(buttonIn(branchLine("Vieja"), "Activate")).toBeDefined();
+    expect(buttonIn(branchLine("Providencia"), "Desactivar")).toBeDefined();
+    expect(buttonIn(branchLine("Vieja"), "Activar")).toBeDefined();
   });
 
   it("renders business and branch names as text", async () => {
@@ -173,16 +173,16 @@ describe("Businesses island — the card", () => {
     businessesApi({ branches: [], businesses: [] });
     await mount();
 
-    expect(el("businesses-body").textContent).toBe("No businesses yet. Add the first one above.");
+    expect(el("businesses-body").textContent).toBe("Aún no hay locales. Agrega el primero arriba.");
   });
 
   it("says it could not load instead of drawing an empty card", async () => {
     installApi(() => {
-      throw new Error("Server error");
+      throw new Error("Error del servidor");
     });
     await mount();
 
-    expect(el("businesses-body").textContent).toBe("Could not load businesses.");
+    expect(el("businesses-body").textContent).toBe("No se pudieron cargar los locales.");
   });
 });
 
@@ -214,7 +214,7 @@ describe("Businesses island — actions", () => {
 
   it.each([
     ["the server's own error", new Response(JSON.stringify({ error: "Name taken" }), { status: 400 }), "Name taken"],
-    ["a fallback when the body is not JSON", new Response("nope", { status: 500 }), "Could not add the business."],
+    ["a fallback when the body is not JSON", new Response("nope", { status: 500 }), "No se pudo agregar el local."],
   ])("shows %s when adding a business is refused, and keeps the name", async (_case, refusal, text) => {
     const calls = businessesApi(undefined, () => refusal);
     await mount();
@@ -248,7 +248,7 @@ describe("Businesses island — actions", () => {
     await mount();
 
     fireEvent.change(input("new-branch-biz-2"), { target: { value: " Ñuñoa " } });
-    await click(buttonIn(group("Sabores"), "Add"));
+    await click(buttonIn(group("Sabores"), "Agregar"));
 
     expect(writes(calls)).toEqual([{ method: "POST", path: "/api/locations", body: { name: "Ñuñoa", business_id: "biz-2" } }]);
     expect(count(calls, "GET", "/api/locations")).toBe(2);
@@ -261,13 +261,13 @@ describe("Businesses island — actions", () => {
     const calls = businessesApi(undefined, () => new Response("{}", { status: 400 }));
     await mount();
 
-    await click(buttonIn(group("Sabores"), "Add"));
+    await click(buttonIn(group("Sabores"), "Agregar"));
     expect(writes(calls)).toEqual([]);
 
     fireEvent.change(input("new-branch-biz-2"), { target: { value: "Ñuñoa" } });
-    await click(buttonIn(group("Sabores"), "Add"));
+    await click(buttonIn(group("Sabores"), "Agregar"));
     expect(msg().className).toBe("message error");
-    expect(msg().textContent).toBe("Could not add the branch.");
+    expect(msg().textContent).toBe("No se pudo agregar la sucursal.");
   });
 
   it("moves a branch to another business, or out of its own with null", async () => {
@@ -275,9 +275,9 @@ describe("Businesses island — actions", () => {
     await mount();
 
     fireEvent.change(input("move-loc-1"), { target: { value: "biz-2" } });
-    await click(buttonIn(branchLine("Providencia"), "Move"));
+    await click(buttonIn(branchLine("Providencia"), "Mover"));
     fireEvent.change(input("move-loc-1"), { target: { value: "none" } });
-    await click(buttonIn(branchLine("Providencia"), "Move"));
+    await click(buttonIn(branchLine("Providencia"), "Mover"));
 
     expect(writes(calls)).toEqual([
       { method: "PATCH", path: "/api/locations/loc-1", body: { business_id: "biz-2" } },
@@ -290,7 +290,7 @@ describe("Businesses island — actions", () => {
     const calls = businessesApi();
     await mount();
 
-    await click(buttonIn(branchLine("Providencia"), "Move"));
+    await click(buttonIn(branchLine("Providencia"), "Mover"));
     expect(writes(calls)).toEqual([]);
   });
 
@@ -298,10 +298,10 @@ describe("Businesses island — actions", () => {
     const calls = businessesApi();
     await mount();
 
-    await click(buttonIn(group("Café Central").querySelector(".biz-name")!, "Deactivate"));
-    await click(buttonIn(group("Cerrado").querySelector(".biz-name")!, "Activate"));
-    await click(buttonIn(branchLine("Providencia"), "Deactivate"));
-    await click(buttonIn(branchLine("Vieja"), "Activate"));
+    await click(buttonIn(group("Café Central").querySelector(".biz-name")!, "Desactivar"));
+    await click(buttonIn(group("Cerrado").querySelector(".biz-name")!, "Activar"));
+    await click(buttonIn(branchLine("Providencia"), "Desactivar"));
+    await click(buttonIn(branchLine("Vieja"), "Activar"));
 
     expect(writes(calls)).toEqual([
       { method: "PATCH", path: "/api/businesses/biz-1", body: { is_active: false } },
@@ -313,9 +313,9 @@ describe("Businesses island — actions", () => {
   });
 
   it.each([
-    ["moving", () => buttonIn(branchLine("Providencia"), "Move"), "Could not move the branch."],
-    ["switching a business", () => buttonIn(group("Café Central").querySelector(".biz-name")!, "Deactivate"), "Could not update the business."],
-    ["switching a branch", () => buttonIn(branchLine("Providencia"), "Deactivate"), "Could not update the branch."],
+    ["moving", () => buttonIn(branchLine("Providencia"), "Mover"), "No se pudo mover la sucursal."],
+    ["switching a business", () => buttonIn(group("Café Central").querySelector(".biz-name")!, "Desactivar"), "No se pudo actualizar el local."],
+    ["switching a branch", () => buttonIn(branchLine("Providencia"), "Desactivar"), "No se pudo actualizar la sucursal."],
   ])("says so when %s is refused, and reloads nothing", async (_case, target, text) => {
     const calls = businessesApi(undefined, () => new Response("{}", { status: 500 }));
     await mount();
@@ -334,11 +334,11 @@ describe("Businesses island — actions", () => {
     businessesApi(undefined, () => (refuse ? new Response("{}", { status: 500 }) : { ok: true }));
     await mount();
 
-    await click(buttonIn(branchLine("Providencia"), "Deactivate"));
+    await click(buttonIn(branchLine("Providencia"), "Desactivar"));
     expect(msg().className).toBe("message error");
 
     refuse = false;
-    await click(buttonIn(branchLine("Providencia"), "Deactivate"));
+    await click(buttonIn(branchLine("Providencia"), "Desactivar"));
     expect(msg().className).toBe("message");
     expect(msg().textContent).toBe("");
   });

@@ -39,7 +39,7 @@ export function ClientRows({ clients }: { clients: ClientRollup[] }) {
     return (
       <tr>
         <td colSpan={3} className="empty-cell">
-          No client identifiers yet — set one on a link to see store-level visitors.
+          Aún no hay referencias de cliente: asigna una a un enlace para ver los visitantes por local.
         </td>
       </tr>
     );
@@ -75,7 +75,7 @@ const hidden = { display: "none" } as const;
 function HiddenGateCard() {
   return (
     <div className="card" id="gate-card" style={hidden}>
-      <h3>Customer satisfaction</h3>
+      <h3>Satisfacción de clientes</h3>
       <div id="gate-body"></div>
     </div>
   );
@@ -183,7 +183,7 @@ export function OverviewSection() {
       <div className="report-actions no-print">
         <button type="button" id="print-report" className="btn-sm btn-outline" onClick={() => window.print()}>
           <PrintIcon />
-          <span>Print report</span>
+          <span>Imprimir informe</span>
         </button>
       </div>
 
@@ -192,7 +192,7 @@ export function OverviewSection() {
       {gate ? (
         <GateBoundary key={gate.load}>
           <div className="card" id="gate-card">
-            <h3>Customer satisfaction</h3>
+            <h3>Satisfacción de clientes</h3>
             <div id="gate-body">
               <GatePanel payload={gate.payload} />
             </div>
@@ -205,19 +205,19 @@ export function OverviewSection() {
       {/* Same screenshot discipline: the window and the time zone are printed
           under the chart, not in a tooltip. */}
       <div className="card" id="traffic-card" style={traffic ? undefined : hidden}>
-        <h3>Busy hours</h3>
+        <h3>Horas concurridas</h3>
         <div id="traffic-body">{traffic && <HourlyTraffic payload={traffic} />}</div>
       </div>
 
       <div className="card" id="clients-card" style={clients.length > 0 ? undefined : hidden}>
-        <h3>Stores by Client Ref</h3>
+        <h3>Locales por referencia de cliente</h3>
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Client Ref</th>
-                <th>Unique Visitors</th>
-                <th>Sessions</th>
+                <th>Referencia de cliente</th>
+                <th>Visitantes únicos</th>
+                <th>Sesiones</th>
               </tr>
             </thead>
             <tbody id="clients-body">{clients.length > 0 && <ClientRows clients={clients} />}</tbody>

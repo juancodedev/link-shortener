@@ -76,7 +76,7 @@ export function BusinessesSection() {
   async function addBusiness() {
     const trimmed = name.trim();
     if (!trimmed) return;
-    const ok = await write("POST", "/api/businesses", { name: trimmed }, (server) => fail(server || "Could not add the business."));
+    const ok = await write("POST", "/api/businesses", { name: trimmed }, (server) => fail(server || "No se pudo agregar el local."));
     if (ok) setName("");
   }
 
@@ -84,50 +84,50 @@ export function BusinessesSection() {
     addBranch: (businessId, branchName) => {
       const trimmed = branchName.trim();
       if (!trimmed) return;
-      void write("POST", "/api/locations", { name: trimmed, business_id: businessId }, (server) => fail(server || "Could not add the branch."));
+      void write("POST", "/api/locations", { name: trimmed, business_id: businessId }, (server) => fail(server || "No se pudo agregar la sucursal."));
     },
     moveBranch: (locationId, value) => {
       if (value === "") return;
       // "none" takes the branch out of its business.
       void write("PATCH", "/api/locations/" + encodeURIComponent(locationId), { business_id: value === "none" ? null : value }, () =>
-        fail("Could not move the branch."),
+        fail("No se pudo mover la sucursal."),
       );
     },
     setBusinessActive: (businessId, isActive) => {
       void write("PATCH", "/api/businesses/" + encodeURIComponent(businessId), { is_active: isActive }, () =>
-        fail("Could not update the business."),
+        fail("No se pudo actualizar el local."),
       );
     },
     setBranchActive: (locationId, isActive) => {
       void write("PATCH", "/api/locations/" + encodeURIComponent(locationId), { is_active: isActive }, () =>
-        fail("Could not update the branch."),
+        fail("No se pudo actualizar la sucursal."),
       );
     },
   };
 
   return (
     <div className="card" id="businesses-card">
-      <h3>Businesses and branches</h3>
-      <label htmlFor="new-business-name">New business</label>
+      <h3>Locales y sucursales</h3>
+      <label htmlFor="new-business-name">Nuevo local</label>
       <div className="field-row">
         <input
           type="text"
           id="new-business-name"
           maxLength={120}
-          placeholder="e.g. Café Central"
+          placeholder="p. ej. Café Central"
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
         <button type="button" id="add-business" className="btn-sm btn-primary" onClick={() => void addBusiness()}>
-          Add
+          Agregar
         </button>
       </div>
       <div id="businesses-msg" className={"message" + (msg.kind ? " " + msg.kind : "")}>
         {msg.text}
       </div>
       <div id="businesses-body" className="gap-top">
-        {status === "loading" && <div className="loading">Loading...</div>}
-        {status === "error" && <p className="gate-empty">Could not load businesses.</p>}
+        {status === "loading" && <div className="loading">Cargando…</div>}
+        {status === "error" && <p className="gate-empty">No se pudieron cargar los locales.</p>}
         {status === "ready" && <Groups key={version} businesses={businesses} branches={branches} actions={actions} />}
       </div>
     </div>
@@ -141,13 +141,13 @@ type CardActions = {
   setBranchActive: (locationId: string, isActive: boolean) => void;
 };
 
-const InactiveNote = () => <span className="field-note">Inactive</span>;
+const InactiveNote = () => <span className="field-note">Inactivo</span>;
 
 /** Activate on an inactive record, Deactivate on an active one: the button asks for the opposite. */
 function Toggle({ isActive, onToggle }: { isActive: boolean; onToggle: (next: boolean) => void }) {
   return (
     <button type="button" className="btn-sm btn-outline" onClick={() => onToggle(!isActive)}>
-      {isActive ? "Deactivate" : "Activate"}
+      {isActive ? "Desactivar" : "Activar"}
     </button>
   );
 }
@@ -162,7 +162,7 @@ function Groups({ businesses, branches, actions }: { businesses: Business[]; bra
   const loose = branches.filter((l) => !l.business_id);
 
   if (businesses.length === 0 && loose.length === 0) {
-    return <p className="field-note">No businesses yet. Add the first one above.</p>;
+    return <p className="field-note">Aún no hay locales. Agrega el primero arriba.</p>;
   }
 
   return (
@@ -172,7 +172,7 @@ function Groups({ businesses, branches, actions }: { businesses: Business[]; bra
       ))}
       {loose.length > 0 && (
         <div className="biz-group">
-          <div className="biz-name">Not in a business</div>
+          <div className="biz-name">Sin local</div>
           <ul className="biz-branches">
             {loose.map((l) => (
               <BranchLine key={l.id} branch={l} active={active} actions={actions} />
@@ -197,7 +197,7 @@ function BusinessGroup({ business: b, own, active, actions }: { business: Busine
         {own.length ? (
           own.map((l) => <BranchLine key={l.id} branch={l} active={active} actions={actions} />)
         ) : (
-          <li className="field-note">No branches yet.</li>
+          <li className="field-note">Aún no hay sucursales.</li>
         )}
       </ul>
       <div className="field-row">
@@ -205,12 +205,12 @@ function BusinessGroup({ business: b, own, active, actions }: { business: Busine
           type="text"
           id={`new-branch-${b.id}`}
           maxLength={120}
-          placeholder="New branch, e.g. Providencia"
+          placeholder="Nueva sucursal, p. ej. Providencia"
           value={branchName}
           onChange={(e) => setBranchName(e.target.value)}
         />
         <button type="button" className="btn-sm btn-outline" onClick={() => actions.addBranch(b.id, branchName)}>
-          Add
+          Agregar
         </button>
       </div>
     </div>
@@ -224,11 +224,11 @@ function BranchLine({ branch: l, active, actions }: { branch: Branch; active: Bu
   return (
     <li className="biz-branch">
       <span>
-        {l.name} <span className="field-note">{l.link_count ?? ""} links</span> {isActive ? null : <InactiveNote />}
+        {l.name} <span className="field-note">{l.link_count ?? ""} enlaces</span> {isActive ? null : <InactiveNote />}
       </span>
       <span className="field-row">
         <select id={`move-${l.id}`} value={target} onChange={(e) => setTarget(e.target.value)}>
-          <option value="">Move to…</option>
+          <option value="">Mover a…</option>
           {active
             .filter((b) => b.id !== l.business_id)
             .map((b) => (
@@ -236,10 +236,10 @@ function BranchLine({ branch: l, active, actions }: { branch: Branch; active: Bu
                 {b.name}
               </option>
             ))}
-          {l.business_id ? <option value="none">No business</option> : null}
+          {l.business_id ? <option value="none">Sin local</option> : null}
         </select>
         <button type="button" className="btn-sm btn-outline" onClick={() => actions.moveBranch(l.id, target)}>
-          Move
+          Mover
         </button>
         <Toggle isActive={isActive} onToggle={(next) => actions.setBranchActive(l.id, next)} />
       </span>

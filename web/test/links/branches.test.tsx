@@ -28,7 +28,7 @@ const options = (id = "branch-link-uuid") =>
 describe("branchOptions", () => {
   it("offers Unassigned, then each pickable branch named after its business", () => {
     expect(branchOptions("", branches, businesses)).toEqual([
-      { label: "Unassigned", value: "" },
+      { label: "Sin asignar", value: "" },
       { label: "Café Central — Providencia", value: "loc-1" },
       { label: "Suelta", value: "loc-4" },
     ]);
@@ -36,15 +36,15 @@ describe("branchOptions", () => {
 
   it("keeps the link's own switched-off branch, named and marked, so one Save does not detach it", () => {
     expect(branchOptions("loc-old", branches, businesses).at(-1)).toEqual({
-      label: "Café Central — Vieja (inactive)",
+      label: "Café Central — Vieja (inactiva)",
       value: "loc-old",
     });
   });
 
   it("keeps an unknown current branch as Current branch while the list is missing", () => {
     expect(branchOptions("loc-1", [], [])).toEqual([
-      { label: "Unassigned", value: "" },
-      { label: "Current branch", value: "loc-1" },
+      { label: "Sin asignar", value: "" },
+      { label: "Sucursal actual", value: "loc-1" },
     ]);
   });
 });
@@ -59,7 +59,7 @@ describe("the row's branch picker", () => {
     standardApi({ links: [link({ location_id: "loc-1" })] });
     await mountLinks();
 
-    expect(options().find((o) => o.selected)).toEqual({ label: "Current branch", value: "loc-1", selected: true });
+    expect(options().find((o) => o.selected)).toEqual({ label: "Sucursal actual", value: "loc-1", selected: true });
   });
 
   it("keeps inactive branches and businesses out, except the link's current one", async () => {
@@ -68,19 +68,19 @@ describe("the row's branch picker", () => {
     await mountLinks();
 
     expect(options().map((o) => o.value)).toEqual(["", "loc-1", "loc-4", "loc-old"]);
-    expect(options().find((o) => o.selected)).toEqual({ label: "Café Central — Vieja (inactive)", value: "loc-old", selected: true });
+    expect(options().find((o) => o.selected)).toEqual({ label: "Café Central — Vieja (inactiva)", value: "loc-old", selected: true });
   });
 
   it("rebuilds every picker when the branches store reloads", async () => {
     standardApi({ links: [link({ location_id: "loc-1" })] });
     await mountLinks();
-    expect(options().map((o) => o.label)).toEqual(["Unassigned", "Current branch"]);
+    expect(options().map((o) => o.label)).toEqual(["Sin asignar", "Sucursal actual"]);
 
     const api = stubbedApi();
     await provideBranches(branches, businesses);
     stubApi(api);
 
-    expect(options().map((o) => o.label)).toEqual(["Unassigned", "Café Central — Providencia", "Suelta"]);
+    expect(options().map((o) => o.label)).toEqual(["Sin asignar", "Café Central — Providencia", "Suelta"]);
     expect(field("branch-link-uuid").value).toBe("loc-1");
   });
 

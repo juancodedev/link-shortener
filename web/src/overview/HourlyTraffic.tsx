@@ -1,3 +1,5 @@
+import { spanishWindow } from "../format";
+
 /** GET /api/traffic/hourly: scans per local hour of the day over a window. */
 export type HourlyPayload = {
   time_zone?: string;
@@ -20,12 +22,12 @@ export function HourlyTraffic({ payload }: { payload: HourlyPayload }) {
   const hours = Array.isArray(payload.hours) ? payload.hours : [];
   const busiest = hours.reduce((top, h) => (h.scans > top.scans ? h : top), { hour: 0, scans: 0 });
   if (busiest.scans === 0) {
-    return <p className="gate-empty">{`No scans in the last ${payload.window ?? ""} yet.`}</p>;
+    return <p className="gate-empty">{`Aún no hay escaneos en los últimos ${spanishWindow(payload.window ?? "")}.`}</p>;
   }
   return (
     <>
       <p className="hour-summary">
-        {`Busiest hour: ${label(busiest.hour)}–${label((busiest.hour + 1) % 24)} (${busiest.scans} scans)`}
+        {`Hora más concurrida: ${label(busiest.hour)}–${label((busiest.hour + 1) % 24)} (${busiest.scans} escaneos)`}
       </p>
       <div className="peak-chart">
         {hours.map((h) => (
@@ -33,7 +35,7 @@ export function HourlyTraffic({ payload }: { payload: HourlyPayload }) {
             key={h.hour}
             className="hour-bar"
             style={{ height: `${Math.round((h.scans / busiest.scans) * 100)}%` }}
-            title={`${label(h.hour)} · ${h.scans} scans`}
+            title={`${label(h.hour)} · ${h.scans} escaneos`}
           ></div>
         ))}
       </div>
@@ -45,7 +47,7 @@ export function HourlyTraffic({ payload }: { payload: HourlyPayload }) {
         <span>23:00</span>
       </div>
       <p className="estimate-note">
-        {`Last ${payload.window ?? ""} · ${payload.time_zone ?? ""} time. Every scan counts, including repeat scans.`}
+        {`Últimos ${spanishWindow(payload.window ?? "")} · hora de ${payload.time_zone ?? ""}. Cuenta cada escaneo, incluidos los repetidos.`}
       </p>
     </>
   );

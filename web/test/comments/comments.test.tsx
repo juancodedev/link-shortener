@@ -111,7 +111,7 @@ describe("Comments island — the inbox", () => {
     render(<CommentsSection />);
     await settle();
     expect(calls).toEqual([]);
-    expect(el("feedback-body").textContent).toBe("Loading...");
+    expect(el("feedback-body").textContent).toBe("Cargando…");
 
     auth.release();
     await settle();
@@ -124,9 +124,9 @@ describe("Comments island — the inbox", () => {
     commentsApi();
     await mount();
 
-    expect(el("feedback-card").querySelector(".feedback-head h3")!.textContent).toBe("What customers wrote");
-    expect(exportButton().textContent).toBe("Download CSV");
-    expect(document.querySelector('label[for="feedback-filter"]')!.textContent).toBe("Show comments from");
+    expect(el("feedback-card").querySelector(".feedback-head h3")!.textContent).toBe("Lo que escribieron tus clientes");
+    expect(exportButton().textContent).toBe("Descargar CSV");
+    expect(document.querySelector('label[for="feedback-filter"]')!.textContent).toBe("Mostrar comentarios de");
   });
 
   it.each([
@@ -140,7 +140,7 @@ describe("Comments island — the inbox", () => {
 
     // The request was made: an error before it would also land here, for the wrong reason.
     expect(paths(calls)).toEqual(["/api/review-gate/feedback"]);
-    expect(el("feedback-body").textContent).toBe("Could not load comments.");
+    expect(el("feedback-body").textContent).toBe("No se pudieron cargar los comentarios.");
     expect(el("feedback-body").querySelector(".gate-empty")).not.toBeNull();
     expect(errors).toHaveBeenCalled();
   });
@@ -169,7 +169,7 @@ describe("Comments island — the filter", () => {
     commentsApi();
     await mount();
 
-    expect([...filter().options].map((o) => [o.value, o.text])).toEqual([["", "All businesses"]]);
+    expect([...filter().options].map((o) => [o.value, o.text])).toEqual([["", "Todos los locales"]]);
   });
 
   it("lists active businesses with their pickable branches, then loose branches, leaving inactive ones out", async () => {
@@ -178,11 +178,11 @@ describe("Comments island — the filter", () => {
     await mount();
 
     expect([...filter().options].map((o) => [o.value, o.text])).toEqual([
-      ["", "All businesses"],
+      ["", "Todos los locales"],
       ["b:biz-1", "Café Central"],
       ["l:loc-1", "— Providencia"],
       ["b:biz-2", "Sabores"],
-      ["l:loc-4", "Suelta (no business)"],
+      ["l:loc-4", "Suelta (sin local)"],
     ]);
   });
 
@@ -276,7 +276,7 @@ describe("Comments island — the CSV export", () => {
     expect(document.querySelector('a[href*="feedback.csv"]')).toBeNull();
     expect(paths(calls).at(-1)).toBe("/api/review-gate/feedback.csv?location_id=loc-1");
     expect(created).toHaveBeenCalledTimes(1);
-    expect(downloads).toEqual([{ href: "blob:feedback", download: "customer-feedback.csv" }]);
+    expect(downloads).toEqual([{ href: "blob:feedback", download: "comentarios-clientes.csv" }]);
     // The temporary link is gone, and the URL is revoked only later, so a
     // browser that starts the download after the click still finds it.
     expect(document.querySelector("a[download]")).toBeNull();
@@ -300,7 +300,7 @@ describe("Comments island — the CSV export", () => {
     await settle();
 
     expect(exportMsg().className).toBe("message notice");
-    expect(exportMsg().textContent).toBe("The file holds the newest 5000 comments; older ones were left out.");
+    expect(exportMsg().textContent).toBe("El archivo contiene los 5000 comentarios más recientes; los más antiguos quedaron fuera.");
   });
 
   it("disables the button while the export runs", async () => {
@@ -318,9 +318,9 @@ describe("Comments island — the CSV export", () => {
   });
 
   it.each([
-    ["the server's error", new Response(JSON.stringify({ error: "internal_error" }), { status: 500 }), "Could not export: internal_error"],
-    ["the server's detail first", new Response(JSON.stringify({ detail: "Too many", error: "x" }), { status: 429 }), "Could not export: Too many"],
-    ["the status when the body is not JSON", new Response("nope", { status: 401 }), "Could not export: HTTP 401"],
+    ["the server's error", new Response(JSON.stringify({ error: "internal_error" }), { status: 500 }), "No se pudo exportar: internal_error"],
+    ["the server's detail first", new Response(JSON.stringify({ detail: "Too many", error: "x" }), { status: 429 }), "No se pudo exportar: Too many"],
+    ["the status when the body is not JSON", new Response("nope", { status: 401 }), "No se pudo exportar: HTTP 401"],
   ])("shows %s in the card and downloads nothing", async (_case, refusal, text) => {
     commentsApi({ csv: () => refusal });
     await mount();

@@ -28,28 +28,28 @@ export function QrModal({ url, onClose }: { url: string | null; onClose: () => v
     } catch {
       // Surfacing the failure beats a silent no-op: the owner's next move is
       // to hand-copy the code onto a sticker, where a typo is unrecoverable.
-      alert("Copy failed — select the URL above and copy it manually.");
+      alert("No se pudo copiar: selecciona la URL de arriba y cópiala a mano.");
     }
   }
 
   return (
     <div id="qr-modal" className={url === null ? "qr-modal hidden" : "qr-modal"} onClick={onClose}>
       <div className="qr-card" onClick={(e) => e.stopPropagation()}>
-        <h3 className="qr-title">QR Code</h3>
+        <h3 className="qr-title">Código QR</h3>
         <img
           id="qr-img"
           src={url === null ? undefined : "https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=" + encodeURIComponent(url)}
-          alt="QR Code"
+          alt="Código QR"
           className="qr-img"
         />
         <p id="qr-url" className="qr-url">
           {url}
         </p>
         <button id="copy-print-sheet" className="btn-sm btn-outline gap-top-sm" onClick={() => void copy()}>
-          {copied ? "Copied!" : "Copy URL for print sheet"}
+          {copied ? "¡Copiado!" : "Copiar URL para la hoja de impresión"}
         </button>
         <button className="btn-sm gap-top-sm" onClick={onClose}>
-          Close
+          Cerrar
         </button>
       </div>
     </div>

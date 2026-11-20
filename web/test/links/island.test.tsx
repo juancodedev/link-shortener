@@ -29,7 +29,7 @@ describe("Links island — mounting", () => {
     await settle();
 
     expect(Object.keys(ISLANDS)).toContain("links");
-    expect(document.querySelector("#links-card h3")!.textContent).toBe("Your Links (0/50)");
+    expect(document.querySelector("#links-card h3")!.textContent).toBe("Tus enlaces (0/50)");
     expect(document.querySelectorAll("#links-card")).toHaveLength(1);
     expect(document.querySelector('[data-section="links"] #create-form')).not.toBeNull();
     act(() => roots.forEach((r) => r.unmount()));

@@ -25,7 +25,7 @@ const VARIANTS = [
 
 const DESIGNS = [
   { value: "official", label: "Estándar Oficial Google" },
-  { value: "minimal", label: "Clean Minimalist Glass" },
+  { value: "minimal", label: "Vidrio minimalista" },
 ] as const;
 
 const PRESET_VALUES = SHEET_PRESETS.map((p) => p.value);
@@ -142,7 +142,7 @@ export function CardsSection() {
 
   function markPrinted() {
     if (queue.length === 0 || marking) return;
-    if (!window.confirm(`Mark ${queue.length} card(s) as printed? They will show as printed in Links.`)) return;
+    if (!window.confirm(`¿Marcar ${queue.length} tarjeta(s) como impresas? Aparecerán como impresas en Enlaces.`)) return;
     setMarking(true);
     void (async () => {
       try {
@@ -164,13 +164,13 @@ export function CardsSection() {
   let info = "";
   let sheets: React.ReactNode = null;
   if (queue.length === 0) {
-    sheets = <p className="gate-empty">No cards waiting to be printed. Send unconfigured links to print from the Links section.</p>;
+    sheets = <p className="gate-empty">No hay tarjetas por imprimir. Envía a imprimir enlaces sin configurar desde la sección Enlaces.</p>;
   } else if (!layout.fits) {
-    info = `The sheet is too small for a ${CARD_MM}×${CARD_MM} mm card with that margin.`;
+    info = `La hoja es demasiado pequeña para una tarjeta de ${CARD_MM}×${CARD_MM} mm con ese margen.`;
   } else {
-    info = `${layout.cols}×${layout.rows} = ${layout.cap} cards per sheet · ${CARD_MM}×${CARD_MM} mm cards · ${queue.length} card(s) · ${layout.pages} sheet(s)`;
+    info = `${layout.cols}×${layout.rows} = ${layout.cap} tarjetas por hoja · tarjetas de ${CARD_MM}×${CARD_MM} mm · ${queue.length} tarjeta(s) · ${layout.pages} hoja(s)`;
     if (cards.status === "error") {
-      sheets = <p className="gate-empty">Could not load the cards.</p>;
+      sheets = <p className="gate-empty">No se pudieron cargar las tarjetas.</p>;
     } else if (cards.status === "ready" && cards.svgs.length === queue.length) {
       const pages: string[][] = [];
       cards.svgs.forEach((svg, i) => {
@@ -203,17 +203,17 @@ export function CardsSection() {
 
   return (
     <>
-      <h3>Cards to print</h3>
+      <h3>Tarjetas por imprimir</h3>
       <p className="field-help">
-        Links you send to print from the Links section wait here. A card leaves the queue when you mark it printed,
-        remove it, or save its destination. The queue lives in this page only: reloading it starts empty.
+        Los enlaces que envías a imprimir desde la sección Enlaces esperan aquí. Una tarjeta sale de la cola cuando la marcas
+        como impresa, la quitas o guardas su destino. La cola vive solo en esta página: al recargarla, empieza vacía.
       </p>
       <ul id="cards-queue" className="cards-queue">
         {queue.map((item) => (
           <li key={item.id}>
             <span className="code">{item.short_code}</span>
             <button type="button" className="btn-sm btn-outline" onClick={() => window.__setPrintQueued(item.id, false)}>
-              Remove
+              Quitar
             </button>
           </li>
         ))}
@@ -287,7 +287,7 @@ export function CardsSection() {
       </div>
       <div className="cards-actions">
         <button type="button" id="cards-export" className="btn-sm btn-primary" disabled={queue.length === 0} onClick={exportCards}>
-          Export PDF / Print
+          Exportar PDF / Imprimir
         </button>
         <button
           type="button"
@@ -296,7 +296,7 @@ export function CardsSection() {
           disabled={queue.length === 0 || marking}
           onClick={markPrinted}
         >
-          Mark as printed
+          Marcar como impresas
         </button>
         <span id="cards-info" className="cards-info">
           {info}

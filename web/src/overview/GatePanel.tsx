@@ -1,4 +1,5 @@
 import type { ActionSplit, LocationRollup, PeakBucket } from "../../../src/analytics/review-gate";
+import { LOCALE } from "../format";
 
 /**
  * THE SATISFACTION PANEL (dashboard-react T4), a port of the string renderer
@@ -52,8 +53,8 @@ function RatingTile({ branch, label, floor }: { branch: ActionSplit["google"]; l
       <div className="label">{label}</div>
       {branch.avgRating === null ? (
         <>
-          <div className="value withheld">Not enough ratings</div>
-          <div className="sub">{`${branch.rated} of ${branch.scans} scanned · needs ${floor}`}</div>
+          <div className="value withheld">Calificaciones insuficientes</div>
+          <div className="sub">{`${branch.rated} de ${branch.scans} escaneos · se necesitan ${floor}`}</div>
         </>
       ) : (
         <>
@@ -61,7 +62,7 @@ function RatingTile({ branch, label, floor }: { branch: ActionSplit["google"]; l
             {branch.avgRating.toFixed(2)}
             <span className="rating-of"> / 5</span>
           </div>
-          <div className="sub">{`from ${branch.rated} of ${branch.scans} scanned`}</div>
+          <div className="sub">{`según ${branch.rated} de ${branch.scans} escaneos`}</div>
         </>
       )}
     </div>
@@ -84,7 +85,7 @@ const HOUR = 3600;
  */
 function PeakChart({ peaks }: { peaks: PeakBucket[] }) {
   if (peaks.length === 0) {
-    return <p className="estimate-note gate-empty-note">No tagged scans in the last 7 days yet.</p>;
+    return <p className="estimate-note gate-empty-note">Aún no hay escaneos con etiqueta en los últimos 7 días.</p>;
   }
 
   const max = peaks.reduce((m, p) => Math.max(m, p.total), 0) || 1;
@@ -109,7 +110,7 @@ function PeakChart({ peaks }: { peaks: PeakBucket[] }) {
           const height = Math.round((p.total / max) * 100);
           const googleShare = p.total > 0 ? Math.round((p.google / p.total) * 100) : 0;
           return (
-            <div key={i} className="peak-bar" style={{ height: `${height}%` }} title={`${p.total} scans · ${pct(p.derivationRate)} to review`}>
+            <div key={i} className="peak-bar" style={{ height: `${height}%` }} title={`${p.total} escaneos · ${pct(p.derivationRate)} a reseña`}>
               <div className="peak-seg" style={{ height: "100%" }}>
                 <div className="peak-seg-public" style={{ height: `${googleShare}%` }}></div>
                 <div className="peak-seg-rest" style={{ height: `${100 - googleShare}%` }}></div>
@@ -119,8 +120,8 @@ function PeakChart({ peaks }: { peaks: PeakBucket[] }) {
         })}
       </div>
       <div className="peak-axis">
-        <span>{new Date(first * 1000).toLocaleString()}</span>
-        <span>{new Date(last * 1000).toLocaleString()}</span>
+        <span>{new Date(first * 1000).toLocaleString(LOCALE)}</span>
+        <span>{new Date(last * 1000).toLocaleString(LOCALE)}</span>
       </div>
     </>
   );
@@ -131,20 +132,20 @@ function LocationTable({ locations }: { locations: LocationRollup[] }) {
   if (locations.length === 0) return null;
   return (
     <>
-      <h4 className="gate-h">By location</h4>
+      <h4 className="gate-h">Por sucursal</h4>
       <div className="table-wrap">
         <table>
           <thead>
             <tr>
-              <th>Location</th>
-              <th>Scans</th>
-              <th>To review</th>
+              <th>Sucursal</th>
+              <th>Escaneos</th>
+              <th>A reseña</th>
             </tr>
           </thead>
           <tbody>
             {locations.map((l, i) => (
               <tr key={l.locationId ?? `unassigned-${i}`}>
-                <td>{l.locationName ?? "Not assigned to a location"}</td>
+                <td>{l.locationName ?? "Sin sucursal asignada"}</td>
                 <td>{l.totalScans}</td>
                 <td>{pct(l.derivationRate)}</td>
               </tr>
@@ -164,42 +165,42 @@ export function GatePanel({ payload }: { payload: GatePanelPayload }) {
   return (
     <>
       {split.totalScans === 0 && (
-        <p className="gate-empty">No tagged scans yet. Point a link at a sticker and scan it to see numbers here.</p>
+        <p className="gate-empty">Aún no hay escaneos con etiqueta. Asigna un enlace a un adhesivo y escanéalo para ver cifras aquí.</p>
       )}
       <div className="stat-tiles">
         <div className="stat-tile">
-          <div className="label">Scans</div>
+          <div className="label">Escaneos</div>
           <div className="value">{split.totalScans}</div>
-          <div className="sub">{`${split.google.scans} to review · ${split.private.scans} private`}</div>
+          <div className="sub">{`${split.google.scans} a reseña · ${split.private.scans} privados`}</div>
         </div>
         <div className="stat-tile">
-          <div className="label">To review</div>
+          <div className="label">A reseña</div>
           <div className="value">{pct(split.derivationRate)}</div>
-          <div className="sub">chose the public review link</div>
+          <div className="sub">eligieron el enlace de reseña pública</div>
         </div>
-        <RatingTile branch={split.google} label="Rating · to review" floor={floor} />
-        <RatingTile branch={split.private} label="Rating · private" floor={floor} />
+        <RatingTile branch={split.google} label="Calificación · a reseña" floor={floor} />
+        <RatingTile branch={split.private} label="Calificación · privada" floor={floor} />
         <div className="stat-tile">
-          <div className="label">Sentiment gap</div>
+          <div className="label">Brecha de sentimiento</div>
           {gap === null ? (
             <>
-              <div className="value withheld">Not enough ratings</div>
-              <div className="sub">{`needs ${floor} ratings in both groups`}</div>
+              <div className="value withheld">Calificaciones insuficientes</div>
+              <div className="sub">{`se necesitan ${floor} calificaciones en ambos grupos`}</div>
             </>
           ) : (
             <>
               <div className="value">{`${gap > 0 ? "+" : ""}${gap.toFixed(2)}`}</div>
-              <div className="sub">public minus private</div>
+              <div className="sub">pública menos privada</div>
             </>
           )}
         </div>
       </div>
-      <h4 className="gate-h">Peak hours</h4>
+      <h4 className="gate-h">Horas pico</h4>
       <PeakChart peaks={peaks} />
       <LocationTable locations={locations} />
       <p className="estimate-note">
-        <strong>How to read this:</strong>{" "}
-        {`ratings are optional, so every average is computed only from customers who chose to give one, and is withheld entirely below ${floor} ratings. A rating shown with its sample size is a signal; one shown without would not be.`}
+        <strong>Cómo leer esto:</strong>{" "}
+        {`las calificaciones son opcionales, así que cada promedio se calcula solo con los clientes que decidieron dar una, y se omite por completo con menos de ${floor} calificaciones. Una calificación mostrada con su tamaño de muestra es una señal; sin él, no lo sería.`}
       </p>
     </>
   );

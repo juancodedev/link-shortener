@@ -40,13 +40,13 @@ export type ClickMetrics = {
  */
 export async function fetchLinks(): Promise<Link[]> {
   const res = await api("GET", "/api/links");
-  if (!res || !res.ok) throw new Error("Failed to load links");
+  if (!res || !res.ok) throw new Error("Error al cargar los enlaces");
 
   const links: unknown = await res.json();
   // An array is the documented contract for /api/links. If that ever changes
   // again the dashboard says so rather than rendering an empty table that
   // looks like "you have no links".
-  if (!Array.isArray(links)) throw new Error("Unexpected /api/links response shape");
+  if (!Array.isArray(links)) throw new Error("Respuesta inesperada de /api/links");
   return links as Link[];
 }
 

@@ -15,9 +15,14 @@ export default defineConfig({
     outDir: "../dist-web",
     emptyOutDir: true,
     rollupOptions: {
-      input: resolve(__dirname, "src/dashboard.tsx"),
+      // Two entries: the routing runs from its own tiny file so a deep link
+      // does not wait for the dashboard bundle (web/src/routing-entry.ts).
+      input: {
+        dashboard: resolve(__dirname, "src/dashboard.tsx"),
+        routing: resolve(__dirname, "src/routing-entry.ts"),
+      },
       output: {
-        entryFileNames: "assets/dashboard.js",
+        entryFileNames: "assets/[name].js",
         chunkFileNames: "assets/[name].js",
         assetFileNames: "assets/[name][extname]",
       },

@@ -21,12 +21,13 @@ vi.mock("@supabase/supabase-js", () => ({ createClient: vi.fn(() => ({ auth })) 
 import { createClient } from "@supabase/supabase-js";
 
 /**
- * Boot order of web/src/dashboard.tsx, the bundle entry: the sidebar routing
- * runs on the served markup at once, the islands mount and park on the API
- * gate, and no request leaves the page until the session resolves.
+ * Boot order of web/src/dashboard.tsx, the bundle entry: the islands mount
+ * and park on the API gate, and no request leaves the page until the session
+ * resolves. The sidebar routing is the routing entry's
+ * (web/test/shell/routing-entry.test.ts), so the bundle leaves [hidden] alone.
  */
 describe("the dashboard bundle entry", () => {
-  it("routes at once, mounts the islands, and sends nothing before the session", async () => {
+  it("mounts the islands, leaves the routing to its own entry, and sends nothing before the session", async () => {
     document.body.innerHTML = `
       <nav class="topbar"><span id="nav-email"></span><button id="logout-nav">Log Out</button></nav>
       <aside class="sidebar"><a href="#links" data-section-link="links">Links</a><a href="#settings" data-section-link="settings">Settings</a></aside>
@@ -49,8 +50,8 @@ describe("the dashboard bundle entry", () => {
 
     expect(createClient).toHaveBeenCalledWith("https://test.supabase.co", "k");
     const settings = document.querySelector<HTMLElement>('[data-section="settings"]')!;
-    expect(settings.hidden).toBe(false);
-    expect(document.querySelector<HTMLElement>('[data-section="links"]')!.hidden).toBe(true);
+    expect(settings.hidden).toBe(true);
+    expect(document.querySelector<HTMLElement>('[data-section="links"]')!.hidden).toBe(false);
     expect(document.getElementById("settings-root")!.childElementCount).toBeGreaterThan(0);
     expect(sent).toEqual([]);
 

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { dashboardHandler } from "../../src/handlers/dashboard";
+import { DASHBOARD_CSS } from "./dashboard-stylesheet";
 
 // ---------------------------------------------------------------------------
 // The served dashboard page.
@@ -186,11 +187,11 @@ describe("visitor figures — the caveat is in the rendered markup", () => {
 
 describe("printable report", () => {
   async function printCss(): Promise<string> {
-    const html = await serve();
-    const start = html.indexOf("@media print {");
+    const css = DASHBOARD_CSS;
+    const start = css.indexOf("@media print {");
     expect(start).toBeGreaterThan(-1);
     // The block ends at the first line that closes it at the same indentation.
-    return html.slice(start, html.indexOf("\n    }\n", start));
+    return css.slice(start, css.indexOf("\n}\n", start));
   }
 
   it("hides navigation, the admin column, controls and the links table when printed", async () => {
@@ -297,9 +298,11 @@ describe("the served document", () => {
 
     expect(all.map((s) => s.attrs.trim())).toEqual([
       'type="application/json" id="dashboard-config"',
+      'type="module" src="/assets/routing.js"',
       'type="module" src="/assets/dashboard.js"',
     ]);
     expect(all[1]!.body).toBe("");
+    expect(all[2]!.body).toBe("");
     expect(html).not.toMatch(/<[^>]+\son[a-z]+=/i);
   });
 
@@ -338,11 +341,13 @@ describe("the served document", () => {
     expect(nav).toContain('<a href="/">Home</a>');
   });
 
-  it("still serves the stylesheet the tenant bar and the sidebar use", async () => {
+  it("links the bundle's stylesheet, which still styles the tenant bar and the sidebar", async () => {
     const html = await serve();
 
-    expect(html).toMatch(/<style>[\s\S]*\.tenant-bar \{[\s\S]*<\/style>/);
-    expect(html).toMatch(/<style>[\s\S]*\.side-nav a\.is-active \{[\s\S]*<\/style>/);
+    expect(html).toContain('<link rel="stylesheet" href="/assets/dashboard.css">');
+    expect(html).not.toContain("<style>");
+    expect(DASHBOARD_CSS).toContain(".tenant-bar {");
+    expect(DASHBOARD_CSS).toContain(".side-nav a.is-active {");
   });
 });
 
@@ -370,9 +375,9 @@ describe("sidebar sections (odd/tasks/print-queue-cards.md S1)", () => {
   }
 
   it("no longer caps the page at a 720px column", async () => {
-    const html = await serve();
-    expect(html).not.toContain("max-width: 720px");
-    expect(html).toMatch(/\.container\s*\{[^}]*max-width:\s*1440px/);
+    const css = DASHBOARD_CSS;
+    expect(css).not.toContain("max-width: 720px");
+    expect(css).toMatch(/\.container\s*\{[^}]*max-width:\s*1440px/);
   });
 
   it("lists the six sections in the sidebar, in order", async () => {
@@ -391,8 +396,7 @@ describe("sidebar sections (odd/tasks/print-queue-cards.md S1)", () => {
   });
 
   it("puts the sidebar beside the sections on a wide screen", async () => {
-    const html = await serve();
-    expect(html).toMatch(/@media \(min-width: 1024px\)\s*\{\s*\.app\s*\{[^}]*grid-template-columns/);
+    expect(DASHBOARD_CSS).toMatch(/@media \(min-width: 1024px\)\s*\{\s*\.app\s*\{[^}]*grid-template-columns/);
   });
 
   it("groups the existing cards into their sections", async () => {
@@ -454,58 +458,58 @@ describe("cards section", () => {
   });
 
   it("starts the grid at the top-left margin instead of centring it", async () => {
-    const html = await serve();
+    const css = DASHBOARD_CSS;
 
-    expect(html).toMatch(/\.card-sheet\s*\{[^}]*justify-content:\s*start;[^}]*align-content:\s*start;/);
-    expect(html).not.toMatch(/\.card-sheet\s*\{[^}]*justify-content:\s*center/);
+    expect(css).toMatch(/\.card-sheet\s*\{[^}]*justify-content:\s*start;[^}]*align-content:\s*start;/);
+    expect(css).not.toMatch(/\.card-sheet\s*\{[^}]*justify-content:\s*center/);
   });
 
   it("zooms only the sheets, so the empty-queue message keeps its normal size", async () => {
-    const html = await serve();
+    const css = DASHBOARD_CSS;
 
-    expect(html).toMatch(/\.card-sheet\s*\{[^}]*zoom:\s*var\(--card-zoom\);/);
-    expect(html).not.toMatch(/#card-sheets\s*\{[^}]*zoom:\s*var\(--card-zoom\)/);
-    expect(html).toMatch(/body\.printing-cards \.card-sheet\s*\{[^}]*zoom:\s*1 !important;/);
+    expect(css).toMatch(/\.card-sheet\s*\{[^}]*zoom:\s*var\(--card-zoom\);/);
+    expect(css).not.toMatch(/#card-sheets\s*\{[^}]*zoom:\s*var\(--card-zoom\)/);
+    expect(css).toMatch(/body\.printing-cards \.card-sheet\s*\{[^}]*zoom:\s*1 !important;/);
   });
 
   it("draws the cut guides above the card, so a mirrored card cannot hide them", async () => {
-    const html = await serve();
+    const css = DASHBOARD_CSS;
 
     // An outline on the card sits under the SVG's own composited layer once
     // the mirror transform promotes it; the guides are an overlay instead.
-    expect(html).toMatch(/\.print-card\s*\{[^}]*position:\s*relative;/);
-    expect(html).toMatch(/\.print-card\.is-crop::after\s*\{[^}]*position:\s*absolute;/);
-    expect(html).toMatch(/\.print-card\.is-crop::after\s*\{[^}]*z-index:\s*2;/);
-    expect(html).toMatch(/\.print-card\.is-crop::after\s*\{[^}]*border:\s*0\.25mm dashed var\(--ink-faint\);/);
-    expect(html).not.toMatch(/\.print-card\.is-crop\s*\{[^}]*outline:/);
+    expect(css).toMatch(/\.print-card\s*\{[^}]*position:\s*relative;/);
+    expect(css).toMatch(/\.print-card\.is-crop::after\s*\{[^}]*position:\s*absolute;/);
+    expect(css).toMatch(/\.print-card\.is-crop::after\s*\{[^}]*z-index:\s*2;/);
+    expect(css).toMatch(/\.print-card\.is-crop::after\s*\{[^}]*border:\s*0\.25mm dashed var\(--ink-faint\);/);
+    expect(css).not.toMatch(/\.print-card\.is-crop\s*\{[^}]*outline:/);
   });
 
   it("takes the card size from the layout, so no sheet can grow a card past 10×10 cm", async () => {
-    const html = await serve();
+    const css = DASHBOARD_CSS;
 
-    expect(html).toMatch(/\.print-card\s*\{[^}]*width:\s*var\(--card-size\);/);
-    expect(html).toMatch(/\.print-card\s*\{[^}]*height:\s*var\(--card-size\);/);
-    expect(html).toMatch(/:root\s*\{[^}]*--card-size:\s*100mm;/);
+    expect(css).toMatch(/\.print-card\s*\{[^}]*width:\s*var\(--card-size\);/);
+    expect(css).toMatch(/\.print-card\s*\{[^}]*height:\s*var\(--card-size\);/);
+    expect(css).toMatch(/:root\s*\{[^}]*--card-size:\s*100mm;/);
   });
 
   it("lines radio options up like the checkboxes", async () => {
-    const html = await serve();
+    const css = DASHBOARD_CSS;
 
-    expect(html).toMatch(/\.check-row input\[type="checkbox"\],\s*\.check-row input\[type="radio"\]\s*\{[^}]*width:\s*1\.125rem;/);
+    expect(css).toMatch(/\.check-row input\[type="checkbox"\],\s*\.check-row input\[type="radio"\]\s*\{[^}]*width:\s*1\.125rem;/);
   });
 
   it("greys out a disabled outline button instead of red text on grey", async () => {
-    const html = await serve();
+    const css = DASHBOARD_CSS;
 
-    expect(html).toMatch(/\.btn-outline:disabled\s*\{[^}]*background:\s*transparent;[^}]*color:\s*var\(--ink-faint\);/);
+    expect(css).toMatch(/\.btn-outline:disabled\s*\{[^}]*background:\s*transparent;[^}]*color:\s*var\(--ink-faint\);/);
   });
 
   it("prints only the sheets, at the sheet size, without the preview zoom", async () => {
-    const html = await serve();
+    const css = DASHBOARD_CSS;
 
-    expect(html).toContain("body.printing-cards");
-    expect(html).toMatch(/body\.printing-cards #card-sheets\s*\{[^}]*zoom:\s*1 !important;/);
-    expect(html).toMatch(/\.card-sheet \+ \.card-sheet\s*\{[^}]*break-before:\s*page;/);
+    expect(css).toContain("body.printing-cards");
+    expect(css).toMatch(/body\.printing-cards #card-sheets\s*\{[^}]*zoom:\s*1 !important;/);
+    expect(css).toMatch(/\.card-sheet \+ \.card-sheet\s*\{[^}]*break-before:\s*page;/);
   });
 
   it("keeps the queue itself in the page", async () => {

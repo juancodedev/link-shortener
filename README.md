@@ -25,7 +25,11 @@ Supabase REST is used only for auth verification and user deletion.
 
 ## Getting started
 
+Node 22 is required (wrangler and supabase-js need it; CI and deploy use it
+too). `.nvmrc` pins it, so `nvm use` picks the right version.
+
 ```bash
+nvm use
 pnpm install
 cp .dev.vars.example .dev.vars   # fill in secrets
 pnpm run dev                      # wrangler dev

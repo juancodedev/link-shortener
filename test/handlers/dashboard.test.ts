@@ -282,6 +282,15 @@ describe("the served document", () => {
     });
   });
 
+  it("escapes U+2028 and U+2029 in config values and still round-trips them", async () => {
+    const key = "a\u2028b\u2029c<!--d";
+    const html = await (await dashboardHandler(contextWith({ SUPABASE_ANON_KEY: key }))).text();
+    const block = html.match(/<script type="application\/json" id="dashboard-config">([\s\S]*?)<\/script>/)![1]!;
+
+    expect(block).not.toMatch(/[\u2028\u2029<]/);
+    expect(config(html)).toEqual({ supabaseUrl: "https://test.supabase.co", supabaseAnonKey: key });
+  });
+
   it("serves no inline executable script: only the JSON config block and the bundle", async () => {
     const html = await serve();
     const all = scripts(html);

@@ -1,3 +1,4 @@
+import { loadBranches } from "./branches/store";
 import { mountIslands } from "./islands";
 import { ISLANDS } from "./registry";
 
@@ -7,3 +8,8 @@ import { ISLANDS } from "./registry";
  * `data-island`.
  */
 mountIslands(ISLANDS);
+
+// Once, at boot, for every section that reads them (Businesses, the Links
+// pickers, the Comments filter): it parks on window.__apiReady, as the legacy
+// bootstrap call did. Businesses reloads it after each of its actions.
+void loadBranches();

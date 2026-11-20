@@ -146,7 +146,6 @@ describe("create form — submitting", () => {
   it("reloads the table through the island's own load", async () => {
     const calls = standardApi();
     await mountLinks();
-    delete window.__loadLinks;
 
     await submit();
 

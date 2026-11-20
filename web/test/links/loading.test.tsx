@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LinksSection } from "../../src/links/LinksSection";
+import { reloadLinks } from "../../src/links/reload";
 import {
   count,
   gate,
@@ -88,7 +89,7 @@ describe("Links island — loading", () => {
     render(<LinksSection limit={100} />);
     await settle();
     await act(async () => {
-      await window.__loadLinks!();
+      await reloadLinks();
     });
     slow.release();
     await settle();
@@ -129,23 +130,27 @@ describe("Links island — loading", () => {
     expect(el("link-count").textContent).toBe("2");
   });
 
-  it("exposes window.__loadLinks for the legacy callers, and refreshes through it", async () => {
+  it("lends its load to the other sections (reloadLinks), and refreshes through it", async () => {
     const calls = standardApi();
     await mountLinks();
 
     await act(async () => {
-      await window.__loadLinks!();
+      await reloadLinks();
     });
     await settle();
 
     expect(count(calls, "GET", "/api/links")).toBe(2);
   });
 
-  it("removes window.__loadLinks when the island goes away", async () => {
-    standardApi();
+  it("takes its load back when the island goes away", async () => {
+    const calls = standardApi();
     const view = await mountLinks();
     view.unmount();
-    expect(window.__loadLinks).toBeUndefined();
+
+    await act(async () => {
+      await reloadLinks();
+    });
+    expect(count(calls, "GET", "/api/links")).toBe(1);
   });
 
   it("keeps the table on screen during a refresh and reopens, refetching, the panels that were open", async () => {
@@ -162,7 +167,7 @@ describe("Links island — loading", () => {
     const refresh = gate();
     hold = refresh.wait;
     act(() => {
-      void window.__loadLinks!();
+      void reloadLinks();
     });
     await settle();
 
@@ -233,7 +238,7 @@ describe("Links island — loading", () => {
     expect(bridges.overview).toEqual([]);
 
     await act(async () => {
-      await window.__loadLinks!();
+      await reloadLinks();
     });
     await settle();
     expect(bridges.overview).toEqual(["links"]);
@@ -265,7 +270,7 @@ describe("Links island — loading", () => {
 
     fail = true;
     await act(async () => {
-      await window.__loadLinks!();
+      await reloadLinks();
     });
     await settle();
     expect(bridges.overview).toEqual([]);

@@ -32,6 +32,6 @@ describe("island registry", () => {
   it("registers each migrated section under the name its placeholder carries", async () => {
     const { ISLANDS } = await import("../src/registry");
 
-    expect(Object.keys(ISLANDS)).toEqual(["cards", "links", "overview"]);
+    expect(Object.keys(ISLANDS)).toEqual(["cards", "links", "overview", "businesses", "comments", "settings"]);
   });
 });

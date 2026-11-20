@@ -179,7 +179,6 @@ describe("bulk modal — creating", () => {
   it("reports a full batch, and reloads the table", async () => {
     const calls = standardApi();
     await mountLinks();
-    delete window.__loadLinks;
     await open();
 
     await create("1");

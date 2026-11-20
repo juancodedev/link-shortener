@@ -66,6 +66,7 @@ export function CardsSection() {
   const [height, setHeight] = useState("420");
   const [zoom, setZoom] = useState("45");
   const [cards, setCards] = useState<Cards>({ status: "loading" });
+  const [marking, setMarking] = useState(false);
 
   const size = sheetPresetSize(preset, mm(width, 600), mm(height, 400));
   const sheetMargin = size.single ? 0 : mm(margin, 10);
@@ -138,9 +139,24 @@ export function CardsSection() {
   }
 
   function markPrinted() {
-    if (queue.length === 0) return;
-    if (!window.confirm(`Mark ${queue.length} card(s) as printed? They leave the print queue.`)) return;
-    window.__clearPrintQueue();
+    if (queue.length === 0 || marking) return;
+    if (!window.confirm(`Mark ${queue.length} card(s) as printed? They will show as printed in Links.`)) return;
+    setMarking(true);
+    void (async () => {
+      try {
+        // One request per print run, never one per card: the queue itself is
+        // page state, and this is what survives a reload.
+        await window.__api("POST", "/api/links/printed", { ids: queue.map((item) => item.id) });
+        window.__clearPrintQueue();
+        // The rows carry the new printed_at: reload once, not per card.
+        void window.__loadLinks?.();
+      } catch (err) {
+        // Nothing was recorded, so the batch stays where it is.
+        window.alert("Error: " + (err instanceof Error ? err.message : ""));
+      } finally {
+        setMarking(false);
+      }
+    })();
   }
 
   let info = "";
@@ -271,7 +287,13 @@ export function CardsSection() {
         <button type="button" id="cards-export" className="btn-sm btn-primary" disabled={queue.length === 0} onClick={exportCards}>
           Export PDF / Print
         </button>
-        <button type="button" id="cards-mark-printed" className="btn-sm btn-outline" disabled={queue.length === 0} onClick={markPrinted}>
+        <button
+          type="button"
+          id="cards-mark-printed"
+          className="btn-sm btn-outline"
+          disabled={queue.length === 0 || marking}
+          onClick={markPrinted}
+        >
           Mark as printed
         </button>
         <span id="cards-info" className="cards-info">

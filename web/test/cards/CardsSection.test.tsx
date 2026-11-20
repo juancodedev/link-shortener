@@ -3,14 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CardsSection } from "../../src/cards/CardsSection";
 import type { QueueItem } from "../../src/legacy";
 
-type Calls = { api: string[]; setQueued: Array<[string, boolean]>; cleared: number };
+type Calls = { api: string[]; requests: Array<{ method: string; path: string; body?: unknown }>; setQueued: Array<[string, boolean]>; cleared: number };
 
 /** Stands in for the server-rendered dashboard: the queue, __api and the two helpers. */
 function legacyWindow(queue: QueueItem[], svg = (path: string) => `<svg data-path="${path}"></svg>`) {
-  const calls: Calls = { api: [], setQueued: [], cleared: 0 };
+  const calls: Calls = { api: [], requests: [], setQueued: [], cleared: 0 };
   window.__printQueue = queue;
-  window.__api = vi.fn(async (_method: string, path: string) => {
+  window.__api = vi.fn(async (method: string, path: string, body?: unknown) => {
     calls.api.push(path);
+    calls.requests.push({ method, path, body });
     return new Response(svg(path), { status: 200 });
   });
   window.__setPrintQueued = (id: string, queued: boolean) => calls.setQueued.push([id, queued]);
@@ -32,6 +33,7 @@ describe("Cards section (React)", () => {
   beforeEach(() => {
     vi.stubGlobal("print", vi.fn());
     vi.stubGlobal("confirm", vi.fn(() => true));
+    vi.stubGlobal("alert", vi.fn());
   });
 
   afterEach(() => {
@@ -183,19 +185,44 @@ describe("Cards section (React)", () => {
     expect(calls.setQueued).toEqual([["a", false]]);
   });
 
-  it("clears the batch on Mark as printed only after the confirm, with no request", async () => {
+  it("records the print run before emptying the batch, then refreshes Links", async () => {
     const calls = legacyWindow([{ id: "a", short_code: "AAA" }, { id: "b", short_code: "BBB" }]);
+    const reload = vi.fn(async () => {});
+    window.__loadLinks = reload;
     await mount();
-    const apiCalls = calls.api.length;
+    const svgCalls = calls.api.length;
 
     vi.mocked(window.confirm).mockReturnValueOnce(false);
     fireEvent.click(screen.getByRole("button", { name: "Mark as printed" }));
     expect(calls.cleared).toBe(0);
+    expect(calls.requests.slice(svgCalls)).toEqual([]);
 
     fireEvent.click(screen.getByRole("button", { name: "Mark as printed" }));
-    expect(window.confirm).toHaveBeenLastCalledWith("Mark 2 card(s) as printed? They leave the print queue.");
+    await act(async () => {});
+
+    expect(window.confirm).toHaveBeenLastCalledWith(
+      "Mark 2 card(s) as printed? They will show as printed in Links.",
+    );
+    expect(calls.requests.slice(svgCalls)).toEqual([
+      { method: "POST", path: "/api/links/printed", body: { ids: ["a", "b"] } },
+    ]);
     expect(calls.cleared).toBe(1);
-    expect(calls.api.length).toBe(apiCalls);
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the batch when the print run could not be recorded", async () => {
+    const calls = legacyWindow([{ id: "a", short_code: "AAA" }]);
+    window.__api = vi.fn(async () => {
+      throw new Error("network down");
+    });
+    await mount();
+
+    fireEvent.click(screen.getByRole("button", { name: "Mark as printed" }));
+    await act(async () => {});
+
+    expect(calls.cleared).toBe(0);
+    expect(screen.getByRole("listitem").textContent).toContain("AAA");
+    expect(window.alert).toHaveBeenCalledWith("Error: network down");
   });
 
   it("prints only the sheets, with the page at the sheet size and no margin", async () => {

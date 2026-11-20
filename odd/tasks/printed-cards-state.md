@@ -17,8 +17,8 @@ Branch: `feat/printed-cards-state` · Delivery: one PR, one commit per work unit
 |----|-------|-------|------|--------|--------|
 | T1 | S5 | inline | item 1 (migration on every tenant schema) | done | `feat(db): record printed_at on tenant links` |
 | T2 | S1, S2, S3 | inline | — | done | `feat(api): stamp printed_at when a print run is recorded` |
-| T3 | S4 | inline | — | pending | — |
-| T4 | S1, S2, S3 | inline | — | pending | — |
+| T3 | S4 | inline | — | done | `feat(links): say Printed on a card that was already printed` |
+| T4 | S1, S2, S3 | inline | — | done | `feat(cards): record the print run before emptying the batch` |
 
 Route evidence: T1-T4 touch shared server files and their own islands, and T2 depends on T1; no parallel writers. T1 gets its own commit because it names a high-risk item.
 
@@ -29,3 +29,4 @@ Route evidence: T1-T4 touch shared server files and their own islands, and T2 de
 - **L3 (evidence, current code):** `Mark as printed` calls `window.__clearPrintQueue()` and nothing else (`web/src/cards/CardsSection.tsx`), the queue is an in-memory array (`web/src/print-queue.ts`) and a reload starts empty. The server side of the old design still exists and is unused by the UI: `print_queued_at`, `GET /api/links/print-queue`, `POST /api/links/printed`.
 - **L4 (decision, mine):** keep `print_queued_at` and its endpoints untouched; `POST /api/links/printed` is reused for the new meaning — record `printed_at`, clear `print_queued_at`, answer `{ printed }`. Its old response was `{ cleared }`; no in-repo consumer called it (the dashboard does not), so the response key moves with the meaning and the README follows.
 - **L5 (decision, mine):** `printed_at` is not cleared by saving a destination. The card exists physically and its QR encodes the short URL, so re-pointing the link does not unprint it.
+- **L6 (evidence):** T1–T4 test-first: RED observed in each (missing migration import, two API assertions, the Printed badge, the two Cards runs). Full suite 1306/1306, `tsc --noEmit` and `tsc --noEmit -p web` clean, `pnpm build:web` clean. Deploy note repeats L1 of print-queue-cards: migration 00020 must run in production before this merges, or `GET /api/links` selects a missing column.

@@ -50,8 +50,8 @@ describe("headline figures", () => {
   it("shows the scan count and both branches", () => {
     const { text } = panel(payload());
     expect(text).toContain("26");
-    expect(text).toContain("20 to review");
-    expect(text).toContain("6 private");
+    expect(text).toContain("20 a reseña");
+    expect(text).toContain("6 privados");
   });
 
   it("shows the derivation rate as a percentage", () => {
@@ -66,15 +66,15 @@ describe("headline figures", () => {
   it("lays the five tiles out in order, each with its label", () => {
     const { container } = panel(payload());
     const labels = [...container.querySelectorAll(".stat-tiles > .stat-tile > .label")].map((l) => l.textContent);
-    expect(labels).toEqual(["Scans", "To review", "Rating · to review", "Rating · private", "Sentiment gap"]);
+    expect(labels).toEqual(["Escaneos", "A reseña", "Calificación · a reseña", "Calificación · privada", "Brecha de sentimiento"]);
   });
 });
 
 describe("every average ships with its sample size", () => {
   it("shows n beside the mean for both branches", () => {
     const { text, container } = panel(payload());
-    expect(text).toContain("from 12 of 20");
-    expect(text).toContain("from 6 of 6");
+    expect(text).toContain("según 12 de 20");
+    expect(text).toContain("según 6 de 6");
     expect(container.querySelectorAll(".rating-of")[0]!.textContent).toBe(" / 5");
     expect(text).toContain("4.60 / 5");
   });
@@ -94,10 +94,10 @@ describe("every average ships with its sample size", () => {
 
     // The number must not be readable anywhere on the panel.
     expect(text).not.toContain("4.60");
-    expect(text).toContain("Not enough ratings");
+    expect(text).toContain("Calificaciones insuficientes");
     expect(container.querySelector(".value.withheld")).not.toBeNull();
     // ...and the reader learns how far short it fell.
-    expect(text).toContain(`2 of 20 scanned · needs ${MIN_RATED_SAMPLE}`);
+    expect(text).toContain(`2 de 20 escaneos · se necesitan ${MIN_RATED_SAMPLE}`);
   });
 
   it("never renders a bare dash that could read as a bug", () => {
@@ -121,7 +121,7 @@ describe("the sentiment gap", () => {
   it("shows a signed gap when both branches cleared the floor", () => {
     const { text } = panel(payload());
     expect(text).toContain("+2.20");
-    expect(text).toContain("public minus private");
+    expect(text).toContain("pública menos privada");
   });
 
   it("withholds it when either branch is short, and names the requirement", () => {
@@ -137,7 +137,7 @@ describe("the sentiment gap", () => {
       }),
     );
     expect(text).not.toContain("+4.80");
-    expect(text).toContain(`needs ${MIN_RATED_SAMPLE} ratings in both groups`);
+    expect(text).toContain(`se necesitan ${MIN_RATED_SAMPLE} calificaciones en ambos grupos`);
   });
 
   it("signs a negative gap rather than showing a bare number", () => {
@@ -172,16 +172,16 @@ describe("per-location table", () => {
 
   it("lists one row per location with its scans and share to review", () => {
     const { container } = panel(payload({ locations: [location()] }));
-    expect(container.querySelector("h4.gate-h:nth-of-type(2)")!.textContent).toBe("By location");
+    expect(container.querySelector("h4.gate-h:nth-of-type(2)")!.textContent).toBe("Por sucursal");
     const head = [...container.querySelectorAll("thead th")].map((th) => th.textContent);
-    expect(head).toEqual(["Location", "Scans", "To review"]);
+    expect(head).toEqual(["Sucursal", "Escaneos", "A reseña"]);
     const cells = [...container.querySelectorAll("tbody td")].map((td) => td.textContent);
     expect(cells).toEqual(["Cafe Central", "4", "75.0%"]);
   });
 
   it("labels an unassigned scan rather than showing an empty cell", () => {
     const { text } = panel(payload({ locations: [location({ locationId: null, locationName: null })] }));
-    expect(text).toContain("Not assigned to a location");
+    expect(text).toContain("Sin sucursal asignada");
   });
 
   it("renders a location name from the database as text, never as markup", () => {
@@ -231,8 +231,8 @@ describe("peak chart", () => {
     expect(heights.filter((h) => h > 0)).toEqual([100]);
     const [start, end] = axis(container);
     expect(start).not.toBe(end);
-    expect(start).toBe(new Date((1767225600 - 167 * HOUR) * 1000).toLocaleString());
-    expect(end).toBe(new Date(1767225600 * 1000).toLocaleString());
+    expect(start).toBe(new Date((1767225600 - 167 * HOUR) * 1000).toLocaleString("es-CL"));
+    expect(end).toBe(new Date(1767225600 * 1000).toLocaleString("es-CL"));
   });
 
   it("keeps every bucket when the data spans more than 168 hours", () => {
@@ -257,7 +257,7 @@ describe("peak chart", () => {
       payload({ peaks: [{ bucketStart: 1767225600, google: 3, private: 1, total: 4, derivationRate: 0.75 }] }),
     );
     const bar = [...container.querySelectorAll<HTMLElement>(".peak-bar")].at(-1)!;
-    expect(bar.title).toBe("4 scans · 75.0% to review");
+    expect(bar.title).toBe("4 escaneos · 75.0% a reseña");
     expect(bar.querySelector<HTMLElement>(".peak-seg")!.style.height).toBe("100%");
     expect(bar.querySelector<HTMLElement>(".peak-seg-public")!.style.height).toBe("75%");
     expect(bar.querySelector<HTMLElement>(".peak-seg-rest")!.style.height).toBe("25%");
@@ -265,7 +265,7 @@ describe("peak chart", () => {
 
   it("says so when there is no traffic, instead of drawing an empty chart", () => {
     const { container, text } = panel(payload());
-    expect(text).toContain("No tagged scans in the last 7 days yet.");
+    expect(text).toContain("Aún no hay escaneos con etiqueta en los últimos 7 días.");
     expect(container.querySelector(".gate-empty-note")).not.toBeNull();
     expect(container.querySelector(".peak-chart")).toBeNull();
   });
@@ -290,7 +290,7 @@ describe("empty state", () => {
   it("tells the owner what to do instead of showing an empty panel", () => {
     const { container } = panel(payload({ split: EMPTY_SPLIT }));
     expect(container.querySelector(".gate-empty")!.textContent).toBe(
-      "No tagged scans yet. Point a link at a sticker and scan it to see numbers here.",
+      "Aún no hay escaneos con etiqueta. Asigna un enlace a un adhesivo y escanéalo para ver cifras aquí.",
     );
   });
 
@@ -302,9 +302,9 @@ describe("empty state", () => {
 describe("the qualification travels with the number", () => {
   it("states the sample rule in the static markup", () => {
     const { text } = panel(payload());
-    expect(text).toContain("How to read this: ratings are optional");
-    expect(text).toContain(`below ${MIN_RATED_SAMPLE} ratings`);
-    expect(text).toContain("A rating shown with its sample size is a signal; one shown without would not be.");
+    expect(text).toContain("Cómo leer esto: las calificaciones son opcionales");
+    expect(text).toContain(`con menos de ${MIN_RATED_SAMPLE} calificaciones`);
+    expect(text).toContain("Una calificación mostrada con su tamaño de muestra es una señal; sin él, no lo sería.");
   });
 
   it("renders the floor from meta, not a copy baked into the markup", () => {
@@ -322,9 +322,9 @@ describe("the qualification travels with the number", () => {
       }),
       meta: { minRatedSample: 12, peakWindow: "7 days" },
     });
-    expect(text).toContain("below 12 ratings");
-    expect(text).toContain("needs 12 ratings in both groups");
-    expect(text).not.toContain("below 5 ratings");
+    expect(text).toContain("con menos de 12 calificaciones");
+    expect(text).toContain("se necesitan 12 calificaciones en ambos grupos");
+    expect(text).not.toContain("con menos de 5 calificaciones");
   });
 });
 

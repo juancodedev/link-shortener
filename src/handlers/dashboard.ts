@@ -22,11 +22,11 @@ function configJson(config: { supabaseUrl: string; supabaseAnonKey: string }): s
 
 function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey: string): string {
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="es">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${title} — Link Shortener</title>
+  <title>${title} — Más Reseñas</title>
   <!-- The review cards (Cards section) are drawn with these faces. Loaded by
        the page so the inline card SVGs use them on screen AND the browser
        embeds the same fonts in the PDF it prints. -->
@@ -38,11 +38,11 @@ function shell(title: string, body: string, supabaseUrl: string, supabaseAnonKey
 </head>
 <body>
   <nav class="topbar">
-    <h2 class="brand">${icon("logo")}<span>Link Shortener</span></h2>
+    <h2 class="brand">${icon("logo")}<span>Más Reseñas</span></h2>
     <div class="topbar-actions">
       <span id="nav-email" class="nav-email"></span>
-      <a href="/">Home</a>
-      <button id="logout-nav">${icon("logout")}<span>Log Out</span></button>
+      <a href="/">Inicio</a>
+      <button id="logout-nav">${icon("logout")}<span>Cerrar sesión</span></button>
     </div>
   </nav>
   <div class="container">
@@ -90,13 +90,13 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
     -->
     <div class="app">
     <aside class="sidebar no-print">
-      <nav class="side-nav" aria-label="Dashboard sections">
-        <a href="#overview" data-section-link="overview">${icon("overview")}<span>Overview</span></a>
-        <a href="#links" data-section-link="links">${icon("links")}<span>Links</span></a>
-        <a href="#cards" data-section-link="cards">${icon("cards")}<span>Cards</span> <span id="cards-count" class="side-count" hidden></span></a>
-        <a href="#businesses" data-section-link="businesses">${icon("businesses")}<span>Businesses and branches</span></a>
-        <a href="#comments" data-section-link="comments">${icon("comments")}<span>Comments</span></a>
-        <a href="#settings" data-section-link="settings">${icon("settings")}<span>Settings</span></a>
+      <nav class="side-nav" aria-label="Secciones del panel">
+        <a href="#overview" data-section-link="overview">${icon("overview")}<span>Resumen</span></a>
+        <a href="#links" data-section-link="links">${icon("links")}<span>Enlaces</span></a>
+        <a href="#cards" data-section-link="cards">${icon("cards")}<span>Tarjetas</span> <span id="cards-count" class="side-count" hidden></span></a>
+        <a href="#businesses" data-section-link="businesses">${icon("businesses")}<span>Locales y sucursales</span></a>
+        <a href="#comments" data-section-link="comments">${icon("comments")}<span>Comentarios</span></a>
+        <a href="#settings" data-section-link="settings">${icon("settings")}<span>Configuración</span></a>
       </nav>
     </aside>
     <main class="sections">
@@ -129,8 +129,8 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
     -->
     <div id="links-root" data-island="links" data-link-limit="${activeLinkLimit}">
     <div class="card no-print" id="links-card">
-      <h3>Your Links (<span id="link-count">0</span>/${activeLinkLimit})</h3>
-      <div id="links-loading" class="loading">Loading...</div>
+      <h3>Tus enlaces (<span id="link-count">0</span>/${activeLinkLimit})</h3>
+      <div id="links-loading" class="loading">Cargando…</div>
       <!--
         Server-rendered, not injected by script, and not behind a tooltip (the
         island renders the same sentence once it mounts).
@@ -143,7 +143,7 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
         decision with it. The sentence lives beside the constants it qualifies
         in src/analytics/metrics.ts so the two cannot drift apart.
       -->
-      <p class="estimate-note"><strong>About visitor figures:</strong> ${VISITOR_ESTIMATE_CAVEAT}</p>
+      <p class="estimate-note"><strong>Sobre las cifras de visitantes:</strong> ${VISITOR_ESTIMATE_CAVEAT}</p>
     </div>
     </div>
     </section>
@@ -203,5 +203,5 @@ export const dashboardHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }
     </div>
   `;
 
-  return c.html(shell("Dashboard", body, c.env.SUPABASE_URL, c.env.SUPABASE_ANON_KEY));
+  return c.html(shell("Panel", body, c.env.SUPABASE_URL, c.env.SUPABASE_ANON_KEY));
 };

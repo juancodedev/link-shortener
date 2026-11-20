@@ -87,13 +87,13 @@ export function LinksSection({ limit }: { limit: number }) {
     setMetric(id, { status: "loading" });
     try {
       const res = await api("GET", `/api/links/${encodeURIComponent(id)}/clicks`);
-      if (!res) throw new Error("No response");
+      if (!res) throw new Error("Sin respuesta");
       const data = (await res.json()) as ClickMetrics;
-      if (!res.ok) throw new Error(data.error || "Server error");
+      if (!res.ok) throw new Error(data.error || "Error del servidor");
       if (inflight.current.get(id) === token) setMetric(id, { status: "ready", data });
     } catch (err) {
       if (inflight.current.get(id) === token) {
-        setMetric(id, { status: "error", message: err instanceof Error ? err.message : "Unknown" });
+        setMetric(id, { status: "error", message: err instanceof Error ? err.message : "Error desconocido" });
       }
     } finally {
       if (inflight.current.get(id) === token) inflight.current.delete(id);
@@ -146,7 +146,7 @@ export function LinksSection({ limit }: { limit: number }) {
     } catch (err) {
       if (seq !== loadSeq.current) return;
       shown.current = null;
-      setView({ status: "error", message: "Could not load links. " + (err instanceof Error ? err.message : "") });
+      setView({ status: "error", message: "No se pudieron cargar los enlaces. " + (err instanceof Error ? err.message : "") });
     }
   }, [fetchMetrics]);
 
@@ -209,7 +209,7 @@ export function LinksSection({ limit }: { limit: number }) {
   const links = view.status === "ready" ? view.links : [];
   const showTable = links.length > 0;
   const emptyText =
-    view.status === "error" ? view.message : view.status === "ready" && links.length === 0 ? "No links yet. Create your first one above!" : "";
+    view.status === "error" ? view.message : view.status === "ready" && links.length === 0 ? "Aún no tienes enlaces. ¡Crea el primero arriba!" : "";
 
   return (
     <>
@@ -217,21 +217,21 @@ export function LinksSection({ limit }: { limit: number }) {
       {/* The table is not part of the printed report. */}
       <div className="card no-print" id="links-card">
         <h3>
-          Your Links (<span id="link-count">{count}</span>/{limit})
+          Tus enlaces (<span id="link-count">{count}</span>/{limit})
         </h3>
         <div id="links-loading" className="loading" style={{ display: view.status === "loading" ? "" : "none" }}>
-          Loading...
+          Cargando…
         </div>
         <div className="table-wrap">
           <table id="links-table" style={{ display: showTable ? "" : "none" }}>
             <thead>
               <tr>
-                <th>Short Code</th>
-                <th className="hide-sm">Business / branch</th>
+                <th>Código corto</th>
+                <th className="hide-sm">Local / sucursal</th>
                 <th className="hide-sm">URL</th>
-                <th className="hide-sm">Opens</th>
-                <th>Clicks</th>
-                <th>Status</th>
+                <th className="hide-sm">Apertura</th>
+                <th>Clics</th>
+                <th>Estado</th>
                 <th></th>
               </tr>
             </thead>
@@ -261,7 +261,7 @@ export function LinksSection({ limit }: { limit: number }) {
             visitor number, so the limitation is on the page before they expand
             anything. The text lives with the metric in src/analytics/metrics.ts. */}
         <p className="estimate-note">
-          <strong>About visitor figures:</strong> {VISITOR_ESTIMATE_CAVEAT}
+          <strong>Sobre las cifras de visitantes:</strong> {VISITOR_ESTIMATE_CAVEAT}
         </p>
       </div>
       <QrModal url={qrUrl} onClose={() => setQrUrl(null)} />

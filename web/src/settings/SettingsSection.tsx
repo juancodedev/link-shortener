@@ -54,10 +54,10 @@ export function SettingsSection() {
       // address is recorded that is not.
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { detail?: string; error?: string };
-        setMsg({ kind: "error", text: body.detail || body.error || "Could not save" });
+        setMsg({ kind: "error", text: body.detail || body.error || "No se pudo guardar" });
         return;
       }
-      setMsg({ kind: "success", text: "Saved." });
+      setMsg({ kind: "success", text: "Guardado." });
     } catch (err) {
       setMsg({ kind: "error", text: err instanceof Error ? err.message : "Error" });
     } finally {
@@ -67,16 +67,16 @@ export function SettingsSection() {
 
   return (
     <div className="card" id="feedback-email-card">
-      <h3>Feedback email</h3>
+      <h3>Correo para comentarios</h3>
       <p className="field-help">
-        Where you would like private customer comments delivered. Stored now; nothing is emailed yet — comments still arrive in the
-        Comments section.
+        Dónde te gustaría recibir los comentarios privados de tus clientes. Se guarda ahora; todavía no se envía ningún correo: los
+        comentarios siguen llegando a la sección Comentarios.
       </p>
-      <label htmlFor="feedback-email">Email address</label>
+      <label htmlFor="feedback-email">Correo electrónico</label>
       <input
         type="email"
         id="feedback-email"
-        placeholder="you@yourbusiness.com"
+        placeholder="tu@tunegocio.com"
         autoComplete="email"
         maxLength={254}
         value={email}
@@ -86,7 +86,7 @@ export function SettingsSection() {
         {msg.text}
       </div>
       <button type="button" id="feedback-email-save" className="btn-sm btn-primary gap-top-sm" disabled={saving} onClick={() => void save()}>
-        Save
+        Guardar
       </button>
     </div>
   );

@@ -49,7 +49,7 @@ export function BulkModal({ onCreated }: { onCreated: () => void }) {
     // safe, but a button that waits ten seconds to refuse a 0 teaches the
     // owner the button is broken.
     if (!Number.isInteger(n) || n < 1 || n > 200) {
-      setMsg({ kind: "error", text: "Enter a number between 1 and 200." });
+      setMsg({ kind: "error", text: "Ingresa un número entre 1 y 200." });
       return;
     }
 
@@ -72,12 +72,14 @@ export function BulkModal({ onCreated }: { onCreated: () => void }) {
       // cards is a shortfall the owner discovers at the printer.
       const results = body.results || [];
       const created = results.filter((r) => r.status === 201);
-      if (!res.ok && !created.length) throw new Error(body.error || "Could not create the cards");
+      if (!res.ok && !created.length) throw new Error(body.error || "No se pudieron crear las tarjetas");
 
       setIds(created.map((r) => r.link!.id));
       const failed = results.length - created.length;
       setSummary(
-        created.length + (created.length === 1 ? " card created. " : " cards created. ") + (failed ? failed + " failed — try those again." : ""),
+        created.length +
+          (created.length === 1 ? " tarjeta creada. " : " tarjetas creadas. ") +
+          (failed ? failed + (failed === 1 ? " falló; reinténtala." : " fallaron; reinténtalas.") : ""),
       );
       setMsg({ kind: failed ? "error" : "success", text: "" });
       onCreated();
@@ -90,7 +92,7 @@ export function BulkModal({ onCreated }: { onCreated: () => void }) {
 
   async function download() {
     if (!ids.length) {
-      setMsg({ kind: "error", text: "Create the cards first." });
+      setMsg({ kind: "error", text: "Primero crea las tarjetas." });
       return;
     }
 
@@ -105,7 +107,7 @@ export function BulkModal({ onCreated }: { onCreated: () => void }) {
       const href = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = href;
-      a.download = "cards.zip";
+      a.download = "tarjetas.zip";
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -120,39 +122,40 @@ export function BulkModal({ onCreated }: { onCreated: () => void }) {
   return (
     <>
       <button type="button" id="open-bulk" className="btn-sm btn-outline" onClick={openModal}>
-        Create cards in bulk...
+        Crear tarjetas en lote…
       </button>
       <div id="bulk-modal" className={open ? "qr-modal" : "qr-modal hidden"} onClick={() => setOpen(false)}>
         <div className="qr-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: "26rem" }}>
-          <h3 className="qr-title">Create cards in bulk</h3>
+          <h3 className="qr-title">Crear tarjetas en lote</h3>
           <p className="field-help">
-            Each card gets its own QR and no destination yet. Print them, and load the real URL whenever it is settled — until then,
-            scanning a card opens a "not configured" page rather than a broken link.
+            Cada tarjeta recibe su propio QR y aún no tiene destino. Imprímelas y carga la URL real cuando esté definida; mientras
+            tanto, escanear una tarjeta abre una página "sin configurar" en lugar de un enlace roto.
           </p>
-          <label htmlFor="bulk-count">How many cards</label>
+          <label htmlFor="bulk-count">Cuántas tarjetas</label>
           <input type="number" id="bulk-count" min="1" max="200" step="1" value={count} onChange={(e) => setCount(e.target.value)} />
           <label htmlFor="bulk-label" className="gap-top-sm">
-            Label for this batch <span className="field-note">(optional)</span>
+            Etiqueta para este lote <span className="field-note">(opcional)</span>
           </label>
           <input
             type="text"
             id="bulk-label"
             maxLength={200}
-            placeholder="e.g. Main room — tables 1 to 10"
+            placeholder="p. ej. Salón principal — mesas 1 a 10"
             value={label}
             onChange={(e) => setLabel(e.target.value)}
           />
           <label className="check-row gap-top-sm">
             <input type="checkbox" id="bulk-gated" checked={gated} onChange={(e) => setGated(e.target.checked)} />
-            <span>Show the review screen before redirecting</span>
+            <span>Mostrar la pantalla de reseña antes de redirigir</span>
           </label>
           <p className="field-help">
-            Off: once a destination is loaded, scans go straight to it. On: customers see the star rating and can leave a private
-            comment — and only these cards feed the satisfaction panel. Changeable per card later.
+            Desactivado: una vez cargado el destino, los escaneos van directo a él. Activado: tus clientes ven la calificación con
+            estrellas y pueden dejar un comentario privado, y solo estas tarjetas alimentan el panel de satisfacción. Puedes cambiarlo
+            por tarjeta después.
           </p>
           <p className="field-help">
-            Printed under the code on every card, and written to the sheet's CSV, so the designer knows which sticker is which before
-            cutting. One field for the whole batch beats typing it ten times.
+            Se imprime bajo el código de cada tarjeta y se escribe en el CSV de la hoja, para que el diseñador sepa qué adhesivo es
+            cuál antes de cortar. Un solo campo para todo el lote es mejor que escribirlo diez veces.
           </p>
           <div id="bulk-msg" className={msg.kind ? `message ${msg.kind}` : "message"}>
             {msg.text}
@@ -162,16 +165,16 @@ export function BulkModal({ onCreated }: { onCreated: () => void }) {
               {summary}
             </p>
             <button type="button" id="bulk-download" className="btn-sm btn-primary gap-top-sm" onClick={() => void download()}>
-              Download print sheet (.zip)
+              Descargar hoja de impresión (.zip)
             </button>
-            <p className="field-help">One SVG per card plus a links.csv listing them. The cards go straight to your designer.</p>
+            <p className="field-help">Un SVG por tarjeta más un links.csv que las enumera. Las tarjetas van directo a tu diseñador.</p>
           </div>
           <div className="gap-top-sm" style={{ display: "flex", gap: ".5rem" }}>
             <button type="button" id="bulk-create" className="btn-sm btn-primary" disabled={busy} onClick={() => void create()}>
-              {busy ? "Creating..." : "Create them"}
+              {busy ? "Creando…" : "Crearlas"}
             </button>
             <button type="button" className="btn-sm gap-top-sm" onClick={() => setOpen(false)}>
-              Close
+              Cerrar
             </button>
           </div>
         </div>

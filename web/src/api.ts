@@ -83,7 +83,7 @@ export async function api(method: string, path: string, body?: unknown): Promise
   });
   if (res.status === 401) {
     navigate("/login");
-    throw new Error("Unauthorized");
+    throw new Error("No autorizado");
   }
 
   // Several locations and none chosen. The API refuses rather than guessing,
@@ -104,5 +104,5 @@ export async function api(method: string, path: string, body?: unknown): Promise
     showTenantPicker(payload.available as TenantChoice[]);
     throw new Error("tenant_required");
   }
-  throw new Error(payload && typeof payload.error === "string" && payload.error ? payload.error : "Server error");
+  throw new Error(payload && typeof payload.error === "string" && payload.error ? payload.error : "Error del servidor");
 }

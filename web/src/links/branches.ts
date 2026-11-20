@@ -14,11 +14,11 @@ const label = (b: Branch) => (b.business_name ? `${b.business_name} — ` : "") 
  */
 export function branchOptions(current: string, all: Branch[], businesses: Business[]): BranchOption[] {
   const branches = pickableBranches(all, businesses);
-  const options: BranchOption[] = [{ label: "Unassigned", value: "" }];
+  const options: BranchOption[] = [{ label: "Sin asignar", value: "" }];
   branches.forEach((b) => options.push({ label: label(b), value: b.id }));
   if (current && !branches.some((b) => b.id === current)) {
     const known = all.find((b) => b.id === current);
-    options.push({ label: known ? `${label(known)} (inactive)` : "Current branch", value: current });
+    options.push({ label: known ? `${label(known)} (inactiva)` : "Sucursal actual", value: current });
   }
   return options;
 }

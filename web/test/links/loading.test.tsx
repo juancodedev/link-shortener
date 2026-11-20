@@ -127,7 +127,7 @@ describe("Links island — loading", () => {
     standardApi({ links: [link({ id: "a" }), link({ id: "b" })] });
     await mountLinks(25);
 
-    expect(document.querySelector("#links-card h3")!.textContent).toBe("Your Links (2/25)");
+    expect(document.querySelector("#links-card h3")!.textContent).toBe("Tus enlaces (2/25)");
     expect(el("link-count").textContent).toBe("2");
   });
 
@@ -193,19 +193,19 @@ describe("Links island — loading", () => {
 
     expect(el("links-table").style.display).toBe("none");
     expect(el("links-empty").style.display).toBe("");
-    expect(el("links-empty").textContent).toBe("No links yet. Create your first one above!");
+    expect(el("links-empty").textContent).toBe("Aún no tienes enlaces. ¡Crea el primero arriba!");
   });
 
   it("fails the whole load when the links cannot be read", async () => {
     installApi((_m, path) => {
-      if (path === "/api/links") throw new Error("Server error");
+      if (path === "/api/links") throw new Error("Error del servidor");
       return [];
     });
     await mountLinks();
 
     expect(el("links-table").style.display).toBe("none");
     expect(el("links-empty").style.display).toBe("");
-    expect(el("links-empty").textContent).toBe("Could not load links. Server error");
+    expect(el("links-empty").textContent).toBe("No se pudieron cargar los enlaces. Error del servidor");
     expect(el("links-loading").style.display).toBe("none");
   });
 
@@ -228,7 +228,7 @@ describe("Links island — loading", () => {
     standardApi({ links: () => ({ links: [] }) });
     await mountLinks();
 
-    expect(el("links-empty").textContent).toBe("Could not load links. Unexpected /api/links response shape");
+    expect(el("links-empty").textContent).toBe("No se pudieron cargar los enlaces. Respuesta inesperada de /api/links");
   });
 
   it("tells the Overview after every refresh, so its gate and rollup cards follow the table", async () => {
@@ -263,7 +263,7 @@ describe("Links island — loading", () => {
     let fail = false;
     standardApi({
       links: () => {
-        if (fail) throw new Error("Server error");
+        if (fail) throw new Error("Error del servidor");
         return [link()];
       },
     });

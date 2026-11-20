@@ -77,7 +77,7 @@ describe("dashboardHandler shell", () => {
     expect(html).toMatch(
       /<section class="dash-section" data-section="links">\s*<!--[\s\S]*?-->\s*<div id="links-root" data-island="links" data-link-limit="\d+">\s*<div class="card no-print" id="links-card">/,
     );
-    expect(html).toContain("Your Links");
+    expect(html).toContain("Tus enlaces");
     // The table itself is the island's (web/src/links); the server ships none.
     expect(html).not.toContain('id="links-table"');
     expect(html).not.toContain('id="links-body"');
@@ -143,10 +143,10 @@ async function staticRegion(): Promise<string> {
   return html.slice(0, cut);
 }
 
-/** The static "About visitor figures" note's text, or undefined if absent. */
+/** The static "Sobre las cifras de visitantes" note's text, or undefined if absent. */
 async function staticCaveatText(): Promise<string | undefined> {
   return (await staticRegion()).match(
-    /<p class="estimate-note"><strong>About visitor figures:<\/strong>([\s\S]*?)<\/p>/,
+    /<p class="estimate-note"><strong>Sobre las cifras de visitantes:<\/strong>([\s\S]*?)<\/p>/,
   )?.[1];
 }
 
@@ -166,9 +166,9 @@ describe("visitor figures — the caveat is in the rendered markup", () => {
     // A caveat that says only "figures are approximate" tells the reader
     // nothing they can act on. It has to name the cause — people sharing an
     // address — and the direction of the error — under-reporting.
-    expect(text).toMatch(/same Wi-Fi or mobile network/);
-    expect(text).toMatch(/counted as one visitor/i);
-    expect(text).toMatch(/UNDER-report/i);
+    expect(text).toMatch(/misma red Wi-Fi o móvil/);
+    expect(text).toMatch(/cuentan como un solo visitante/i);
+    expect(text).toMatch(/SUBESTIMAN/);
   });
 
 
@@ -337,8 +337,20 @@ describe("the served document", () => {
     const nav = html.slice(html.indexOf('<nav class="topbar">'), html.indexOf("</nav>"));
 
     expect(nav).toContain('<span id="nav-email" class="nav-email"></span>');
-    expect(nav).toMatch(/<button id="logout-nav">[\s\S]*?<span>Log Out<\/span><\/button>/);
-    expect(nav).toContain('<a href="/">Home</a>');
+    expect(nav).toMatch(/<button id="logout-nav">[\s\S]*?<span>Cerrar sesión<\/span><\/button>/);
+    expect(nav).toContain('<a href="/">Inicio</a>');
+  });
+
+  it("is a Spanish document carrying the Más Reseñas brand", async () => {
+    const html = await serve();
+    const nav = html.slice(html.indexOf('<nav class="topbar">'), html.indexOf("</nav>"));
+
+    expect(html).toContain('<html lang="es">');
+    expect(html).toContain("<title>Panel — Más Reseñas</title>");
+    expect(nav).toContain("<span>Más Reseñas</span>");
+    expect(html).toContain('aria-label="Secciones del panel"');
+    expect(html).toContain('<div id="links-loading" class="loading">Cargando…</div>');
+    expect(html).not.toContain("Link Shortener");
   });
 
   it("links the bundle's stylesheet, which still styles the tenant bar and the sidebar", async () => {
@@ -386,12 +398,12 @@ describe("sidebar sections (odd/tasks/print-queue-cards.md S1)", () => {
     // Each link is an icon followed by its label in a <span>.
     const links = [...nav.matchAll(/<a href="#([a-z]+)" data-section-link="\1"[^>]*>[^]*?<span>([^<]+)<\/span>/g)].map((m) => [m[1], m[2]!.trim()]);
     expect(links).toEqual([
-      ["overview", "Overview"],
-      ["links", "Links"],
-      ["cards", "Cards"],
-      ["businesses", "Businesses and branches"],
-      ["comments", "Comments"],
-      ["settings", "Settings"],
+      ["overview", "Resumen"],
+      ["links", "Enlaces"],
+      ["cards", "Tarjetas"],
+      ["businesses", "Locales y sucursales"],
+      ["comments", "Comentarios"],
+      ["settings", "Configuración"],
     ]);
   });
 

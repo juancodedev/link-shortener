@@ -54,7 +54,7 @@ describe("Cards section (React)", () => {
     expect(screen.getByLabelText("Híbrido: QR + NFC")).toBeChecked();
     screen.getByLabelText("Solo QR Centrado");
     screen.getByLabelText("Solo NFC Centrado");
-    expect([...field("card-design").options].map((o) => o.text)).toEqual(["Estándar Oficial Google", "Clean Minimalist Glass"]);
+    expect([...field("card-design").options].map((o) => o.text)).toEqual(["Estándar Oficial Google", "Vidrio minimalista"]);
     expect([...field("card-sheet").options].map((o) => [o.value, o.text])).toEqual([
       ["297x420", "A3 vertical (297×420 mm)"],
       ["420x297", "A3 horizontal (420×297 mm)"],
@@ -94,9 +94,9 @@ describe("Cards section (React)", () => {
     legacyWindow([]);
     await mount();
 
-    screen.getByText("No cards waiting to be printed. Send unconfigured links to print from the Links section.");
-    expect(screen.getByRole("button", { name: "Export PDF / Print" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Mark as printed" })).toBeDisabled();
+    screen.getByText("No hay tarjetas por imprimir. Envía a imprimir enlaces sin configurar desde la sección Enlaces.");
+    expect(screen.getByRole("button", { name: "Exportar PDF / Imprimir" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Marcar como impresas" })).toBeDisabled();
   });
 
   it("lays the queued cards out from the top-left of each sheet, drawn by the API", async () => {
@@ -113,7 +113,7 @@ describe("Cards section (React)", () => {
     await act(async () => {});
 
     expect(calls.api).toContain("/api/links/b%2F2/card.svg?design=minimal&variant=qr");
-    screen.getByText("1×2 = 2 cards per sheet · 100×100 mm cards · 3 card(s) · 2 sheet(s)");
+    screen.getByText("1×2 = 2 tarjetas por hoja · tarjetas de 100×100 mm · 3 tarjeta(s) · 2 hoja(s)");
     const sheets = [...document.querySelectorAll<HTMLElement>("#card-sheets > .card-sheet")];
     expect(sheets).toHaveLength(2);
     expect(sheets[0]!.style.width).toBe("210mm");
@@ -135,7 +135,7 @@ describe("Cards section (React)", () => {
 
     const sheet = document.querySelector<HTMLElement>(".card-sheet")!;
     expect(sheet.style.padding).toBe("0mm");
-    screen.getByText("1×1 = 1 cards per sheet · 100×100 mm cards · 1 card(s) · 1 sheet(s)");
+    screen.getByText("1×1 = 1 tarjetas por hoja · tarjetas de 100×100 mm · 1 tarjeta(s) · 1 hoja(s)");
   });
 
   it("lays A4 landscape out as two cards side by side", async () => {
@@ -147,7 +147,7 @@ describe("Cards section (React)", () => {
     const sheet = document.querySelector<HTMLElement>(".card-sheet")!;
     expect([sheet.style.width, sheet.style.height]).toEqual(["297mm", "210mm"]);
     expect(sheet.style.gridTemplateColumns).toBe("repeat(2, 100mm)");
-    screen.getByText("2×1 = 2 cards per sheet · 100×100 mm cards · 1 card(s) · 1 sheet(s)");
+    screen.getByText("2×1 = 2 tarjetas por hoja · tarjetas de 100×100 mm · 1 tarjeta(s) · 1 hoja(s)");
   });
 
   it("keeps every card at 10×10 cm on every sheet preset", async () => {
@@ -176,7 +176,7 @@ describe("Cards section (React)", () => {
     fireEvent.change(field("card-margin"), { target: { value: "30" } });
     await act(async () => {});
 
-    screen.getByText("The sheet is too small for a 100×100 mm card with that margin.");
+    screen.getByText("La hoja es demasiado pequeña para una tarjeta de 100×100 mm con ese margen.");
     expect(document.querySelectorAll(".card-sheet")).toHaveLength(0);
   });
 
@@ -186,7 +186,7 @@ describe("Cards section (React)", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     await mount();
 
-    screen.getByText("Could not load the cards.");
+    screen.getByText("No se pudieron cargar las tarjetas.");
   });
 
   it("scales only the preview through --card-zoom", async () => {
@@ -213,7 +213,7 @@ describe("Cards section (React)", () => {
   it("removes one card through the Links table's own helper", async () => {
     const calls = legacyWindow([{ id: "a", short_code: "AAA" }]);
     await mount();
-    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    fireEvent.click(screen.getByRole("button", { name: "Quitar" }));
 
     expect(calls.setQueued).toEqual([["a", false]]);
   });
@@ -226,15 +226,15 @@ describe("Cards section (React)", () => {
     const svgCalls = calls.api.length;
 
     vi.mocked(window.confirm).mockReturnValueOnce(false);
-    fireEvent.click(screen.getByRole("button", { name: "Mark as printed" }));
+    fireEvent.click(screen.getByRole("button", { name: "Marcar como impresas" }));
     expect(calls.cleared).toBe(0);
     expect(calls.requests.slice(svgCalls)).toEqual([]);
 
-    fireEvent.click(screen.getByRole("button", { name: "Mark as printed" }));
+    fireEvent.click(screen.getByRole("button", { name: "Marcar como impresas" }));
     await act(async () => {});
 
     expect(window.confirm).toHaveBeenLastCalledWith(
-      "Mark 2 card(s) as printed? They will show as printed in Links.",
+      "¿Marcar 2 tarjeta(s) como impresas? Aparecerán como impresas en Enlaces.",
     );
     expect(calls.requests.slice(svgCalls)).toEqual([
       { method: "POST", path: "/api/links/printed", body: { ids: ["a", "b"] } },
@@ -251,7 +251,7 @@ describe("Cards section (React)", () => {
     }));
     await mount();
 
-    fireEvent.click(screen.getByRole("button", { name: "Mark as printed" }));
+    fireEvent.click(screen.getByRole("button", { name: "Marcar como impresas" }));
     await act(async () => {});
 
     expect(calls.cleared).toBe(0);
@@ -263,7 +263,7 @@ describe("Cards section (React)", () => {
     legacyWindow([{ id: "a", short_code: "AAA" }]);
     await mount();
     fireEvent.change(field("card-sheet"), { target: { value: "216x330" } });
-    fireEvent.click(screen.getByRole("button", { name: "Export PDF / Print" }));
+    fireEvent.click(screen.getByRole("button", { name: "Exportar PDF / Imprimir" }));
 
     expect(window.print).toHaveBeenCalledTimes(1);
     expect(document.body.classList.contains("printing-cards")).toBe(true);

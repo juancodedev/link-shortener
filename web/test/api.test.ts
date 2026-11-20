@@ -130,7 +130,7 @@ describe("the api helper", () => {
     openApi("tok-1");
     stubFetch(() => json({ error: "jwt expired" }, 401));
 
-    await expect(api("GET", "/api/links")).rejects.toThrow(/^Unauthorized$/);
+    await expect(api("GET", "/api/links")).rejects.toThrow(/^No autorizado$/);
     expect(navigate).toHaveBeenCalledWith("/login");
   });
 
@@ -143,7 +143,7 @@ describe("the api helper", () => {
     await expect(api("GET", "/api/links")).rejects.toThrow(/^tenant_required$/);
     const select = document.getElementById("tenant-select") as HTMLSelectElement;
     expect(select).not.toBeNull();
-    expect(select.options[0]!.textContent).toBe("Store A (admin)");
+    expect(select.options[0]!.textContent).toBe("Store A (administrador)");
     expect(navigate).not.toHaveBeenCalled();
   });
 
@@ -180,10 +180,10 @@ describe("the api helper", () => {
   it("throws Server error when the error answer is not JSON or names nothing", async () => {
     openApi("tok-1");
     stubFetch(() => new Response("<html>bad gateway</html>", { status: 502 }));
-    await expect(api("GET", "/api/links")).rejects.toThrow(/^Server error$/);
+    await expect(api("GET", "/api/links")).rejects.toThrow(/^Error del servidor$/);
 
     stubFetch(() => json({}, 500));
-    await expect(api("GET", "/api/links")).rejects.toThrow(/^Server error$/);
+    await expect(api("GET", "/api/links")).rejects.toThrow(/^Error del servidor$/);
   });
 
   it("puts nothing on window: no helper, gate or token global", async () => {

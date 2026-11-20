@@ -63,7 +63,7 @@ describe("bulk modal — opening and closing", () => {
     standardApi();
     await mountLinks();
 
-    expect(document.getElementById("open-bulk")!.textContent).toContain("Create cards in bulk...");
+    expect(document.getElementById("open-bulk")!.textContent).toContain("Crear tarjetas en lote…");
     expect(modal().className).toBe("qr-modal hidden");
     await open();
     expect(isShown()).toBe(true);
@@ -75,7 +75,7 @@ describe("bulk modal — opening and closing", () => {
     expect(isShown()).toBe(false);
 
     await open();
-    const close = [...modal().querySelectorAll("button")].find((b) => b.textContent === "Close")!;
+    const close = [...modal().querySelectorAll("button")].find((b) => b.textContent === "Cerrar")!;
     fireEvent.click(close);
     expect(isShown()).toBe(false);
   });
@@ -102,7 +102,7 @@ describe("bulk modal — opening and closing", () => {
       bulkResult().style.display = "";
     });
     await download();
-    expect(msg().textContent).toBe("Create the cards first.");
+    expect(msg().textContent).toBe("Primero crea las tarjetas.");
     expect(sheets(calls)).toHaveLength(0);
   });
 });
@@ -118,7 +118,7 @@ describe("bulk modal — the fields", () => {
     expect(n.max).toBe("200");
     expect(n.value).toBe("10");
     expect(field("bulk-label").maxLength).toBe(200);
-    expect(document.querySelector('label[for="bulk-label"]')!.textContent).toContain("Label for this batch");
+    expect(document.querySelector('label[for="bulk-label"]')!.textContent).toContain("Etiqueta para este lote");
     expect(field("bulk-gated").type).toBe("checkbox");
     expect(field("bulk-gated").checked).toBe(false);
     expect(modal().querySelector("#url")).toBeNull();
@@ -129,9 +129,9 @@ describe("bulk modal — the fields", () => {
     await mountLinks();
 
     const text = modal().textContent!;
-    expect(text).toContain("not configured");
+    expect(text).toContain("sin configurar");
     expect(text).toMatch(/CSV/);
-    expect(text).toMatch(/designer/i);
+    expect(text).toMatch(/diseñador/i);
   });
 });
 
@@ -144,7 +144,7 @@ describe("bulk modal — creating", () => {
     for (const bad of ["0", "201", "", "abc"]) {
       await create(bad);
       expect(msg().className).toBe("message error");
-      expect(msg().textContent).toBe("Enter a number between 1 and 200.");
+      expect(msg().textContent).toBe("Ingresa un número entre 1 y 200.");
     }
     expect(batches(calls)).toHaveLength(0);
   });
@@ -184,12 +184,12 @@ describe("bulk modal — creating", () => {
     await create("1");
 
     expect(bulkResult().style.display).toBe("");
-    expect(summary()).toBe("1 card created. ");
+    expect(summary()).toBe("1 tarjeta creada. ");
     expect(msg().className).toBe("message success");
     expect(count(calls, "GET", "/api/links")).toBe(2);
 
     await create("4");
-    expect(summary()).toBe("4 cards created. ");
+    expect(summary()).toBe("4 tarjetas creadas. ");
   });
 
   it("reports a PARTIAL batch rather than calling it a success", async () => {
@@ -207,7 +207,7 @@ describe("bulk modal — creating", () => {
 
     await create("3");
 
-    expect(summary()).toBe("2 cards created. 1 failed — try those again.");
+    expect(summary()).toBe("2 tarjetas creadas. 1 falló; reinténtala.");
     expect(msg().className).toBe("message error");
   });
 
@@ -228,15 +228,15 @@ describe("bulk modal — creating", () => {
     await mountLinks();
     await open();
     await create("1");
-    expect(msg().textContent).toBe("Could not create the cards");
+    expect(msg().textContent).toBe("No se pudieron crear las tarjetas");
 
     standardApi({
       batch: () => {
-        throw new Error("Server error");
+        throw new Error("Error del servidor");
       },
     });
     await create("1");
-    expect(msg().textContent).toBe("Server error");
+    expect(msg().textContent).toBe("Error del servidor");
   });
 
   it("disables the button while the batch is out", async () => {
@@ -254,12 +254,12 @@ describe("bulk modal — creating", () => {
       fireEvent.click(createBtn());
     });
     expect(createBtn().disabled).toBe(true);
-    expect(createBtn().textContent).toBe("Creating...");
+    expect(createBtn().textContent).toBe("Creando…");
 
     hold.release();
     await settle();
     expect(createBtn().disabled).toBe(false);
-    expect(createBtn().textContent).toBe("Create them");
+    expect(createBtn().textContent).toBe("Crearlas");
   });
 });
 
@@ -285,7 +285,7 @@ describe("bulk modal — the print sheet", () => {
     expect(createObjectURL).toHaveBeenCalledTimes(1);
     expect(createObjectURL.mock.calls[0]![0]).toHaveProperty("size", 3);
     expect(clicked).toHaveLength(1);
-    expect(clicked[0]!.download).toBe("cards.zip");
+    expect(clicked[0]!.download).toBe("tarjetas.zip");
     expect(clicked[0]!.href).toBe("blob:sheet");
     // Removed after the click, and the object URL released.
     expect(clicked[0]!.isConnected).toBe(false);
@@ -297,12 +297,12 @@ describe("bulk modal — the print sheet", () => {
     await mountLinks();
     await open();
     await create("2");
-    expect(summary()).toBe("0 cards created. 2 failed — try those again.");
+    expect(summary()).toBe("0 tarjetas creadas. 2 fallaron; reinténtalas.");
 
     await download();
 
     expect(msg().className).toBe("message error");
-    expect(msg().textContent).toBe("Create the cards first.");
+    expect(msg().textContent).toBe("Primero crea las tarjetas.");
     expect(sheets(calls)).toHaveLength(0);
   });
 

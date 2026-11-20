@@ -37,14 +37,14 @@ type FilterOption = { label: string; value: string };
  */
 function filterOptions(all: Branch[], businesses: Business[]): FilterOption[] {
   const branches = pickableBranches(all, businesses);
-  const options: FilterOption[] = [{ label: "All businesses", value: "" }];
+  const options: FilterOption[] = [{ label: "Todos los locales", value: "" }];
   businesses
     .filter((b) => b.is_active !== false)
     .forEach((b) => {
       options.push({ label: b.name, value: "b:" + b.id });
       branches.filter((l) => l.business_id === b.id).forEach((l) => options.push({ label: "— " + l.name, value: "l:" + l.id }));
     });
-  branches.filter((l) => !l.business_id).forEach((l) => options.push({ label: l.name + " (no business)", value: "l:" + l.id }));
+  branches.filter((l) => !l.business_id).forEach((l) => options.push({ label: l.name + " (sin local)", value: "l:" + l.id }));
   return options;
 }
 
@@ -119,14 +119,14 @@ export function CommentsSection() {
       // status is checked first and the owner is told instead.
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { detail?: string; error?: string };
-        setMsg({ kind: "error", text: "Could not export: " + (body.detail || body.error || "HTTP " + res.status) });
+        setMsg({ kind: "error", text: "No se pudo exportar: " + (body.detail || body.error || "HTTP " + res.status) });
         return;
       }
       const blob = await res.blob();
       const href = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = href;
-      a.download = "customer-feedback.csv";
+      a.download = "comentarios-clientes.csv";
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -137,11 +137,14 @@ export function CommentsSection() {
       if (res.headers.get("X-Truncated") === "true") {
         setMsg({
           kind: "notice",
-          text: "The file holds the newest " + (res.headers.get("X-Feedback-Limit") || "") + " comments; older ones were left out.",
+          text:
+            "El archivo contiene los " +
+            (res.headers.get("X-Feedback-Limit") || "") +
+            " comentarios más recientes; los más antiguos quedaron fuera.",
         });
       }
     } catch (err) {
-      setMsg({ kind: "error", text: err instanceof Error ? err.message : "Could not export" });
+      setMsg({ kind: "error", text: err instanceof Error ? err.message : "No se pudo exportar" });
     } finally {
       setExporting(false);
     }
@@ -150,13 +153,13 @@ export function CommentsSection() {
   return (
     <div className="card" id="feedback-card">
       <div className="feedback-head">
-        <h3>What customers wrote</h3>
+        <h3>Lo que escribieron tus clientes</h3>
         <button type="button" id="feedback-export" className="btn-sm" disabled={exporting} onClick={() => void exportCsv()}>
-          Download CSV
+          Descargar CSV
         </button>
       </div>
       <label htmlFor="feedback-filter" className="gap-top-sm">
-        Show comments from
+        Mostrar comentarios de
       </label>
       <select id="feedback-filter" value={stale ? "" : filter} onChange={(e) => setFilter(e.target.value)}>
         {options.map((o) => (
@@ -169,8 +172,8 @@ export function CommentsSection() {
         {msg.text}
       </div>
       <div id="feedback-body">
-        {inbox.status === "loading" && <div className="loading">Loading...</div>}
-        {inbox.status === "error" && <p className="gate-empty">Could not load comments.</p>}
+        {inbox.status === "loading" && <div className="loading">Cargando…</div>}
+        {inbox.status === "error" && <p className="gate-empty">No se pudieron cargar los comentarios.</p>}
         {inbox.status === "ready" && <FeedbackInbox payload={inbox.payload} />}
       </div>
     </div>

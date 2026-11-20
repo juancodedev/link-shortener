@@ -48,7 +48,7 @@ describe("rendering a comment", () => {
 
   it("says 'No rating' rather than showing an empty or zero rating", () => {
     const rating = show(payload({ feedback: [row({ rating: null })] })).querySelector(".feedback-rating")!;
-    expect(rating.textContent).toBe("No rating");
+    expect(rating.textContent).toBe("Sin calificación");
     expect(rating.className).toBe("feedback-rating withheld");
   });
 
@@ -62,7 +62,7 @@ describe("rendering a comment", () => {
     expect(
       show(payload({ feedback: [row({ business_name: null, location_name: null, client_ref: null })] })).querySelector(".feedback-origin")!
         .textContent,
-    ).toBe("No location abc123");
+    ).toBe("Sin ubicación abc123");
   });
 
   it("skips empty origin parts as well as missing ones", () => {
@@ -75,18 +75,18 @@ describe("rendering a comment", () => {
     expect(show(payload()).querySelector(".feedback-contact")).toBeNull();
     cleanup();
     expect(show(payload({ feedback: [row({ customer_contact: "ana@example.com" })] })).querySelector(".feedback-contact")!.textContent).toBe(
-      "Contact: ana@example.com",
+      "Contacto: ana@example.com",
     );
   });
 
   it("shows the phone first when the customer left both", () => {
     const html = show(payload({ feedback: [row({ customer_phone: "+56 9 1234 5678", customer_contact: "ana@example.com" })] }));
-    expect(html.querySelector(".feedback-contact")!.textContent).toBe("Contact: +56 9 1234 5678 · ana@example.com");
+    expect(html.querySelector(".feedback-contact")!.textContent).toBe("Contacto: +56 9 1234 5678 · ana@example.com");
   });
 
   it("shows a phone-only contact", () => {
     expect(show(payload({ feedback: [row({ customer_phone: "+56 9 1234 5678" })] })).querySelector(".feedback-contact")!.textContent).toBe(
-      "Contact: +56 9 1234 5678",
+      "Contacto: +56 9 1234 5678",
     );
   });
 
@@ -106,7 +106,7 @@ describe("rendering a comment", () => {
   it("shows the date in the reader's locale, keeping the instant in datetime", () => {
     const time = show(payload()).querySelector("time")!;
     expect(time.getAttribute("datetime")).toBe("2026-10-14T20:15:00.000Z");
-    expect(time.textContent).toBe(new Date("2026-10-14T20:15:00.000Z").toLocaleString());
+    expect(time.textContent).toBe(new Date("2026-10-14T20:15:00.000Z").toLocaleString("es-CL"));
   });
 
   it("shows an unparseable date as it came", () => {
@@ -146,13 +146,13 @@ describe("empty and truncated states", () => {
     const html = show(payload({ feedback: [] }));
     expect(html.querySelector("ul")).toBeNull();
     expect(html.querySelector("p.gate-empty")!.textContent).toBe(
-      "No comments yet. When a customer leaves one at the review gate, it appears here.",
+      "Aún no hay comentarios. Cuando un cliente deje uno en la pantalla de reseña, aparecerá aquí.",
     );
   });
 
   it("says the list is cut when it is", () => {
     expect(show(payload({ truncated: true, limit: 100 })).querySelector("p.estimate-note")!.textContent).toBe(
-      "Showing the newest 100 comments. Download the CSV to see more.",
+      "Mostrando los 100 comentarios más recientes. Descarga el CSV para ver más.",
     );
   });
 

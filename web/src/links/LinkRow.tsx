@@ -5,6 +5,7 @@ import { setPrintQueued } from "../print-queue";
 import { branchOptions, type BranchList } from "./branches";
 import { errorText, type ClickMetrics, type Link } from "./load";
 import { api } from "../api";
+import { LOCALE, spanishWindow } from "../format";
 
 /**
  * One link as its two table rows: the row itself and its editing panel.
@@ -51,11 +52,18 @@ function linkStatus(l: Link): "inactive" | "expired" | "active" {
   return "active";
 }
 
-/** "Printed 19 Nov 2026, 12:00" — the run behind the badge, kept out of the cell. */
+/** The badge text per status; the class keeps the English key the CSS is written against. */
+const STATUS_LABEL: Record<ReturnType<typeof linkStatus>, string> = {
+  active: "Activo",
+  inactive: "Inactivo",
+  expired: "Vencido",
+};
+
+/** "Impresa el 19 nov 2026, 12:00" — the run behind the badge, kept out of the cell. */
 function printedTitle(iso: string): string {
   const when = new Date(iso);
-  if (Number.isNaN(when.getTime())) return `Printed ${iso}`;
-  return `Printed ${when.toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}`;
+  if (Number.isNaN(when.getTime())) return `Impresa el ${iso}`;
+  return `Impresa el ${when.toLocaleString(LOCALE, { dateStyle: "medium", timeStyle: "short" })}`;
 }
 
 export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePanel, onEdit, onRepaint, onReload, onShowQR }: LinkRowProps) {
@@ -96,7 +104,7 @@ export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePane
     const active = !l.is_active;
     try {
       const res = await PATCH(l.id, { is_active: active });
-      if (!res.ok) throw new Error("Failed");
+      if (!res.ok) throw new Error("No se pudo completar la acción");
       onRepaint(l.id, { is_active: active });
     } catch (err) {
       alert("Error: " + errorText(err));
@@ -114,7 +122,7 @@ export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePane
     setGateBusy(true);
     try {
       const res = await PATCH(l.id, { is_gated: next });
-      if (!res.ok) throw new Error("Failed");
+      if (!res.ok) throw new Error("No se pudo completar la acción");
       onRepaint(l.id, { is_gated: next });
     } catch (err) {
       setGatedBox(!next);
@@ -131,7 +139,7 @@ export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePane
     const stored = value === "" ? null : value;
     try {
       const res = await PATCH(l.id, { client_ref: stored });
-      if (!res.ok) throw new Error("Failed");
+      if (!res.ok) throw new Error("No se pudo completar la acción");
       setClientRef(stored ?? "");
       onRepaint(l.id, { client_ref: stored });
       // The rollup regroups by client_ref; nothing else depends on it, so
@@ -155,7 +163,7 @@ export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePane
     try {
       const res = await PATCH(l.id, { original_url: value === "" ? null : value });
       const body = (await res.json().catch(() => ({}))) as { error?: string; original_url?: string | null };
-      if (!res.ok) throw new Error(body.error || "Failed");
+      if (!res.ok) throw new Error(body.error || "No se pudo completar la acción");
       const stored = body.original_url ?? null;
       setDestination(stored ?? "");
       onRepaint(l.id, { original_url: stored });
@@ -169,7 +177,7 @@ export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePane
     const value = shownBranch;
     try {
       const res = await PATCH(l.id, { location_id: value === "" ? null : value });
-      if (!res.ok) throw new Error("Failed");
+      if (!res.ok) throw new Error("No se pudo completar la acción");
       const picked = branches.all.find((b) => b.id === value);
       onRepaint(l.id, {
         location_id: value === "" ? null : value,
@@ -183,10 +191,10 @@ export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePane
   }
 
   async function remove() {
-    if (!confirm("Delete this link permanently?")) return;
+    if (!confirm("¿Eliminar este enlace de forma permanente?")) return;
     try {
       const res = await api("DELETE", `/api/links/${encodeURIComponent(l.id)}`);
-      if (!res.ok) throw new Error("Failed");
+      if (!res.ok) throw new Error("No se pudo completar la acción");
       onReload();
     } catch (err) {
       alert("Error: " + errorText(err));
@@ -199,7 +207,7 @@ export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePane
   // not a first print by mistake.
   const printButton = l.original_url ? null : (
     <button className="btn-sm btn-outline" onClick={() => setPrintQueued(l.id, !queued, l.short_code)}>
-      {queued ? "Remove from queue" : l.printed_at ? "Reprint" : "Send to print"}
+      {queued ? "Quitar de la cola" : l.printed_at ? "Reimprimir" : "Enviar a imprimir"}
     </button>
   );
 
@@ -207,18 +215,18 @@ export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePane
     <>
       <tr>
         <td>
-          <span className="code" title={`Click to copy ${shortUrl}`} onClick={() => void copy()}>
-            {copied ? "Copied!" : l.short_code}
+          <span className="code" title={`Haz clic para copiar ${shortUrl}`} onClick={() => void copy()}>
+            {copied ? "¡Copiado!" : l.short_code}
           </span>
         </td>
         <td className="hide-sm">
           {l.location_name ? (
             <>
-              <span className="owner-business">{l.business_name || "No business"}</span>
+              <span className="owner-business">{l.business_name || "Sin local"}</span>
               <span className="owner-branch">{l.location_name}</span>
             </>
           ) : (
-            <span className="owner-none">Unassigned</span>
+            <span className="owner-none">Sin asignar</span>
           )}
         </td>
         <td className="hide-sm">
@@ -231,7 +239,7 @@ export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePane
           )}
         </td>
         <td className="hide-sm">
-          {l.is_gated ? <span className="badge badge-gated">Review screen</span> : <span className="badge badge-direct">Direct</span>}
+          {l.is_gated ? <span className="badge badge-gated">Pantalla de reseña</span> : <span className="badge badge-direct">Directo</span>}
         </td>
         <td>
           <a
@@ -246,7 +254,7 @@ export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePane
           </a>
         </td>
         <td>
-          <span className={`badge badge-${status}`}>{status}</span>
+          <span className={`badge badge-${status}`}>{STATUS_LABEL[status]}</span>
           {l.original_url ? null : (
             <>
               {" "}
@@ -258,7 +266,7 @@ export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePane
                 hidden={!queued && !l.printed_at}
                 title={!queued && l.printed_at ? printedTitle(l.printed_at) : undefined}
               >
-                {!queued && l.printed_at ? "Printed" : "To print"}
+                {!queued && l.printed_at ? "Impresa" : "Por imprimir"}
               </span>
             </>
           )}
@@ -266,10 +274,10 @@ export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePane
         <td>
           <div className="row-actions">
             <button className="btn-sm btn-outline" onClick={() => onEdit(l.id)}>
-              Edit
+              Editar
             </button>
             <button className="btn-sm btn-danger" onClick={() => void remove()}>
-              Del
+              Eliminar
             </button>
           </div>
         </td>
@@ -283,24 +291,24 @@ export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePane
                 row's primary action, already holds the rest. */}
             <div className="panel-controls">
               <div className="field">
-                <label htmlFor={`client-ref-${l.id}`}>Client ref</label>
+                <label htmlFor={`client-ref-${l.id}`}>Referencia de cliente</label>
                 <div className="field-row">
                   <input
                     type="text"
                     id={`client-ref-${l.id}`}
                     value={clientRef}
                     onChange={(e) => setClientRef(e.target.value)}
-                    placeholder="None"
+                    placeholder="Ninguna"
                     maxLength={200}
                     className="client-ref-input"
                   />
                   <button className="btn-sm btn-outline" onClick={() => void saveClientRef()}>
-                    Save
+                    Guardar
                   </button>
                 </div>
               </div>
               <div className="field">
-                <label>Print sheet</label>
+                <label>Hoja de impresión</label>
                 <div className="field-row">
                   <button
                     className="btn-sm"
@@ -310,35 +318,35 @@ export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePane
                       onShowQR(shortUrl);
                     }}
                   >
-                    QR code
+                    Código QR
                   </button>
                   {printButton}
                 </div>
-                <p className="field-note">The code that goes on the sticker. This is the destination the printed tag resolves to.</p>
+                <p className="field-note">El código que va en el adhesivo. Este es el destino al que lleva la etiqueta impresa.</p>
               </div>
               <div className="field">
-                <label htmlFor={`dest-${l.id}`}>Destination</label>
+                <label htmlFor={`dest-${l.id}`}>Destino</label>
                 <div className="field-row">
                   <input
                     type="text"
                     id={`dest-${l.id}`}
                     value={destination}
                     onChange={(e) => setDestination(e.target.value)}
-                    placeholder="Not configured yet"
+                    placeholder="Sin configurar"
                     className="client-ref-input"
                   />
                   <button className="btn-sm btn-primary" onClick={() => void saveDestination()}>
-                    Save
+                    Guardar
                   </button>
                 </div>
                 <p className="field-note">
                   {l.original_url
-                    ? "Where the printed code leads. Changing it does not need a reprint."
-                    : 'This card has no destination yet. Anyone who scans it opens a "not configured" page. Save the URL whenever it is settled — the printed sticker does not need reprinting.'}
+                    ? "Adónde lleva el código impreso. Cambiarlo no requiere reimprimir."
+                    : 'Esta tarjeta aún no tiene destino. Quien la escanee verá una página "sin configurar". Guarda la URL cuando esté definida: el adhesivo impreso no necesita reimprimirse.'}
                 </p>
               </div>
               <div className="field">
-                <label htmlFor={`branch-${l.id}`}>Branch</label>
+                <label htmlFor={`branch-${l.id}`}>Sucursal</label>
                 <div className="field-row">
                   <select
                     id={`branch-${l.id}`}
@@ -354,13 +362,13 @@ export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePane
                     ))}
                   </select>
                   <button className="btn-sm btn-outline" onClick={() => void saveBranch()}>
-                    Save
+                    Guardar
                   </button>
                 </div>
-                <p className="field-note">The business and branch this sticker belongs to. Its comments and ratings are grouped there.</p>
+                <p className="field-note">El local y la sucursal a los que pertenece este adhesivo. Sus comentarios y calificaciones se agrupan ahí.</p>
               </div>
               <div className="field">
-                <label>Review screen</label>
+                <label>Pantalla de reseña</label>
                 <label className="check-row">
                   <input
                     type="checkbox"
@@ -368,32 +376,32 @@ export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePane
                     disabled={gateBusy}
                     onChange={(e) => void saveGated(e.target.checked)}
                   />
-                  <span>Show before redirecting</span>
+                  <span>Mostrar antes de redirigir</span>
                 </label>
                 <p className="field-note" data-gate-note="on" hidden={!gated}>
-                  Scans show the star rating, the Google button and a private comment form.
+                  Los escaneos muestran la calificación con estrellas, el botón de Google y un formulario de comentario privado.
                 </p>
                 <p className="field-note" data-gate-note="off" hidden={gated}>
-                  Scans go straight to the destination. Nothing is recorded for the satisfaction panel.
+                  Los escaneos van directo al destino. No se registra nada para el panel de satisfacción.
                 </p>
               </div>
               <div className="field">
-                <label>Tag state</label>
+                <label>Estado de la etiqueta</label>
                 <div className="field-row">
                   <button className="btn-sm btn-outline" onClick={() => void toggleActive()}>
-                    {l.is_active ? "Disable" : "Enable"}
+                    {l.is_active ? "Desactivar" : "Activar"}
                   </button>
                 </div>
                 {/* Why the redirect is a 302 and not a 301, said where the decision is made. */}
                 <p className="field-note">
                   {l.is_active
-                    ? "This tag stops working. Anyone holding the printed sticker keeps the old destination until their browser cache expires."
-                    : "This tag starts working again. The printed sticker works from the next scan."}
+                    ? "Esta etiqueta deja de funcionar. Quien tenga el adhesivo impreso conserva el destino anterior hasta que expire la caché de su navegador."
+                    : "Esta etiqueta vuelve a funcionar. El adhesivo impreso funciona desde el próximo escaneo."}
                 </p>
               </div>
             </div>
             <div className="metric-box visitors-box">
-              <h4>Visitors (estimate)</h4>
+              <h4>Visitantes (estimación)</h4>
               <div id={`visitors-${l.id}`}>
                 <Visitors metrics={metrics} />
               </div>
@@ -402,19 +410,19 @@ export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePane
             </div>
             <div className="metrics-grid">
               <div className="metric-box">
-                <h4>By Country</h4>
+                <h4>Por país</h4>
                 <div id={`country-${l.id}`}>
                   <Breakdown metrics={metrics} pick={(d) => d.by_country} showsError />
                 </div>
               </div>
               <div className="metric-box">
-                <h4>By Device</h4>
+                <h4>Por dispositivo</h4>
                 <div id={`device-${l.id}`}>
                   <Breakdown metrics={metrics} pick={(d) => d.by_device} />
                 </div>
               </div>
               <div className="metric-box">
-                <h4>By Source</h4>
+                <h4>Por origen</h4>
                 <div id={`source-${l.id}`}>
                   <Breakdown metrics={metrics} pick={(d) => d.by_source} />
                 </div>
@@ -427,7 +435,7 @@ export function LinkRow({ link: l, queued, open, metrics, branches, onTogglePane
   );
 }
 
-const Loading = () => <div className="loading">Loading...</div>;
+const Loading = () => <div className="loading">Cargando…</div>;
 
 /**
  * The two visitor figures, with EQUAL weight on purpose: neither is the
@@ -441,11 +449,11 @@ function Visitors({ metrics }: { metrics: MetricsState | undefined }) {
   return (
     <>
       <div className="metric-row">
-        <span>Unique visitors (last {data.unique_window || "1 day"})</span>
+        <span>Visitantes únicos (período: {spanishWindow(data.unique_window || "1 day")})</span>
         <strong>{data.unique_visitors ?? 0}</strong>
       </div>
       <div className="metric-row">
-        <span>Sessions (per {data.session_window || "30 minutes"})</span>
+        <span>Sesiones (cada {spanishWindow(data.session_window || "30 minutes")})</span>
         <strong>{data.sessions ?? 0}</strong>
       </div>
     </>
@@ -465,7 +473,7 @@ function Breakdown({
   if (metrics?.status === "error" && showsError) return <div className="metric-row">Error: {metrics.message}</div>;
   if (metrics?.status !== "ready") return <Loading />;
   const entries = Object.entries(pick(metrics.data) ?? {}).sort((a, b) => b[1] - a[1]);
-  if (entries.length === 0) return <div className="metric-row">No data</div>;
+  if (entries.length === 0) return <div className="metric-row">Sin datos</div>;
   return (
     <>
       {entries.map(([key, value]) => (

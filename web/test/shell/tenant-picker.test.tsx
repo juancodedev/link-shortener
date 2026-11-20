@@ -48,15 +48,15 @@ describe("tenant picker", () => {
     const bar = host.querySelector(".tenant-bar")!;
     expect(bar.querySelector('label[for="tenant-select"]')!.textContent).toBe("Ubicación");
     expect([...select().options].map((o) => [o.value, o.textContent])).toEqual([
-      ["store-a", "Store A (admin)"],
-      ["store-b", "Store B (viewer)"],
+      ["store-a", "Store A (administrador)"],
+      ["store-b", "Store B (lector)"],
     ]);
     expect(window.scrollTo).toHaveBeenCalledWith(0, 0);
   });
 
   it("falls back to the slug when a location has no display name", () => {
     show([{ slug: "store-c", role: "admin" }]);
-    expect(select().options[0]!.textContent).toBe("store-c (admin)");
+    expect(select().options[0]!.textContent).toBe("store-c (administrador)");
   });
 
   it("preselects the remembered location", () => {

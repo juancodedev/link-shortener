@@ -85,25 +85,25 @@ describe("Links island — the row", () => {
   it("emits exactly two short buttons, Edit then the destructive Del", async () => {
     const { row } = await show();
 
-    expect(buttons(row)).toEqual(["Edit", "Del"]);
+    expect(buttons(row)).toEqual(["Editar", "Eliminar"]);
     expect(row.querySelectorAll(".btn-danger")).toHaveLength(1);
-    expect(row.querySelector(".row-actions")!.lastElementChild!.textContent).toBe("Del");
+    expect(row.querySelector(".row-actions")!.lastElementChild!.textContent).toBe("Eliminar");
   });
 
   it("offers copy on the short code and the panel on the clicks count, nothing else", async () => {
     const { row } = await show({ clicks_count: 5 });
 
-    expect(row.querySelector(".code")!.getAttribute("title")).toBe("Click to copy https://short.link/abc1234");
+    expect(row.querySelector(".code")!.getAttribute("title")).toBe("Haz clic para copiar https://short.link/abc1234");
     expect(row.querySelector("a.clicks-link")!.textContent).toBe("5");
     expect(row.querySelectorAll("a")).toHaveLength(1);
   });
 
   it("labels how the link opens", async () => {
-    expect(text((await show({ is_gated: true })).row)).toContain("Review screen");
+    expect(text((await show({ is_gated: true })).row)).toContain("Pantalla de reseña");
     cleanup();
     installLegacy();
     const direct = (await show({ is_gated: false })).row;
-    expect(direct.querySelector(".badge-direct")!.textContent).toBe("Direct");
+    expect(direct.querySelector(".badge-direct")!.textContent).toBe("Directo");
     expect(direct.querySelector(".badge-gated")).toBeNull();
   });
 
@@ -114,22 +114,22 @@ describe("Links island — the row", () => {
     cleanup();
     installLegacy();
     const none = (await show({ location_name: null })).row;
-    expect(none.querySelector(".owner-none")!.textContent).toBe("Unassigned");
+    expect(none.querySelector(".owner-none")!.textContent).toBe("Sin asignar");
   });
 
   it("names a branch with no business 'No business'", async () => {
     const { row } = await show({ business_name: null, location_name: "Suelta" });
-    expect(row.querySelector(".owner-business")!.textContent).toBe("No business");
+    expect(row.querySelector(".owner-business")!.textContent).toBe("Sin local");
   });
 
   it("marks the status: active, inactive, or expired", async () => {
-    expect((await show()).row.querySelector(".badge-active")!.textContent).toBe("active");
+    expect((await show()).row.querySelector(".badge-active")!.textContent).toBe("Activo");
     cleanup();
     installLegacy();
-    expect((await show({ is_active: false })).row.querySelector(".badge-inactive")!.textContent).toBe("inactive");
+    expect((await show({ is_active: false })).row.querySelector(".badge-inactive")!.textContent).toBe("Inactivo");
     cleanup();
     installLegacy();
-    expect((await show({ expires_at: "2000-01-01T00:00:00Z" })).row.querySelector(".badge-expired")!.textContent).toBe("expired");
+    expect((await show({ expires_at: "2000-01-01T00:00:00Z" })).row.querySelector(".badge-expired")!.textContent).toBe("Vencido");
   });
 
   it("hides the business/branch, URL and Opens cells on narrow screens, never the actions", async () => {
@@ -143,18 +143,18 @@ describe("Links island — the row", () => {
   it("offers Send to print on an unconfigured link, outside the two-button actions cell", async () => {
     const { row } = await show({ original_url: null });
 
-    const send = [...row.querySelectorAll("button")].find((b) => b.textContent === "Send to print");
+    const send = [...row.querySelectorAll("button")].find((b) => b.textContent === "Enviar a imprimir");
     expect(send).toBeDefined();
     expect(send!.closest(".row-actions")).toBeNull();
     const badge = row.querySelector('[data-print-badge="link-uuid"]') as HTMLElement;
-    expect(badge.textContent).toBe("To print");
+    expect(badge.textContent).toBe("Por imprimir");
     expect(badge.hidden).toBe(true);
   });
 
   it("offers no print control on a configured link", async () => {
     const { row, panel } = await show({ original_url: "https://g.page/r/x" });
 
-    expect(text(row) + text(panel)).not.toContain("Send to print");
+    expect(text(row) + text(panel)).not.toContain("Enviar a imprimir");
     expect(row.querySelector("[data-print-badge]")).toBeNull();
   });
 
@@ -163,45 +163,45 @@ describe("Links island — the row", () => {
 
     const badge = row.querySelector('[data-print-badge="link-uuid"]') as HTMLElement;
     expect(badge.hidden).toBe(false);
-    expect(badge.textContent).toBe("Printed");
+    expect(badge.textContent).toBe("Impresa");
     expect(badge.classList.contains("badge-printed")).toBe(true);
-    expect(badge.title).toMatch(/^Printed /);
+    expect(badge.title).toMatch(/^Impresa el /);
   });
 
   it("offers Reprint, not Send to print, on a card that was already printed", async () => {
     const { row, panel } = await show({ original_url: null, printed_at: "2026-11-19T12:00:00Z" });
 
-    expect(text(row) + text(panel)).toContain("Reprint");
-    expect(text(row) + text(panel)).not.toContain("Send to print");
+    expect(text(row) + text(panel)).toContain("Reimprimir");
+    expect(text(row) + text(panel)).not.toContain("Enviar a imprimir");
   });
 
   it("still offers Send to print on a card that was never printed", async () => {
     const { row } = await show({ original_url: null, printed_at: null });
 
-    expect(text(row)).toContain("Send to print");
-    expect(text(row)).not.toContain("Reprint");
+    expect(text(row)).toContain("Enviar a imprimir");
+    expect(text(row)).not.toContain("Reimprimir");
   });
 
   it("queues a printed card through Reprint and lets it leave the queue again", async () => {
     await show({ original_url: null, printed_at: "2026-11-19T12:00:00Z" });
-    const reprint = [...row("link-uuid").querySelectorAll("button")].find((b) => b.textContent === "Reprint")!;
+    const reprint = [...row("link-uuid").querySelectorAll("button")].find((b) => b.textContent === "Reimprimir")!;
 
     act(() => reprint.click());
     await settle();
     expect(window.__printQueue.map((q) => q.id)).toEqual(["link-uuid"]);
-    expect(text(row("link-uuid"))).toContain("Remove from queue");
+    expect(text(row("link-uuid"))).toContain("Quitar de la cola");
 
-    const remove = [...row("link-uuid").querySelectorAll("button")].find((b) => b.textContent === "Remove from queue")!;
+    const remove = [...row("link-uuid").querySelectorAll("button")].find((b) => b.textContent === "Quitar de la cola")!;
     act(() => remove.click());
     await settle();
-    expect(text(row("link-uuid"))).toContain("Reprint");
+    expect(text(row("link-uuid"))).toContain("Reimprimir");
   });
 
   it("offers no print control on a printed card that has a destination", async () => {
     const { row, panel } = await show({ original_url: "https://g.page/r/x", printed_at: "2026-11-19T12:00:00Z" });
 
-    expect(text(row) + text(panel)).not.toContain("Reprint");
-    expect(text(row) + text(panel)).not.toContain("Send to print");
+    expect(text(row) + text(panel)).not.toContain("Reimprimir");
+    expect(text(row) + text(panel)).not.toContain("Enviar a imprimir");
   });
 
   it("lets the queue badge win when a printed card is sent to print again", async () => {
@@ -212,7 +212,7 @@ describe("Links island — the row", () => {
 
     const badge = row("link-uuid").querySelector('[data-print-badge="link-uuid"]') as HTMLElement;
     expect(badge.hidden).toBe(false);
-    expect(badge.textContent).toBe("To print");
+    expect(badge.textContent).toBe("Por imprimir");
     expect(badge.classList.contains("badge-queued")).toBe(true);
   });
 
@@ -225,9 +225,9 @@ describe("Links island — the row", () => {
     await settle();
 
     const badge = row("link-uuid").querySelector('[data-print-badge="link-uuid"]') as HTMLElement;
-    expect(badge.textContent).toBe("Printed");
+    expect(badge.textContent).toBe("Impresa");
     expect(badge.classList.contains("badge-printed")).toBe(true);
-    expect(badge.title).toMatch(/^Printed /);
+    expect(badge.title).toMatch(/^Impresa el /);
   });
 });
 
@@ -249,29 +249,29 @@ describe("Links island — the editing panel", () => {
 
     const input = panel.querySelector("#client-ref-link-uuid") as HTMLInputElement;
     expect(input.value).toBe("Cafe Central");
-    expect(input.placeholder).toBe("None");
+    expect(input.placeholder).toBe("Ninguna");
     expect(input.maxLength).toBe(200);
-    expect(button(input.closest(".field")!, "Save")).toBeDefined();
+    expect(button(input.closest(".field")!, "Guardar")).toBeDefined();
   });
 
   it("keeps the QR print-sheet entry point in the panel, not the row", async () => {
     const { row, panel } = await show();
 
-    expect(buttons(row)).not.toContain("QR code");
-    expect(buttons(panel)).toContain("QR code");
+    expect(buttons(row)).not.toContain("Código QR");
+    expect(buttons(panel)).toContain("Código QR");
   });
 
   it("repeats the print control in the panel, which every screen size reaches", async () => {
     const { panel } = await show({ original_url: null });
-    expect(buttons(panel)).toContain("Send to print");
+    expect(buttons(panel)).toContain("Enviar a imprimir");
   });
 
   it("shows the current destination in an editable field on every link", async () => {
     const { panel } = await show({ original_url: "https://g.page/r/abc/review" });
 
     expect((panel.querySelector("#dest-link-uuid") as HTMLInputElement).value).toBe("https://g.page/r/abc/review");
-    expect(text(panel)).toContain("Changing it does not need a reprint.");
-    expect(text(panel)).not.toContain("not configured");
+    expect(text(panel)).toContain("Cambiarlo no requiere reimprimir.");
+    expect(text(panel)).not.toContain("sin configurar");
   });
 
   it("offers the same field on card stock, empty, and says what a scan shows", async () => {
@@ -279,9 +279,9 @@ describe("Links island — the editing panel", () => {
 
     const input = panel.querySelector("#dest-link-uuid") as HTMLInputElement;
     expect(input.value).toBe("");
-    expect(input.placeholder).toBe("Not configured yet");
-    expect(text(panel)).toContain("not configured");
-    expect(text(panel)).toContain("does not need reprinting");
+    expect(input.placeholder).toBe("Sin configurar");
+    expect(text(panel)).toContain("sin configurar");
+    expect(text(panel)).toContain("no necesita reimprimirse");
   });
 
   it("offers a branch picker that remembers the link's branch", async () => {
@@ -306,14 +306,14 @@ describe("Links island — the editing panel", () => {
 
   it("states what disabling a tag does, and the other thing when enabling", async () => {
     const active = (await show({ is_active: true })).panel;
-    expect(buttons(active)).toContain("Disable");
-    expect(text(active)).toContain("sticker");
-    expect(text(active)).toContain("cache");
+    expect(buttons(active)).toContain("Desactivar");
+    expect(text(active)).toContain("adhesivo");
+    expect(text(active)).toContain("caché");
     cleanup();
     installLegacy();
     const inactive = (await show({ is_active: false })).panel;
-    expect(buttons(inactive)).toContain("Enable");
-    expect(text(inactive)).not.toContain("stops working");
+    expect(buttons(inactive)).toContain("Activar");
+    expect(text(inactive)).not.toContain("deja de funcionar");
   });
 
   it("keeps the visitor estimate and the three breakdowns, each with its own box", async () => {
@@ -323,9 +323,9 @@ describe("Links island — the editing panel", () => {
       expect(panel.querySelector(`#${id}`)).not.toBeNull();
     }
     expect([...panel.querySelectorAll(".metrics-grid h4")].map((h) => h.textContent)).toEqual([
-      "By Country",
-      "By Device",
-      "By Source",
+      "Por país",
+      "Por dispositivo",
+      "Por origen",
     ]);
   });
 
@@ -333,7 +333,7 @@ describe("Links island — the editing panel", () => {
     const { panel } = await show({ id: "abc" });
 
     const box = panel.querySelector(".visitors-box")!;
-    expect(box.querySelector("h4")!.textContent).toBe("Visitors (estimate)");
+    expect(box.querySelector("h4")!.textContent).toBe("Visitantes (estimación)");
     expect(box.querySelector("#visitors-abc")).not.toBeNull();
     expect(box.querySelector(".estimate-note")!.textContent).toBe(VISITOR_ESTIMATE_CAVEAT);
   });
@@ -349,7 +349,7 @@ describe("Links island — the table around the rows", () => {
     await show();
 
     const head = [...document.querySelectorAll("#links-table thead th")].map((th) => th.textContent);
-    expect(head).toEqual(["Short Code", "Business / branch", "URL", "Opens", "Clicks", "Status", ""]);
+    expect(head).toEqual(["Código corto", "Local / sucursal", "URL", "Apertura", "Clics", "Estado", ""]);
     expect(document.querySelectorAll("#links-table thead th.hide-sm")).toHaveLength(3);
   });
 
@@ -357,7 +357,7 @@ describe("Links island — the table around the rows", () => {
     await show();
 
     const note = [...document.querySelectorAll(".estimate-note")].find((p) => p.querySelector("strong"));
-    expect(note!.textContent).toBe(`About visitor figures: ${VISITOR_ESTIMATE_CAVEAT}`);
+    expect(note!.textContent).toBe(`Sobre las cifras de visitantes: ${VISITOR_ESTIMATE_CAVEAT}`);
   });
 });
 

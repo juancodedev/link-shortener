@@ -8,11 +8,11 @@ import { SUPABASE_JS_SCRIPT } from "./supabase-cdn";
 
 function htmlShell(title: string, body: string, supabaseUrl: string, supabaseAnonKey: string): string {
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="es">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${title} — Link Shortener</title>
+  <title>${title} — Más Reseñas</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -141,13 +141,13 @@ function htmlShell(title: string, body: string, supabaseUrl: string, supabaseAno
 </head>
 <body>
   <div class="card">
-    <h1>Link Shortener</h1>
+    <h1>Más Reseñas</h1>
     ${body}
   </div>
   ${SUPABASE_JS_SCRIPT}
   <script>
     if (!window.supabase) {
-      document.body.innerHTML = '<div style="text-align:center;padding:2rem;font-family:sans-serif;"><h2>Loading...</h2><p>If this persists, check your network connection.</p></div>';
+      document.body.innerHTML = '<div style="text-align:center;padding:2rem;font-family:sans-serif;"><h2>Cargando…</h2><p>Si esto continúa, revisa tu conexión a internet.</p></div>';
       throw new Error("Supabase client failed to load");
     }
     var sb = window.supabase.createClient("${supabaseUrl}", "${supabaseAnonKey}");
@@ -186,28 +186,28 @@ export const SAFE_NEXT_PATH = /^\/setup\/[A-Za-z0-9_-]+$/;
 
 export const signupHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }> = (c) => {
   const html = htmlShell(
-    "Sign Up",
+    "Crear cuenta",
     `
-    <p class="subtitle">Create your account and get a short link domain</p>
+    <p class="subtitle">Crea tu cuenta y obtén tu dominio de enlaces cortos</p>
     <form id="signup-form">
-      <label for="email">Email</label>
-      <input type="email" id="email" name="email" placeholder="you@example.com" required>
-      <label for="password">Password</label>
+      <label for="email">Correo</label>
+      <input type="email" id="email" name="email" placeholder="tu@ejemplo.com" required>
+      <label for="password">Contraseña</label>
       <div class="password-field">
-        <input type="password" id="password" name="password" placeholder="Min. 8 characters" minlength="8" required>
-        <button type="button" class="toggle-password" onclick="togglePassword('password', this)" aria-label="Show password">
+        <input type="password" id="password" name="password" placeholder="Mínimo 8 caracteres" minlength="8" required>
+        <button type="button" class="toggle-password" onclick="togglePassword('password', this)" aria-label="Mostrar contraseña">
           <svg id="eye-password" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
         </button>
       </div>
-      <label for="display">Display Name</label>
-      <input type="text" id="display" name="display" placeholder="Your team or company name" required>
-      <label for="subdomain">Subdomain</label>
-      <input type="text" id="subdomain" name="subdomain" placeholder="e.g. acme" required minlength="3" maxlength="30" pattern="[a-z0-9][a-z0-9\-]*[a-z0-9]">
-      <button type="submit" id="submit-btn">Sign Up</button>
+      <label for="display">Nombre visible</label>
+      <input type="text" id="display" name="display" placeholder="Nombre de tu equipo o empresa" required>
+      <label for="subdomain">Subdominio</label>
+      <input type="text" id="subdomain" name="subdomain" placeholder="p. ej. acme" required minlength="3" maxlength="30" pattern="[a-z0-9][a-z0-9\-]*[a-z0-9]">
+      <button type="submit" id="submit-btn">Crear cuenta</button>
     </form>
     <div id="message" class="message"></div>
     <div class="links">
-      Already have an account? <a href="/login">Log in</a>
+      ¿Ya tienes una cuenta? <a href="/login">Iniciar sesión</a>
     </div>
     `,
     c.env.SUPABASE_URL,
@@ -223,7 +223,7 @@ export const signupHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }> =
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       btn.disabled = true;
-      btn.textContent = "Creating account...";
+      btn.textContent = "Creando cuenta…";
       msg.className = "message";
       msg.textContent = "";
 
@@ -251,19 +251,19 @@ export const signupHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }> =
 
             if (!res.ok) {
               const err = await res.json();
-              throw new Error(err.error || "Failed to create tenant");
+              throw new Error(err.error || "No se pudo crear tu espacio");
             }
           }
 
           msg.className = "message success";
-          msg.textContent = "Check your email for a confirmation link!";
+          msg.textContent = "¡Revisa tu correo para encontrar el enlace de confirmación!";
           form.style.display = "none";
         }
       } catch (err) {
         msg.className = "message error";
-        msg.textContent = err instanceof Error ? err.message : "Something went wrong";
+        msg.textContent = err instanceof Error ? err.message : "Algo salió mal";
         btn.disabled = false;
-        btn.textContent = "Sign Up";
+        btn.textContent = "Crear cuenta";
       }
     });
   </script>`;
@@ -277,27 +277,27 @@ export const signupHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }> =
 
 export const loginHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }> = (c) => {
   const html = htmlShell(
-    "Log In",
+    "Iniciar sesión",
     `
-    <p class="subtitle">Welcome back</p>
+    <p class="subtitle">Qué bueno verte de nuevo</p>
     <form id="login-form">
-      <label for="email">Email</label>
-      <input type="email" id="email" name="email" placeholder="you@example.com" required>
-      <label for="login-password">Password</label>
+      <label for="email">Correo</label>
+      <input type="email" id="email" name="email" placeholder="tu@ejemplo.com" required>
+      <label for="login-password">Contraseña</label>
       <div class="password-field">
-        <input type="password" id="login-password" name="password" placeholder="Your password" required>
-        <button type="button" class="toggle-password" onclick="togglePassword('login-password', this)" aria-label="Show password">
+        <input type="password" id="login-password" name="password" placeholder="Tu contraseña" required>
+        <button type="button" class="toggle-password" onclick="togglePassword('login-password', this)" aria-label="Mostrar contraseña">
           <svg id="eye-login-password" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
         </button>
       </div>
-      <button type="submit" id="submit-btn">Log In</button>
+      <button type="submit" id="submit-btn">Iniciar sesión</button>
     </form>
     <div id="message" class="message"></div>
     <div class="links">
-      <a href="/reset-password">Forgot password?</a>
+      <a href="/reset-password">¿Olvidaste tu contraseña?</a>
     </div>
     <div class="links" style="margin-top: 0.5rem;">
-      Don't have an account? <a href="/signup">Sign up</a>
+      ¿No tienes una cuenta? <a href="/signup">Crear cuenta</a>
     </div>
     `,
     c.env.SUPABASE_URL,
@@ -313,7 +313,7 @@ export const loginHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }> = 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       btn.disabled = true;
-      btn.textContent = "Logging in...";
+      btn.textContent = "Iniciando sesión…";
       msg.className = "message";
       msg.textContent = "";
 
@@ -325,7 +325,7 @@ export const loginHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }> = 
         if (error) throw error;
 
         msg.className = "message success";
-        msg.textContent = "Logged in! Redirecting...";
+        msg.textContent = "¡Sesión iniciada! Redirigiendo…";
         // Return path, honoured only when it is a card setup page — see
         // SAFE_NEXT_PATH. Anything else falls back to the default.
         const next = new URL(window.location.href).searchParams.get("next");
@@ -333,9 +333,9 @@ export const loginHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }> = 
         setTimeout(() => { window.location.href = target; }, 1000);
       } catch (err) {
         msg.className = "message error";
-        msg.textContent = err instanceof Error ? err.message : "Login failed";
+        msg.textContent = err instanceof Error ? err.message : "No se pudo iniciar sesión";
         btn.disabled = false;
-        btn.textContent = "Log In";
+        btn.textContent = "Iniciar sesión";
       }
     });
   </script>`;
@@ -352,34 +352,34 @@ export const resetPasswordHandler: Handler<{ Bindings: AppEnv; Variables: HonoVa
 
   const body = isCallback
     ? `
-    <p class="subtitle">Choose a new password</p>
+    <p class="subtitle">Elige una nueva contraseña</p>
     <form id="reset-form">
-      <label for="reset-password">New Password</label>
+      <label for="reset-password">Nueva contraseña</label>
       <div class="password-field">
-        <input type="password" id="reset-password" name="password" placeholder="Min. 8 characters" minlength="8" required>
-        <button type="button" class="toggle-password" onclick="togglePassword('reset-password', this)" aria-label="Show password">
+        <input type="password" id="reset-password" name="password" placeholder="Mínimo 8 caracteres" minlength="8" required>
+        <button type="button" class="toggle-password" onclick="togglePassword('reset-password', this)" aria-label="Mostrar contraseña">
           <svg id="eye-reset-password" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
         </button>
       </div>
-      <button type="submit" id="submit-btn">Update Password</button>
+      <button type="submit" id="submit-btn">Actualizar contraseña</button>
     </form>
     <div id="message" class="message"></div>
     `
     : `
-    <p class="subtitle">Enter your email and we'll send you a reset link</p>
+    <p class="subtitle">Escribe tu correo y te enviaremos un enlace para restablecer tu contraseña</p>
     <form id="reset-form">
-      <label for="email">Email</label>
-      <input type="email" id="email" name="email" placeholder="you@example.com" required>
-      <button type="submit" id="submit-btn">Send Reset Link</button>
+      <label for="email">Correo</label>
+      <input type="email" id="email" name="email" placeholder="tu@ejemplo.com" required>
+      <button type="submit" id="submit-btn">Enviar enlace</button>
     </form>
     <div id="message" class="message"></div>
     <div class="links">
-      Remember your password? <a href="/login">Log in</a>
+      ¿Recordaste tu contraseña? <a href="/login">Iniciar sesión</a>
     </div>
     `;
 
   const html = htmlShell(
-    isCallback ? "Set New Password" : "Reset Password",
+    isCallback ? "Nueva contraseña" : "Restablecer contraseña",
     body,
     c.env.SUPABASE_URL,
     c.env.SUPABASE_ANON_KEY,
@@ -395,7 +395,7 @@ export const resetPasswordHandler: Handler<{ Bindings: AppEnv; Variables: HonoVa
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       btn.disabled = true;
-      btn.textContent = "Updating...";
+      btn.textContent = "Actualizando…";
       msg.className = "message";
       msg.textContent = "";
 
@@ -406,13 +406,13 @@ export const resetPasswordHandler: Handler<{ Bindings: AppEnv; Variables: HonoVa
         if (error) throw error;
 
         msg.className = "message success";
-        msg.textContent = "Password updated! Redirecting to login...";
+        msg.textContent = "¡Contraseña actualizada! Redirigiendo a iniciar sesión…";
         setTimeout(() => { window.location.href = "/login"; }, 1500);
       } catch (err) {
         msg.className = "message error";
-        msg.textContent = err instanceof Error ? err.message : "Failed to update password";
+        msg.textContent = err instanceof Error ? err.message : "No se pudo actualizar la contraseña";
         btn.disabled = false;
-        btn.textContent = "Update Password";
+        btn.textContent = "Actualizar contraseña";
       }
     });
   </script>`
@@ -425,7 +425,7 @@ export const resetPasswordHandler: Handler<{ Bindings: AppEnv; Variables: HonoVa
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       btn.disabled = true;
-      btn.textContent = "Sending...";
+      btn.textContent = "Enviando…";
       msg.className = "message";
       msg.textContent = "";
 
@@ -438,13 +438,13 @@ export const resetPasswordHandler: Handler<{ Bindings: AppEnv; Variables: HonoVa
         if (error) throw error;
 
         msg.className = "message success";
-        msg.textContent = "If that email is registered, you'll receive a reset link shortly.";
+        msg.textContent = "Si ese correo está registrado, recibirás un enlace para restablecer tu contraseña en breve.";
         form.style.display = "none";
       } catch (err) {
         msg.className = "message error";
-        msg.textContent = err instanceof Error ? err.message : "Something went wrong";
+        msg.textContent = err instanceof Error ? err.message : "Algo salió mal";
         btn.disabled = false;
-        btn.textContent = "Send Reset Link";
+        btn.textContent = "Enviar enlace";
       }
     });
   </script>`;
@@ -458,11 +458,11 @@ export const resetPasswordHandler: Handler<{ Bindings: AppEnv; Variables: HonoVa
 
 export const authCallbackHandler: Handler<{ Bindings: AppEnv; Variables: HonoVars }> = (c) => {
   const html = `<!DOCTYPE html>
-<html lang="en">
+<html lang="es">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Email Confirmed — Link Shortener</title>
+  <title>Correo confirmado — Más Reseñas</title>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -482,9 +482,9 @@ export const authCallbackHandler: Handler<{ Bindings: AppEnv; Variables: HonoVar
 </head>
 <body>
   <div class="card">
-    <h1>Email Confirmed 🎉</h1>
-    <p>Your account is ready. You can now log in and start creating short links.</p>
-    <a href="/login">Go to Login</a>
+    <h1>Correo confirmado 🎉</h1>
+    <p>Tu cuenta está lista. Ya puedes iniciar sesión y empezar a crear enlaces cortos.</p>
+    <a href="/login">Ir a iniciar sesión</a>
     <p id="error" class="error" style="display:none;margin-top:1rem;"></p>
   </div>
   ${SUPABASE_JS_SCRIPT}
